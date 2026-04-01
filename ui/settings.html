@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DL 语音输入 - 设置</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #1a1a1a;
+            --border: #cccccc;
+            --focus: #0078D4;
+            --btn-secondary-bg: #e0e0e0;
+            --btn-secondary-text: #6C6C6C;
+            --success: #16a34a;
+            --error: #dc2626;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #1e1e1e;
+                --text: #e0e0e0;
+                --border: #555555;
+                --btn-secondary-bg: #333333;
+                --btn-secondary-text: #aaaaaa;
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 420px;
+            height: 380px;
+            font-family: "Segoe UI", system-ui, sans-serif;
+            font-size: 14px;
+            color: var(--text);
+            background: var(--bg);
+            padding: 24px;
+            overflow: hidden;
+        }
+
+        h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            height: 32px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+            background: var(--bg);
+            color: var(--text);
+            outline: none;
+        }
+
+        input:focus {
+            border-color: transparent;
+            outline: 2px solid var(--focus);
+        }
+
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-wrapper input {
+            padding-right: 36px;
+        }
+
+        .toggle-password {
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: var(--btn-secondary-text);
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        button {
+            height: 32px;
+            padding: 0 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .btn-secondary {
+            background: var(--btn-secondary-bg);
+            color: var(--btn-secondary-text);
+        }
+
+        .btn-primary {
+            background: var(--focus);
+            color: #ffffff;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 12px;
+            font-size: 13px;
+            min-height: 20px;
+        }
+
+        .status.success {
+            color: var(--success);
+        }
+
+        .status.error {
+            color: var(--error);
+        }
+    </style>
+</head>
+<body>
+    <h2>LLM 纠错设置</h2>
+
+    <div class="form-group">
+        <label for="api-url">API URL</label>
+        <input type="text" id="api-url" placeholder="https://api.openai.com/v1/chat/completions" aria-label="API URL">
+    </div>
+
+    <div class="form-group">
+        <label for="api-key">API Key</label>
+        <div class="password-wrapper">
+            <input type="password" id="api-key" placeholder="sk-..." aria-label="API Key">
+            <button class="toggle-password" id="toggle-key" aria-label="显示/隐藏 API Key">👁</button>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label for="model">Model</label>
+        <input type="text" id="model" placeholder="gpt-4o-mini" aria-label="Model name">
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <div class="actions">
+        <button class="btn-secondary" id="test-btn">测试连接</button>
+        <button class="btn-primary" id="save-btn">保存</button>
+    </div>
+
+    <script src="settings.js"></script>
+</body>
+</html>
