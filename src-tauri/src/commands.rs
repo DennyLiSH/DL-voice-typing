@@ -1,10 +1,13 @@
 use crate::audio::AudioCapture;
+use crate::audio::rms;
 use crate::config::{
     AppConfig, DOWNLOAD_MIRRORS, WHISPER_MODELS, check_whisper_models, models_dir,
 };
 use crate::hotkey::windows::WindowsHotkeyManager;
 use crate::hotkey::{HotkeyCallback, HotkeyEvent, HotkeyManager};
 use crate::llm::LLMClient;
+use crate::speech::AnyEngine;
+use crate::speech::SpeechEngine;
 use crate::state::StateMachine;
 use futures_util::StreamExt;
 use std::sync::atomic::AtomicBool;
@@ -108,7 +111,12 @@ pub fn save_settings(
             }
 
             // Build callback with current state references.
-            let callback = make_hotkey_callback(sm, ac);
+            let engine = app_clone.state::<Arc<AnyEngine>>().inner().clone();
+            let cb = app_clone
+                .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
+                .inner()
+                .clone();
+            let callback = make_hotkey_callback(sm, ac, engine, cb, app_clone.clone());
 
             // Try registering the new key.
             match hm.register(&new_key, callback) {
@@ -117,11 +125,21 @@ pub fn save_settings(
                 }
                 Err(e) => {
                     // Fallback: re-register the old key.
-                    let hm_state2 = app_clone.state::<Arc<Mutex<StateMachine>>>();
-                    let hm_state3 = app_clone.state::<Arc<Mutex<AudioCapture>>>();
-                    let sm2 = hm_state2.inner().clone();
-                    let ac2 = hm_state3.inner().clone();
-                    let fallback_callback = make_hotkey_callback(sm2, ac2);
+                    let sm2 = app_clone
+                        .state::<Arc<Mutex<StateMachine>>>()
+                        .inner()
+                        .clone();
+                    let ac2 = app_clone
+                        .state::<Arc<Mutex<AudioCapture>>>()
+                        .inner()
+                        .clone();
+                    let engine2 = app_clone.state::<Arc<AnyEngine>>().inner().clone();
+                    let cb2 = app_clone
+                        .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
+                        .inner()
+                        .clone();
+                    let fallback_callback =
+                        make_hotkey_callback(sm2, ac2, engine2, cb2, app_clone.clone());
                     let _ = hm.register(&old_key, fallback_callback);
                     let _ = tx.send(Err(format!(
                         "新热键注册失败({})，已回退到旧热键: {}",
@@ -146,10 +164,13 @@ pub fn save_settings(
     }
 }
 
-/// Build the hotkey callback that starts/stops recording.
+/// Build the hotkey callback that starts/stops recording and runs the full pipeline.
 pub fn make_hotkey_callback(
     sm: Arc<Mutex<StateMachine>>,
     ac: Arc<Mutex<AudioCapture>>,
+    engine: Arc<AnyEngine>,
+    clipboard: Arc<Mutex<crate::clipboard::ClipboardManager>>,
+    app: tauri::AppHandle,
 ) -> HotkeyCallback {
     Box::new(move |event| {
         match event {
@@ -159,24 +180,154 @@ pub fn make_hotkey_callback(
                     .map(|mut s| s.start_recording().is_ok())
                     .unwrap_or(false);
                 if can_record {
+                    // Show floating window.
+                    if let Some(win) = app.get_webview_window("floating") {
+                        let _ = win.show();
+                    }
+                    let _ = app.emit("recording-start", ());
+
+                    // Start audio capture with RMS-emitting callback.
                     if let Ok(mut ac_guard) = ac.lock() {
                         let sm_for_audio = Arc::clone(&sm);
+                        let app_for_rms = app.clone();
                         let _ = ac_guard.start(Box::new(move |data: &[f32]| {
                             if let Ok(mut s) = sm_for_audio.lock() {
                                 let _ = s.append_audio(data);
                             }
+                            let rms_val = rms::calculate_rms(data);
+                            let _ = app_for_rms.emit("audio-rms", rms_val);
                         }));
                     }
                 }
             }
             HotkeyEvent::Released => {
+                // Read sample rate BEFORE stop (stop clears config).
+                let sample_rate = ac.lock().ok().and_then(|a| a.sample_rate());
                 if let Ok(mut ac_guard) = ac.lock() {
                     ac_guard.stop();
                 }
                 if let Ok(mut sm_guard) = sm.lock() {
-                    if let Ok(_audio_data) = sm_guard.stop_recording() {
-                        // TODO: Run transcription pipeline (Whisper/Mock → LLM → inject)
-                        sm_guard.reset();
+                    if let Ok(audio_data) = sm_guard.stop_recording() {
+                        // Save training data if enabled (audio first, text later).
+                        let save_result = if let (Some(sr), Ok(config)) =
+                            (sample_rate, AppConfig::load())
+                        {
+                            if config.data_saving_enabled && !config.data_saving_path.is_empty() {
+                                crate::data_saving::save_audio(&audio_data, sr, &config).ok()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        // Resample to 16kHz for Whisper.
+                        let native_rate = sample_rate.unwrap_or(48000);
+                        let resampled = crate::data_saving::resample(
+                            &audio_data,
+                            native_rate,
+                            crate::data_saving::TARGET_SAMPLE_RATE,
+                        );
+
+                        // Clone references for the async task.
+                        let engine_clone = engine.clone();
+                        let sm_clone = sm.clone();
+                        let cb_clone = clipboard.clone();
+                        let app_clone = app.clone();
+
+                        tauri::async_runtime::spawn(async move {
+                            // -- Transcription --
+                            let transcription = match engine_clone.transcribe(&resampled).await {
+                                Ok(text) => {
+                                    let _ = app_clone.emit("transcription-complete", &text);
+                                    {
+                                        if let Ok(mut s) = sm_clone.lock() {
+                                            let _ = s.add_partial_result(text.clone());
+                                        }
+                                    }
+                                    text
+                                }
+                                Err(e) => {
+                                    let _ = app_clone.emit("speech-error", e.to_string());
+                                    if let Ok(mut s) = sm_clone.lock() {
+                                        s.reset();
+                                    }
+                                    if let Some(win) = app_clone.get_webview_window("floating") {
+                                        let _ = win.hide();
+                                    }
+                                    return;
+                                }
+                            };
+
+                            // -- LLM Correction (optional) --
+                            let config = AppConfig::load().unwrap_or_default();
+                            let final_text = if config.llm_enabled {
+                                if let Ok(mut s) = sm_clone.lock() {
+                                    let _ = s.start_llm_refining(transcription.clone());
+                                }
+                                let _ = app_clone.emit("llm-refining", ());
+
+                                let llm = LLMClient::new(
+                                    config.llm_api_url,
+                                    config.llm_api_key,
+                                    config.llm_model,
+                                );
+                                match llm.correct(&transcription).await {
+                                    Ok(corrected) => {
+                                        let _ = app_clone.emit("llm-complete", &corrected);
+                                        corrected
+                                    }
+                                    Err(e) => {
+                                        let _ = app_clone.emit("llm-error", e.to_string());
+                                        transcription.clone()
+                                    }
+                                }
+                            } else {
+                                transcription.clone()
+                            };
+
+                            // -- Injection --
+                            if let Ok(mut s) = sm_clone.lock() {
+                                if config.llm_enabled {
+                                    let _ = s.llm_to_injecting(final_text.clone());
+                                } else {
+                                    let _ = s.transcribing_to_injecting(final_text.clone());
+                                }
+                            }
+
+                            {
+                                if let Ok(mut cb) = cb_clone.lock() {
+                                    let _ = cb.save();
+                                    if let Err(e) = cb.inject_text(&final_text) {
+                                        let _ = app_clone.emit("injection-error", e.to_string());
+                                    }
+                                }
+                            }
+
+                            if let Ok(mut s) = sm_clone.lock() {
+                                let _ = s.finish_injecting();
+                            }
+                            let _ = app_clone.emit("injection-complete", ());
+
+                            // Hide floating window.
+                            if let Some(win) = app_clone.get_webview_window("floating") {
+                                let _ = win.hide();
+                            }
+
+                            // Update data_saving JSON with transcription.
+                            if let Some(sr) = save_result {
+                                let llm_text = if config.llm_enabled {
+                                    Some(final_text.as_str())
+                                } else {
+                                    None
+                                };
+                                let _ = crate::data_saving::update_json_with_text(
+                                    &sr.json_path,
+                                    &transcription,
+                                    llm_text,
+                                );
+                            }
+                        });
                     }
                 }
             }

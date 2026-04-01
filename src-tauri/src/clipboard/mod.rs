@@ -26,7 +26,7 @@ impl ClipboardManager {
     pub fn inject_text(&self, text: &str) -> Result<(), AppError> {
         write_clipboard_with_retry(text)?;
         simulate_paste()?;
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(200));
 
         if let Some(ref saved) = self.saved_content {
             let _ = write_clipboard_with_retry(saved);

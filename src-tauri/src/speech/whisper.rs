@@ -69,6 +69,8 @@ impl SpeechEngine for WhisperEngine {
         params.set_language(Some(&self.language));
         params.set_print_progress(false);
         params.set_print_timestamps(false);
+        params.set_no_timestamps(true);
+        params.set_single_segment(true);
 
         let mut state = ctx
             .create_state()
@@ -78,18 +80,27 @@ impl SpeechEngine for WhisperEngine {
             .full(params, samples)
             .map_err(|e| AppError::Speech(format!("transcription failed: {}", e)))?;
 
-        let num_segments = state
-            .full_n_segments()
-            .map_err(|e| AppError::Speech(format!("segment count failed: {}", e)))?;
+        let num_segments = state.full_n_segments();
+        eprintln!(
+            "Whisper: {} segments, {} samples",
+            num_segments,
+            samples.len()
+        );
 
         let mut text = String::new();
         for i in 0..num_segments {
-            let segment = state
-                .full_get_segment_text(i)
-                .map_err(|e| AppError::Speech(format!("segment text failed: {}", e)))?;
-            text.push_str(&segment);
+            let segment = match state.get_segment(i) {
+                Some(s) => s,
+                None => continue,
+            };
+            text.push_str(
+                segment
+                    .to_str()
+                    .map_err(|e| AppError::Speech(format!("segment text failed: {}", e)))?,
+            );
         }
 
+        eprintln!("Whisper result: {:?} ({} chars)", text, text.len());
         Ok(text.trim().to_string())
     }
 

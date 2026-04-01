@@ -71,7 +71,7 @@ pub fn check_whisper_models() -> HashMap<String, bool> {
 /// Application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// Hotkey keycode name (default: "RightAlt").
+    /// Hotkey keycode name (default: "RightCtrl").
     pub hotkey: String,
 
     /// Recognition language (default: "zh").
@@ -95,12 +95,20 @@ pub struct AppConfig {
     /// Download mirror: "hf-mirror" or "huggingface".
     #[serde(default = "default_download_mirror")]
     pub download_mirror: String,
+
+    /// Whether to save training data (audio + transcription) locally.
+    #[serde(default)]
+    pub data_saving_enabled: bool,
+
+    /// Directory path for saving training data (WAV + JSON).
+    #[serde(default)]
+    pub data_saving_path: String,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            hotkey: "RightAlt".to_string(),
+            hotkey: "RightCtrl".to_string(),
             language: "zh".to_string(),
             whisper_model: "base".to_string(),
             llm_enabled: false,
@@ -108,6 +116,8 @@ impl Default for AppConfig {
             llm_api_key: String::new(),
             llm_model: String::new(),
             download_mirror: "hf-mirror".to_string(),
+            data_saving_enabled: false,
+            data_saving_path: String::new(),
         }
     }
 }
@@ -181,6 +191,11 @@ impl AppConfig {
                 "LLM API URL, Key, and Model are required when LLM is enabled".to_string(),
             ));
         }
+        if self.data_saving_enabled && self.data_saving_path.trim().is_empty() {
+            return Err(AppError::Config(
+                "Data saving path is required when data saving is enabled".to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -193,7 +208,7 @@ mod tests {
     #[test]
     fn test_default_values() {
         let config = AppConfig::default();
-        assert_eq!(config.hotkey, "RightAlt");
+        assert_eq!(config.hotkey, "RightCtrl");
         assert_eq!(config.language, "zh");
         assert_eq!(config.whisper_model, "base");
         assert!(!config.llm_enabled);
@@ -239,5 +254,55 @@ mod tests {
         let result = AppConfig::load();
         // Should succeed (either loads existing or returns default)
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_data_saving_without_path() {
+        let config = AppConfig {
+            data_saving_enabled: true,
+            data_saving_path: String::new(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_data_saving_with_path() {
+        let config = AppConfig {
+            data_saving_enabled: true,
+            data_saving_path: "/tmp/training-data".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_accepts_data_saving_disabled() {
+        let config = AppConfig {
+            data_saving_enabled: false,
+            data_saving_path: String::new(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_new_fields_default_values() {
+        let config = AppConfig::default();
+        assert!(!config.data_saving_enabled);
+        assert!(config.data_saving_path.is_empty());
+    }
+
+    #[test]
+    fn test_new_fields_serialize_deserialize() {
+        let config = AppConfig {
+            data_saving_enabled: true,
+            data_saving_path: "/some/path".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
+        assert!(parsed.data_saving_enabled);
+        assert_eq!(parsed.data_saving_path, "/some/path");
     }
 }

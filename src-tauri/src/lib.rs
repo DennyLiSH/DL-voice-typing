@@ -2,6 +2,7 @@ pub mod audio;
 pub mod clipboard;
 pub mod commands;
 pub mod config;
+pub mod data_saving;
 pub mod error;
 pub mod hotkey;
 pub mod llm;
@@ -14,6 +15,7 @@ use commands::DownloadState;
 use config::AppConfig;
 use hotkey::HotkeyManager;
 use hotkey::windows::WindowsHotkeyManager;
+use speech::AnyEngine;
 use state::StateMachine;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -31,6 +33,44 @@ pub fn run() {
             // Load config.
             let config = AppConfig::load().expect("failed to load config");
 
+            // Initialize speech engine.
+            let mut engine = {
+                #[cfg(feature = "whisper")]
+                {
+                    let model_path = config::model_path_for_size(&config.whisper_model);
+                    AnyEngine::new_whisper(model_path, config.language.clone())
+                }
+                #[cfg(not(feature = "whisper"))]
+                {
+                    AnyEngine::new_mock("[mock transcription]")
+                }
+            };
+            if let Err(e) = engine.load_model() {
+                eprintln!(
+                    "Warning: model load failed: {}. Download a model from Settings.",
+                    e
+                );
+            }
+            let engine = Arc::new(engine);
+            app.manage(engine.clone());
+
+            // Create floating window (hidden by default).
+            let _floating = tauri::webview::WebviewWindowBuilder::new(
+                app,
+                "floating",
+                tauri::WebviewUrl::App("floating.html".into()),
+            )
+            .title("DL Voice Typing")
+            .inner_size(240.0, 80.0)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .focusable(false)
+            .skip_taskbar(true)
+            .visible(false)
+            .center()
+            .build()?;
+
             // Shared state managed by Tauri.
             app.manage(state_machine.clone());
             app.manage(audio_capture.clone());
@@ -40,8 +80,10 @@ pub fn run() {
             let hotkey_name = config.hotkey.clone();
             let sm = state_machine.clone();
             let ac = audio_capture.clone();
+            let cb = clipboard_manager.clone();
+            let app_handle = app.handle().clone();
             let mut hotkey_manager = WindowsHotkeyManager::new();
-            let callback = commands::make_hotkey_callback(sm, ac);
+            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, app_handle);
             hotkey_manager
                 .register(&hotkey_name, callback)
                 .expect("failed to register hotkey");
@@ -62,6 +104,12 @@ pub fn run() {
             commands::download_whisper_model,
             commands::cancel_download,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

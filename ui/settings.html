@@ -296,6 +296,15 @@
             margin-top: 4px;
         }
 
+        /* Path select row */
+        .path-select-row {
+            display: flex;
+            gap: 8px;
+        }
+        .path-select-row input {
+            flex: 1;
+        }
+
         /* Focus styles */
         *:focus-visible {
             outline: 2px solid var(--focus);
@@ -324,10 +333,10 @@
             <div class="form-group">
                 <label for="hotkey">快捷键</label>
                 <select id="hotkey" aria-label="快捷键">
-                    <option value="RightAlt">Right Alt</option>
-                    <option value="LeftAlt">Left Alt</option>
                     <option value="RightCtrl">Right Ctrl</option>
                     <option value="LeftCtrl">Left Ctrl</option>
+                    <option value="RightAlt">Right Alt</option>
+                    <option value="LeftAlt">Left Alt</option>
                     <option value="RightShift">Right Shift</option>
                     <option value="LeftShift">Left Shift</option>
                     <option value="F1">F1</option>
@@ -405,6 +414,25 @@
                 <div>
                     <button class="btn-secondary" id="test-btn">测试连接</button>
                     <span class="status" id="test-status"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 4: Data Saving -->
+        <div class="section" role="group" aria-labelledby="section-data-saving">
+            <div class="section-title" id="section-data-saving">数据保存</div>
+            <div class="toggle-row">
+                <span class="toggle-label">保存训练数据</span>
+                <div class="toggle-switch" id="data-saving-toggle" role="switch" aria-checked="false" aria-label="保存训练数据" tabindex="0"></div>
+            </div>
+            <div class="llm-fields disabled" id="data-saving-fields">
+                <div class="form-group">
+                    <label for="data-saving-path">保存路径</label>
+                    <div class="path-select-row">
+                        <input type="text" id="data-saving-path" placeholder="选择保存训练数据的文件夹" aria-label="数据保存路径">
+                        <button class="btn-secondary" id="btn-browse-path" style="margin-right:0;white-space:nowrap">浏览</button>
+                    </div>
+                    <div class="shortcut-hint">录音结束后将保存音频(WAV)和转写文本(JSON)到该目录</div>
                 </div>
             </div>
         </div>

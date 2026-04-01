@@ -23,6 +23,10 @@ const saveBtn = document.getElementById('save-btn');
 const saveStatus = document.getElementById('save-status');
 const errorBanner = document.getElementById('error-banner');
 const downloadMirrorSelect = document.getElementById('download-mirror');
+const dataSavingToggle = document.getElementById('data-saving-toggle');
+const dataSavingFields = document.getElementById('data-saving-fields');
+const dataSavingPath = document.getElementById('data-saving-path');
+const btnBrowsePath = document.getElementById('btn-browse-path');
 
 // State
 let loadedConfig = null;
@@ -63,6 +67,10 @@ function populateFields(config) {
     apiKeyInput.value = config.llm_api_key || '';
     modelInput.value = config.llm_model || '';
     downloadMirrorSelect.value = config.download_mirror || 'hf-mirror';
+    dataSavingToggle.classList.toggle('active', !!config.data_saving_enabled);
+    dataSavingToggle.setAttribute('aria-checked', String(!!config.data_saving_enabled));
+    updateDataSavingFieldsState(!!config.data_saving_enabled);
+    dataSavingPath.value = config.data_saving_path || '';
 }
 
 // --- Model Select ---
@@ -203,6 +211,50 @@ llmToggle.addEventListener('keydown', (e) => {
 
 // --- Password Toggle ---
 
+// --- Data Saving Toggle ---
+
+function updateDataSavingFieldsState(enabled) {
+    dataSavingFields.classList.toggle('disabled', !enabled);
+    for (const input of dataSavingFields.querySelectorAll('input')) {
+        input.disabled = !enabled;
+    }
+    btnBrowsePath.disabled = !enabled;
+}
+
+dataSavingToggle.addEventListener('click', () => {
+    const isActive = dataSavingToggle.classList.toggle('active');
+    dataSavingToggle.setAttribute('aria-checked', String(isActive));
+    updateDataSavingFieldsState(isActive);
+    updateDirtyState();
+});
+
+dataSavingToggle.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+        e.preventDefault();
+        dataSavingToggle.click();
+    }
+});
+
+// --- Folder Browser ---
+
+btnBrowsePath.addEventListener('click', async () => {
+    try {
+        const selected = await window.__TAURI__.dialog.open({
+            directory: true,
+            multiple: false,
+            title: '选择数据保存路径',
+        });
+        if (selected) {
+            dataSavingPath.value = selected;
+            updateDirtyState();
+        }
+    } catch (e) {
+        console.error('folder picker error:', e);
+    }
+});
+
+dataSavingPath.addEventListener('input', updateDirtyState);
+
 toggleKeyBtn.addEventListener('click', () => {
     const input = apiKeyInput;
     if (input.type === 'password') {
@@ -260,7 +312,9 @@ function updateDirtyState() {
         current.llm_api_url !== loadedConfig.llm_api_url ||
         current.llm_api_key !== loadedConfig.llm_api_key ||
         current.llm_model !== loadedConfig.llm_model ||
-        current.download_mirror !== loadedConfig.download_mirror
+        current.download_mirror !== loadedConfig.download_mirror ||
+        current.data_saving_enabled !== loadedConfig.data_saving_enabled ||
+        current.data_saving_path !== loadedConfig.data_saving_path
     );
 
     saveBtn.disabled = !isDirty;
@@ -278,6 +332,8 @@ function getCurrentConfig() {
         llm_api_key: apiKeyInput.value.trim(),
         llm_model: modelInput.value.trim(),
         download_mirror: downloadMirrorSelect.value,
+        data_saving_enabled: dataSavingToggle.classList.contains('active'),
+        data_saving_path: dataSavingPath.value.trim(),
     };
 }
 
@@ -304,6 +360,12 @@ saveBtn.addEventListener('click', async () => {
     // Validate: selected model must be downloaded
     if (!modelStatus[config.whisper_model]) {
         showError('请先下载所选的 Whisper 模型');
+        return;
+    }
+
+    // Validate: data saving path when enabled
+    if (config.data_saving_enabled && !config.data_saving_path) {
+        showError('启用数据保存时，必须设置保存路径');
         return;
     }
 
