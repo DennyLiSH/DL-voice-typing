@@ -108,84 +108,57 @@
             cursor: not-allowed;
         }
 
-        /* Whisper model cards */
-        .model-cards {
+        /* Whisper model select + action row */
+        .model-select-row {
             display: flex;
-            flex-direction: column;
             gap: 8px;
-        }
-
-        .model-card {
-            display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px 16px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            cursor: pointer;
-            transition: border-color 0.15s, background 0.15s;
         }
 
-        .model-card:hover { border-color: var(--focus); }
-
-        .model-card.selected {
-            border: 2px solid var(--focus);
-            background: rgba(0, 120, 212, 0.05);
-            padding: 11px 15px; /* compensate for thicker border */
-        }
-
-        .model-card.disabled {
-            cursor: default;
-            opacity: 0.6;
-        }
-
-        .model-radio {
-            width: 16px;
-            height: 16px;
-            border-radius: 50%;
-            border: 2px solid var(--border);
-            flex-shrink: 0;
-            position: relative;
-        }
-
-        .model-card.selected .model-radio {
-            border-color: var(--focus);
-        }
-
-        .model-card.selected .model-radio::after {
-            content: '';
-            position: absolute;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--focus);
-            top: 2px;
-            left: 2px;
-        }
-
-        .model-info {
+        .model-select-row select {
             flex: 1;
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }
 
-        .model-name { font-weight: 500; }
-
-        .model-size { color: var(--text-secondary); font-size: 13px; }
-
-        .model-status {
+        .model-status-downloaded {
             font-size: 13px;
+            color: var(--success);
+            white-space: nowrap;
+        }
+
+        .btn-download-model {
+            height: 32px;
+            padding: 0 14px;
+            border: 1px solid var(--focus);
+            border-radius: 4px;
+            background: var(--focus);
+            color: #ffffff;
+            font-size: 13px;
+            cursor: pointer;
+            white-space: nowrap;
             flex-shrink: 0;
         }
 
-        .model-status.downloaded { color: var(--success); }
+        .btn-download-model:hover { opacity: 0.9; }
 
-        .model-status.not-downloaded { color: var(--text-secondary); }
+        .btn-download-model:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .btn-cancel-download {
+            background: none;
+            border: none;
+            color: var(--error);
+            font-size: 13px;
+            cursor: pointer;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
+        .btn-cancel-download:hover { text-decoration: underline; }
 
         /* Download progress */
         .download-progress {
-            width: 100%;
             margin-top: 8px;
         }
 
@@ -209,47 +182,6 @@
             font-size: 12px;
             color: var(--text-secondary);
             margin-top: 4px;
-        }
-
-        .btn-download {
-            height: 28px;
-            padding: 0 12px;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            background: var(--bg);
-            color: var(--text);
-            font-size: 13px;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-
-        .btn-download:hover { border-color: var(--focus); color: var(--focus); }
-
-        .btn-download:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-
-        .btn-cancel-download {
-            background: none;
-            border: none;
-            color: var(--error);
-            font-size: 13px;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-
-        .btn-cancel-download:hover { text-decoration: underline; }
-
-        /* No model warning */
-        .model-warning {
-            background: rgba(234, 179, 8, 0.1);
-            border: 1px solid rgba(234, 179, 8, 0.3);
-            border-radius: 6px;
-            padding: 10px 14px;
-            margin-bottom: 12px;
-            font-size: 13px;
-            color: var(--text-secondary);
         }
 
         /* LLM toggle */
@@ -418,11 +350,32 @@
         <!-- Section 2: Whisper Model -->
         <div class="section" role="group" aria-labelledby="section-whisper">
             <div class="section-title" id="section-whisper">Whisper 模型</div>
-            <div class="model-warning" id="model-warning" style="display:none">
-                ⚠ 需要下载模型才能使用语音输入
+            <div class="form-group">
+                <label for="whisper-model">模型选择</label>
+                <div class="model-select-row">
+                    <select id="whisper-model" aria-label="Whisper 模型选择">
+                        <!-- Dynamically populated -->
+                    </select>
+                    <span class="model-status-downloaded" id="model-status-text" style="display:none">✓ 已下载</span>
+                    <button class="btn-download-model" id="btn-download-model" style="display:none">下载</button>
+                </div>
+                <div class="download-progress" id="download-progress" style="display:none">
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-info">
+                        <span id="progress-percent">0%</span>
+                        <button class="btn-cancel-download" id="btn-cancel-download">取消</button>
+                    </div>
+                </div>
             </div>
-            <div class="model-cards" id="model-cards" role="radiogroup" aria-label="Whisper 模型选择">
-                <!-- Dynamically populated -->
+            <div class="form-group">
+                <label for="download-mirror">下载源</label>
+                <select id="download-mirror" aria-label="下载源">
+                    <option value="hf-mirror">HF-Mirror (国内加速)</option>
+                    <option value="huggingface">HuggingFace (国际)</option>
+                </select>
+                <div class="shortcut-hint">国内用户推荐使用 HF-Mirror 加速下载</div>
             </div>
         </div>
 

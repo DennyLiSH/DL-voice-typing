@@ -1,6 +1,6 @@
 use crate::audio::AudioCapture;
 use crate::config::{
-    AppConfig, WHISPER_MODEL_BASE_URL, WHISPER_MODELS, check_whisper_models, models_dir,
+    AppConfig, DOWNLOAD_MIRRORS, WHISPER_MODELS, check_whisper_models, models_dir,
 };
 use crate::hotkey::windows::WindowsHotkeyManager;
 use crate::hotkey::{HotkeyCallback, HotkeyEvent, HotkeyManager};
@@ -227,7 +227,15 @@ pub async fn download_whisper_model(
     let dir = models_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create models dir failed: {}", e))?;
 
-    let url = format!("{}/{}", WHISPER_MODEL_BASE_URL, filename);
+    let url = {
+        let config = AppConfig::load().map_err(|e| e.to_string())?;
+        let base_url = DOWNLOAD_MIRRORS
+            .iter()
+            .find(|(id, _, _)| *id == config.download_mirror)
+            .map(|(_, _, url)| *url)
+            .unwrap_or(DOWNLOAD_MIRRORS[0].2);
+        format!("{}/{}", base_url, filename)
+    };
     let temp_path = dir.join(format!("{}.tmp", filename));
     let final_path = dir.join(filename);
 
@@ -376,10 +384,11 @@ mod tests {
     #[test]
     fn test_check_whisper_models() {
         let models = check_whisper_models();
-        assert_eq!(models.len(), 3);
+        assert_eq!(models.len(), 4);
         assert!(models.contains_key("tiny"));
         assert!(models.contains_key("base"));
         assert!(models.contains_key("small"));
+        assert!(models.contains_key("medium"));
     }
 
     #[test]

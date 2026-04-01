@@ -8,6 +8,10 @@ use std::path::PathBuf;
 const APP_DIR_NAME: &str = "dl-voice-typing";
 const CONFIG_FILE_NAME: &str = "config.json";
 
+fn default_download_mirror() -> String {
+    "hf-mirror".to_string()
+}
+
 /// Available languages for speech recognition: (code, display name).
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("zh", "简体中文"),
@@ -22,11 +26,22 @@ pub const WHISPER_MODELS: &[(&str, &str, &str)] = &[
     ("tiny", "ggml-tiny.bin", "75MB"),
     ("base", "ggml-base.bin", "142MB"),
     ("small", "ggml-small.bin", "466MB"),
+    ("medium", "ggml-medium.bin", "1.5GB"),
 ];
 
-/// Base URL for downloading Whisper models from HuggingFace.
-pub const WHISPER_MODEL_BASE_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+/// Download mirror options: (id, display name, base URL).
+pub const DOWNLOAD_MIRRORS: &[(&str, &str, &str)] = &[
+    (
+        "hf-mirror",
+        "HF-Mirror (国内加速)",
+        "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main",
+    ),
+    (
+        "huggingface",
+        "HuggingFace (国际)",
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main",
+    ),
+];
 
 /// Returns the models directory path.
 pub fn models_dir() -> PathBuf {
@@ -62,7 +77,7 @@ pub struct AppConfig {
     /// Recognition language (default: "zh").
     pub language: String,
 
-    /// Whisper model size: "tiny", "base", "small".
+    /// Whisper model size: "tiny", "base", "small", "medium".
     pub whisper_model: String,
 
     /// Whether LLM post-processing is enabled.
@@ -76,6 +91,10 @@ pub struct AppConfig {
 
     /// LLM model name.
     pub llm_model: String,
+
+    /// Download mirror: "hf-mirror" or "huggingface".
+    #[serde(default = "default_download_mirror")]
+    pub download_mirror: String,
 }
 
 impl Default for AppConfig {
@@ -88,6 +107,7 @@ impl Default for AppConfig {
             llm_api_url: String::new(),
             llm_api_key: String::new(),
             llm_model: String::new(),
+            download_mirror: "hf-mirror".to_string(),
         }
     }
 }
@@ -128,11 +148,18 @@ impl AppConfig {
 
     /// Validate config fields.
     pub fn validate(&self) -> Result<(), AppError> {
-        let valid_models: &[&str] = &["tiny", "base", "small"];
+        let valid_models: &[&str] = &["tiny", "base", "small", "medium"];
         if !valid_models.contains(&self.whisper_model.as_str()) {
             return Err(AppError::Config(format!(
                 "invalid whisper model: {}",
                 self.whisper_model
+            )));
+        }
+        let valid_mirrors: &[&str] = &["hf-mirror", "huggingface"];
+        if !valid_mirrors.contains(&self.download_mirror.as_str()) {
+            return Err(AppError::Config(format!(
+                "invalid download mirror: {}",
+                self.download_mirror
             )));
         }
         if WindowsHotkeyManager::parse_key_code(&self.hotkey).is_none() {

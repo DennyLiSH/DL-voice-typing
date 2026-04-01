@@ -4,8 +4,13 @@ const { listen } = window.__TAURI__.event;
 // DOM elements
 const languageSelect = document.getElementById('language');
 const hotkeySelect = document.getElementById('hotkey');
-const modelCards = document.getElementById('model-cards');
-const modelWarning = document.getElementById('model-warning');
+const whisperModelSelect = document.getElementById('whisper-model');
+const modelStatusText = document.getElementById('model-status-text');
+const btnDownloadModel = document.getElementById('btn-download-model');
+const downloadProgress = document.getElementById('download-progress');
+const progressFill = document.getElementById('progress-fill');
+const progressPercent = document.getElementById('progress-percent');
+const btnCancelDownload = document.getElementById('btn-cancel-download');
 const llmToggle = document.getElementById('llm-toggle');
 const llmFields = document.getElementById('llm-fields');
 const apiUrlInput = document.getElementById('api-url');
@@ -17,12 +22,13 @@ const testStatus = document.getElementById('test-status');
 const saveBtn = document.getElementById('save-btn');
 const saveStatus = document.getElementById('save-status');
 const errorBanner = document.getElementById('error-banner');
+const downloadMirrorSelect = document.getElementById('download-mirror');
 
 // State
 let loadedConfig = null;
 let modelStatus = {};  // { tiny: true, base: false, ... }
 let selectedModel = 'base';
-let activeDownload = null;  // currently downloading model size
+let activeDownload = null;
 let isDirty = false;
 let dirtyCheckEnabled = false;
 
@@ -38,7 +44,8 @@ async function init() {
         modelStatus = models;
         selectedModel = config.whisper_model;
         populateFields(config);
-        renderModelCards();
+        populateModelSelect();
+        updateModelAction();
         updateDirtyState();
         dirtyCheckEnabled = true;
     } catch (e) {
@@ -55,128 +62,95 @@ function populateFields(config) {
     apiUrlInput.value = config.llm_api_url || '';
     apiKeyInput.value = config.llm_api_key || '';
     modelInput.value = config.llm_model || '';
+    downloadMirrorSelect.value = config.download_mirror || 'hf-mirror';
 }
 
-// --- Model Cards ---
+// --- Model Select ---
 
 const MODEL_SIZES = [
     { id: 'tiny', name: 'tiny', size: '75MB' },
     { id: 'base', name: 'base', size: '142MB' },
     { id: 'small', name: 'small', size: '466MB' },
+    { id: 'medium', name: 'medium', size: '1.5GB' },
 ];
 
-function renderModelCards() {
-    modelCards.innerHTML = '';
-    const anyDownloaded = Object.values(modelStatus).some(v => v);
-
-    // Show warning if no models downloaded
-    modelWarning.style.display = anyDownloaded ? 'none' : 'block';
-
+function populateModelSelect() {
+    whisperModelSelect.innerHTML = '';
     for (const m of MODEL_SIZES) {
-        const downloaded = modelStatus[m.id] || false;
-        const isSelected = selectedModel === m.id;
-        const isDownloading = activeDownload === m.id;
-
-        const card = document.createElement('div');
-        card.className = 'model-card' + (isSelected ? ' selected' : '') + (isDownloading ? ' disabled' : '');
-        card.setAttribute('role', 'radio');
-        card.setAttribute('aria-checked', String(isSelected));
-        card.setAttribute('aria-label', `${m.name} model, ${m.size}${downloaded ? ', downloaded' : ''}`);
-        card.setAttribute('tabindex', '0');
-        card.dataset.size = m.id;
-
-        card.innerHTML = `
-            <div class="model-radio"></div>
-            <div class="model-info">
-                <span class="model-name">${m.name}</span>
-                <span class="model-size">— ${m.size}</span>
-            </div>
-            ${isDownloading ? renderDownloadProgress(m.id) : downloaded ? '<span class="model-status downloaded">✓ 已下载</span>' : renderDownloadButton(m.id)}
-        `;
-
-        // Click to select
-        card.addEventListener('click', () => {
-            if (isDownloading) return;
-            if (!downloaded) return; // must download first
-            selectedModel = m.id;
-            renderModelCards();
-            updateDirtyState();
-        });
-
-        // Keyboard support
-        card.addEventListener('keydown', (e) => {
-            if (e.key === ' ' || e.key === 'Enter') {
-                e.preventDefault();
-                card.click();
-            }
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                const cards = [...modelCards.querySelectorAll('.model-card')];
-                const idx = cards.indexOf(card);
-                const next = e.key === 'ArrowDown' ? idx + 1 : idx - 1;
-                if (cards[next]) cards[next].focus();
-            }
-        });
-
-        modelCards.appendChild(card);
-    }
-
-    // Attach download button listeners
-    for (const btn of modelCards.querySelectorAll('.btn-download')) {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            startDownload(btn.dataset.size);
-        });
-    }
-
-    // Attach cancel button listeners
-    for (const btn of modelCards.querySelectorAll('.btn-cancel-download')) {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            cancelDownload();
-        });
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = `${m.name} (${m.size})`;
+        if (m.id === selectedModel) opt.selected = true;
+        whisperModelSelect.appendChild(opt);
     }
 }
 
-function renderDownloadButton(size) {
-    return `<button class="btn-download" data-size="${size}">下载</button>`;
+function updateModelAction() {
+    const isDownloading = activeDownload !== null;
+    const downloadingThis = activeDownload === selectedModel;
+
+    // Hide all action elements first
+    modelStatusText.style.display = 'none';
+    btnDownloadModel.style.display = 'none';
+    downloadProgress.style.display = 'none';
+
+    if (isDownloading && downloadingThis) {
+        // Show progress bar
+        downloadProgress.style.display = 'block';
+        whisperModelSelect.disabled = true;
+        btnDownloadModel.disabled = true;
+    } else if (isDownloading) {
+        // Another model is downloading — show download button but disabled
+        btnDownloadModel.style.display = 'inline-block';
+        btnDownloadModel.disabled = true;
+        whisperModelSelect.disabled = true;
+    } else if (modelStatus[selectedModel]) {
+        // Already downloaded
+        modelStatusText.style.display = 'inline';
+        whisperModelSelect.disabled = false;
+    } else {
+        // Not downloaded — show download button
+        btnDownloadModel.style.display = 'inline-block';
+        btnDownloadModel.disabled = false;
+        whisperModelSelect.disabled = false;
+    }
 }
 
-function renderDownloadProgress(size) {
-    return `
-        <div class="download-progress">
-            <div class="progress-bar-track">
-                <div class="progress-bar-fill" id="progress-fill-${size}" style="width: 0%"></div>
-            </div>
-            <div class="progress-info">
-                <span id="progress-percent-${size}">0%</span>
-                <button class="btn-cancel-download">取消</button>
-            </div>
-        </div>
-    `;
-}
+whisperModelSelect.addEventListener('change', () => {
+    selectedModel = whisperModelSelect.value;
+    updateModelAction();
+    updateDirtyState();
+});
 
 // --- Download ---
 
+btnDownloadModel.addEventListener('click', () => {
+    startDownload(selectedModel);
+});
+
+btnCancelDownload.addEventListener('click', () => {
+    cancelDownload();
+});
+
 async function startDownload(size) {
     activeDownload = size;
-    renderModelCards();
+    progressFill.style.width = '0%';
+    progressPercent.textContent = '0%';
+    updateModelAction();
 
     try {
         await invoke('download_whisper_model', { size });
-        // Download complete
         activeDownload = null;
         modelStatus[size] = true;
-        selectedModel = size; // auto-select newly downloaded model
-        renderModelCards();
+        updateModelAction();
         updateDirtyState();
     } catch (e) {
         activeDownload = null;
         if (e === 'download cancelled') {
-            renderModelCards();
+            updateModelAction();
         } else {
             showError('下载失败: ' + e);
-            renderModelCards();
+            updateModelAction();
         }
     }
 }
@@ -194,10 +168,8 @@ listen('download-progress', (event) => {
     const { size, percent } = event.payload;
     if (size !== activeDownload) return;
 
-    const fill = document.getElementById(`progress-fill-${size}`);
-    const pct = document.getElementById(`progress-percent-${size}`);
-    if (fill) fill.style.width = percent + '%';
-    if (pct) pct.textContent = percent + '%';
+    progressFill.style.width = percent + '%';
+    progressPercent.textContent = percent + '%';
 });
 
 // Listen for hotkey errors
@@ -287,7 +259,8 @@ function updateDirtyState() {
         current.llm_enabled !== loadedConfig.llm_enabled ||
         current.llm_api_url !== loadedConfig.llm_api_url ||
         current.llm_api_key !== loadedConfig.llm_api_key ||
-        current.llm_model !== loadedConfig.llm_model
+        current.llm_model !== loadedConfig.llm_model ||
+        current.download_mirror !== loadedConfig.download_mirror
     );
 
     saveBtn.disabled = !isDirty;
@@ -304,12 +277,14 @@ function getCurrentConfig() {
         llm_api_url: apiUrlInput.value.trim(),
         llm_api_key: apiKeyInput.value.trim(),
         llm_model: modelInput.value.trim(),
+        download_mirror: downloadMirrorSelect.value,
     };
 }
 
 // Track changes on all inputs
 languageSelect.addEventListener('change', updateDirtyState);
 hotkeySelect.addEventListener('change', updateDirtyState);
+downloadMirrorSelect.addEventListener('change', updateDirtyState);
 apiUrlInput.addEventListener('input', updateDirtyState);
 apiKeyInput.addEventListener('input', updateDirtyState);
 modelInput.addEventListener('input', updateDirtyState);
@@ -377,11 +352,9 @@ function hideError() {
 // --- Window Close ---
 
 window.addEventListener('beforeunload', (e) => {
-    // Cancel active download
     if (activeDownload) {
         invoke('cancel_download');
     }
-    // Unsaved changes warning
     if (isDirty) {
         e.preventDefault();
         e.returnValue = '';
