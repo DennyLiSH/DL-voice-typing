@@ -1,30 +1,28 @@
 use crate::error::AppError;
 use crate::hotkey::{HotkeyCallback, HotkeyEvent, HotkeyManager};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
-};
+use std::sync::Mutex;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-use windows::core::PCWSTR;
+use windows::Win32::UI::WindowsAndMessaging::{
+    CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+};
+
+/// Global state shared between WindowsHotkeyManager and the hook procedure.
+struct HookState {
+    key_code: u32,
+    callback: Option<Box<dyn Fn(HotkeyEvent) + Send>>,
+}
+
+static HOOK_STATE: Mutex<Option<HookState>> = Mutex::new(None);
 
 /// Windows global keyboard hook implementation.
 pub struct WindowsHotkeyManager {
     hook: Option<HHOOK>,
-    key_code: u32,
-    is_pressed: Arc<AtomicBool>,
-    callback: Option<HotkeyCallback>,
 }
 
 impl WindowsHotkeyManager {
     pub fn new() -> Self {
-        Self {
-            hook: None,
-            key_code: 0,
-            is_pressed: Arc::new(AtomicBool::new(false)),
-            callback: None,
-        }
+        Self { hook: None }
     }
 
     /// Parse a key name string to a virtual key code.
@@ -56,29 +54,27 @@ impl WindowsHotkeyManager {
 
 impl HotkeyManager for WindowsHotkeyManager {
     fn register(&mut self, key: &str, callback: HotkeyCallback) -> Result<(), AppError> {
-        let vk_code = WindowsHotkeyManager::parse_key_code(key).ok_or_else(|| {
-            AppError::Hotkey(format!("unknown key: {}", key))
-        })?;
+        let vk_code = WindowsHotkeyManager::parse_key_code(key)
+            .ok_or_else(|| AppError::Hotkey(format!("unknown key: {}", key)))?;
 
-        self.key_code = vk_code;
-        self.callback = Some(callback);
+        // Store callback + key_code in global state for the hook proc to access.
+        {
+            let mut state = HOOK_STATE
+                .lock()
+                .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {}", e)))?;
+            *state = Some(HookState {
+                key_code: vk_code,
+                callback: Some(callback),
+            });
+        }
 
-        // The hook procedure needs to access the callback.
-        // We use a thread-local or global approach.
-        // For safety, we store the callback in a global and reference it from the hook.
         unsafe {
-            let hook = SetWindowsHookExW(
-                WH_KEYBOARD_LL,
-                Some(keyboard_hook_proc),
-                None,
-                0,
-            ).map_err(|e| AppError::Hotkey(format!("failed to set hook: {}", e)))?;
+            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), None, 0)
+                .map_err(|e| AppError::Hotkey(format!("failed to set hook: {}", e)))?;
 
             self.hook = Some(hook);
         }
 
-        // Store self reference for the hook callback
-        // This is a simplified version - in production, use proper thread-local storage
         Ok(())
     }
 
@@ -89,7 +85,10 @@ impl HotkeyManager for WindowsHotkeyManager {
                     .map_err(|e| AppError::Hotkey(format!("failed to unhook: {}", e)))?;
             }
         }
-        self.callback = None;
+        // Clear global state.
+        if let Ok(mut state) = HOOK_STATE.lock() {
+            *state = None;
+        }
         Ok(())
     }
 
@@ -104,6 +103,11 @@ impl Default for WindowsHotkeyManager {
     }
 }
 
+// HHOOK contains *mut c_void which is not Send/Sync by default,
+// but the Windows hook handle is safe to send across threads on Windows.
+unsafe impl Send for WindowsHotkeyManager {}
+unsafe impl Sync for WindowsHotkeyManager {}
+
 impl Drop for WindowsHotkeyManager {
     fn drop(&mut self) {
         if let Some(hook) = self.hook.take() {
@@ -115,18 +119,56 @@ impl Drop for WindowsHotkeyManager {
 }
 
 /// Low-level keyboard hook procedure.
+///
+/// Reads the registered key_code and callback from global state,
+/// detects press/release, and invokes the callback.
 unsafe extern "system" fn keyboard_hook_proc(
     n_code: i32,
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
     if n_code >= 0 {
-        let kb_struct = *(l_param.0 as *const KBDLLHOOKSTRUCT);
+        let kb_struct = unsafe { *(l_param.0 as *const KBDLLHOOKSTRUCT) };
         let vk = kb_struct.vkCode;
 
-        // TODO: dispatch to registered callback via global state
-        // For now, just pass through
-        let _ = (vk, w_param);
+        // Determine event type from w_param.
+        let event = match w_param.0 as u32 {
+            WM_KEYDOWN | WM_SYSKEYDOWN => Some(HotkeyEvent::Pressed),
+            WM_KEYUP | WM_SYSKEYUP => Some(HotkeyEvent::Released),
+            _ => None,
+        };
+
+        if let Some(event) = event {
+            // Access global state — match key and invoke callback.
+            // We must not hold the Mutex while calling the callback (deadlock risk
+            // if the callback tries to unregister), so clone what we need.
+            let matched = {
+                let state = HOOK_STATE.lock();
+                match state {
+                    Ok(guard) => {
+                        if let Some(ref hook_state) = *guard {
+                            hook_state.key_code == vk
+                        } else {
+                            false
+                        }
+                    }
+                    Err(_) => false,
+                }
+            };
+
+            if matched {
+                // Re-lock only to get a reference to the callback.
+                // The callback itself must not call register/unregister.
+                let state = HOOK_STATE.lock();
+                if let Ok(guard) = state {
+                    if let Some(ref hook_state) = *guard {
+                        if let Some(ref callback) = hook_state.callback {
+                            callback(event);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     unsafe { CallNextHookEx(None, n_code, w_param, l_param) }

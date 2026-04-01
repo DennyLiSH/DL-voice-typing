@@ -1,10 +1,57 @@
 use crate::error::AppError;
+use crate::hotkey::windows::WindowsHotkeyManager;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 const APP_DIR_NAME: &str = "dl-voice-typing";
 const CONFIG_FILE_NAME: &str = "config.json";
+
+/// Available languages for speech recognition: (code, display name).
+pub const LANGUAGES: &[(&str, &str)] = &[
+    ("zh", "简体中文"),
+    ("en", "English"),
+    ("zh-TW", "繁體中文"),
+    ("ja", "日本語"),
+    ("ko", "한국어"),
+];
+
+/// Available Whisper models: (size, filename, display size).
+pub const WHISPER_MODELS: &[(&str, &str, &str)] = &[
+    ("tiny", "ggml-tiny.bin", "75MB"),
+    ("base", "ggml-base.bin", "142MB"),
+    ("small", "ggml-small.bin", "466MB"),
+];
+
+/// Base URL for downloading Whisper models from HuggingFace.
+pub const WHISPER_MODEL_BASE_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+
+/// Returns the models directory path.
+pub fn models_dir() -> PathBuf {
+    AppConfig::config_dir()
+        .unwrap_or_else(|_| dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("models")
+}
+
+/// Returns the model file path for a given model size.
+pub fn model_path_for_size(size: &str) -> PathBuf {
+    let filename = WHISPER_MODELS
+        .iter()
+        .find(|(s, _, _)| *s == size)
+        .map(|(_, f, _)| *f)
+        .unwrap_or("ggml-base.bin");
+    models_dir().join(filename)
+}
+
+/// Check which Whisper models are present on disk.
+pub fn check_whisper_models() -> HashMap<String, bool> {
+    WHISPER_MODELS
+        .iter()
+        .map(|(size, _, _)| (size.to_string(), model_path_for_size(size).exists()))
+        .collect()
+}
 
 /// Application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +123,37 @@ impl AppConfig {
         fs::create_dir_all(&dir)?;
         let content = serde_json::to_string_pretty(self)?;
         fs::write(Self::config_path()?, content)?;
+        Ok(())
+    }
+
+    /// Validate config fields.
+    pub fn validate(&self) -> Result<(), AppError> {
+        let valid_models: &[&str] = &["tiny", "base", "small"];
+        if !valid_models.contains(&self.whisper_model.as_str()) {
+            return Err(AppError::Config(format!(
+                "invalid whisper model: {}",
+                self.whisper_model
+            )));
+        }
+        if WindowsHotkeyManager::parse_key_code(&self.hotkey).is_none() {
+            return Err(AppError::Config(format!("invalid hotkey: {}", self.hotkey)));
+        }
+        let valid_langs: &[&str] = &["zh", "en", "zh-TW", "ja", "ko"];
+        if !valid_langs.contains(&self.language.as_str()) {
+            return Err(AppError::Config(format!(
+                "invalid language: {}",
+                self.language
+            )));
+        }
+        if self.llm_enabled
+            && (self.llm_api_url.is_empty()
+                || self.llm_api_key.is_empty()
+                || self.llm_model.is_empty())
+        {
+            return Err(AppError::Config(
+                "LLM API URL, Key, and Model are required when LLM is enabled".to_string(),
+            ));
+        }
         Ok(())
     }
 }

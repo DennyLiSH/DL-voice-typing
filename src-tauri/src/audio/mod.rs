@@ -92,6 +92,11 @@ impl Default for AudioCapture {
     }
 }
 
+// cpal::Stream is not Send/Sync due to platform-specific internals,
+// but we only use it on the main thread and protect with Mutex.
+unsafe impl Send for AudioCapture {}
+unsafe impl Sync for AudioCapture {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
