@@ -30,6 +30,7 @@ pub fn run() {
     let perf_history = Arc::new(PerfHistory::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             tray::setup_tray(app)?;
 

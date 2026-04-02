@@ -20,6 +20,7 @@
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",
-    "core:webview:default"
+    "core:webview:default",
+    "dialog:default"
   ]
 }

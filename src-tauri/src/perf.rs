@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Performance metrics for a single voice-typing cycle (hotkey press → injection complete).
 #[derive(Debug, Clone, Serialize)]
@@ -113,7 +113,14 @@ impl PerfHistory {
     /// Return the last `n` recorded metrics (most recent last).
     pub fn recent(&self, n: usize) -> Vec<PerfMetrics> {
         if let Ok(buf) = self.buffer.lock() {
-            buf.iter().rev().take(n).cloned().collect::<Vec<_>>().into_iter().rev().collect()
+            buf.iter()
+                .rev()
+                .take(n)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect()
         } else {
             Vec::new()
         }
@@ -188,6 +195,9 @@ mod tests {
         let recent = h.recent(100);
         assert_eq!(recent.len(), PerfHistory::CAPACITY);
         // Oldest should have been evicted; newest is last.
-        assert_eq!(recent.last().unwrap().cycle_id, PerfHistory::CAPACITY as u64 + 10);
+        assert_eq!(
+            recent.last().unwrap().cycle_id,
+            PerfHistory::CAPACITY as u64 + 10
+        );
     }
 }

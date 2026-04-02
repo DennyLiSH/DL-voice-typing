@@ -17,14 +17,14 @@ use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, Position};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL, SAFEARRAY};
+use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, SAFEARRAY};
 use windows::Win32::System::Ole::{
     SafeArrayAccessData, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayUnaccessData,
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetGUIThreadInfo, GUITHREADINFO};
+use windows::Win32::UI::WindowsAndMessaging::{GUITHREADINFO, GetCursorPos, GetGUIThreadInfo};
 
 /// Returns the text caret (cursor) position in screen coordinates.
 /// Falls back through three strategies:
@@ -33,8 +33,10 @@ use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetGUIThreadInfo, GU
 ///   3. Mouse cursor position (last resort)
 fn get_caret_screen_pos() -> (f64, f64) {
     // Strategy 1: GetGUIThreadInfo — works for classic Win32 apps.
-    let mut gui: GUITHREADINFO = Default::default();
-    gui.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    let mut gui: GUITHREADINFO = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
     if unsafe { GetGUIThreadInfo(0, &mut gui) }.is_ok() && !gui.hwndCaret.is_invalid() {
         let mut pt = POINT {
             x: gui.rcCaret.left,
@@ -45,14 +47,13 @@ fn get_caret_screen_pos() -> (f64, f64) {
     }
 
     // Strategy 2: UI Automation — works for Chrome, Edge, VS Code, etc.
-    let automation: Result<IUIAutomation, _> = unsafe {
-        CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_ALL)
-    };
+    let automation: Result<IUIAutomation, _> =
+        unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_ALL) };
     if let Ok(automation) = automation {
         if let Ok(element) = unsafe { automation.GetFocusedElement() } {
-            if let Ok(text_pattern) =
-                unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
-            {
+            if let Ok(text_pattern) = unsafe {
+                element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            } {
                 if let Ok(ranges) = unsafe { text_pattern.GetSelection() } {
                     if let Ok(count) = unsafe { ranges.Length() } {
                         if count > 0 {
@@ -79,8 +80,8 @@ fn get_caret_screen_pos() -> (f64, f64) {
 /// Extracts the first bounding rectangle (x, y, w, h) from a SAFEARRAY of f64
 /// returned by IUIAutomationTextRange::GetBoundingRectangles.
 fn extract_first_rect_from_safearray(sa: *mut SAFEARRAY) -> Option<(f64, f64)> {
-    let mut lower;
-    let mut upper;
+    let lower;
+    let upper;
     unsafe {
         lower = SafeArrayGetLBound(sa, 1).ok()?;
         upper = SafeArrayGetUBound(sa, 1).ok()?;
@@ -283,9 +284,8 @@ pub fn make_hotkey_callback(
                         let offset = 40.0;
                         let x = cx - offset - win_half;
                         let y = cy - offset - win_half;
-                        let _ = win.set_position(Position::Logical(
-                            tauri::LogicalPosition::new(x, y),
-                        ));
+                        let _ =
+                            win.set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
                         let _ = win.show();
                     }
                     let _ = app.emit("recording-start", ());
@@ -362,8 +362,8 @@ pub fn make_hotkey_callback(
                         let cb_clone = clipboard.clone();
                         let app_clone = app.clone();
                         let ph_clone = perf_history.clone();
-                        let t_press_for_e2e = t_release
-                            - Duration::from_millis(perf.audio_duration_ms.unwrap_or(0));
+                        let t_press_for_e2e =
+                            t_release - Duration::from_millis(perf.audio_duration_ms.unwrap_or(0));
 
                         tauri::async_runtime::spawn(async move {
                             // -- Transcription --
@@ -389,8 +389,7 @@ pub fn make_hotkey_callback(
                                     return;
                                 }
                             };
-                            perf.transcription_ms =
-                                Some(t_transcribe.elapsed().as_millis() as u64);
+                            perf.transcription_ms = Some(t_transcribe.elapsed().as_millis() as u64);
 
                             // -- LLM Correction (optional) --
                             let config = AppConfig::load().unwrap_or_default();
@@ -417,8 +416,7 @@ pub fn make_hotkey_callback(
                                         transcription.clone()
                                     }
                                 };
-                                perf.llm_correction_ms =
-                                    Some(t_llm.elapsed().as_millis() as u64);
+                                perf.llm_correction_ms = Some(t_llm.elapsed().as_millis() as u64);
                                 result
                             } else {
                                 transcription.clone()
@@ -443,8 +441,7 @@ pub fn make_hotkey_callback(
                                 }
                             }
                             perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-                            perf.end_to_end_ms =
-                                Some(t_press_for_e2e.elapsed().as_millis() as u64);
+                            perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
                             perf.text_length = final_text.len();
 
                             if let Ok(mut s) = sm_clone.lock() {

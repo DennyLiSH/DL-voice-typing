@@ -14,9 +14,7 @@ pub enum AppState {
     Idle,
 
     /// Hotkey pressed, audio is being captured.
-    Recording {
-        audio_buffer: Vec<f32>,
-    },
+    Recording { audio_buffer: Vec<f32> },
 
     /// Hotkey released, Whisper is transcribing.
     Transcribing { partial_results: Vec<String> },
