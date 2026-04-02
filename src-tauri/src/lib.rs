@@ -64,9 +64,10 @@ pub fn run() {
                 tauri::WebviewUrl::App("floating.html".into()),
             )
             .title("DL Voice Typing")
-            .inner_size(80.0, 80.0)
+            .inner_size(120.0, 120.0)
             .decorations(false)
             .transparent(true)
+            .shadow(false)
             .always_on_top(true)
             .focusable(false)
             .skip_taskbar(true)

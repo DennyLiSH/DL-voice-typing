@@ -14,7 +14,88 @@ use futures_util::StreamExt;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, Position};
+use windows::Win32::Foundation::POINT;
+use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL, SAFEARRAY};
+use windows::Win32::System::Ole::{
+    SafeArrayAccessData, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayUnaccessData,
+};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetGUIThreadInfo, GUITHREADINFO};
+
+/// Returns the text caret (cursor) position in screen coordinates.
+/// Falls back through three strategies:
+///   1. GetGUIThreadInfo (Win32 apps: Notepad, Word, etc.)
+///   2. UI Automation TextPattern (Chrome, Edge, VS Code, Electron, etc.)
+///   3. Mouse cursor position (last resort)
+fn get_caret_screen_pos() -> (f64, f64) {
+    // Strategy 1: GetGUIThreadInfo — works for classic Win32 apps.
+    let mut gui: GUITHREADINFO = Default::default();
+    gui.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    if unsafe { GetGUIThreadInfo(0, &mut gui) }.is_ok() && !gui.hwndCaret.is_invalid() {
+        let mut pt = POINT {
+            x: gui.rcCaret.left,
+            y: gui.rcCaret.top,
+        };
+        let _ = unsafe { ClientToScreen(gui.hwndCaret, &mut pt) };
+        return (pt.x as f64, pt.y as f64);
+    }
+
+    // Strategy 2: UI Automation — works for Chrome, Edge, VS Code, etc.
+    let automation: Result<IUIAutomation, _> = unsafe {
+        CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_ALL)
+    };
+    if let Ok(automation) = automation {
+        if let Ok(element) = unsafe { automation.GetFocusedElement() } {
+            if let Ok(text_pattern) =
+                unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
+            {
+                if let Ok(ranges) = unsafe { text_pattern.GetSelection() } {
+                    if let Ok(count) = unsafe { ranges.Length() } {
+                        if count > 0 {
+                            if let Ok(range) = unsafe { ranges.GetElement(0) } {
+                                if let Ok(sa) = unsafe { range.GetBoundingRectangles() } {
+                                    if let Some((x, y)) = extract_first_rect_from_safearray(sa) {
+                                        return (x, y);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Strategy 3: Fallback to mouse cursor.
+    let mut pt = POINT { x: 0, y: 0 };
+    let _ = unsafe { GetCursorPos(&mut pt) };
+    (pt.x as f64, pt.y as f64)
+}
+
+/// Extracts the first bounding rectangle (x, y, w, h) from a SAFEARRAY of f64
+/// returned by IUIAutomationTextRange::GetBoundingRectangles.
+fn extract_first_rect_from_safearray(sa: *mut SAFEARRAY) -> Option<(f64, f64)> {
+    let mut lower;
+    let mut upper;
+    unsafe {
+        lower = SafeArrayGetLBound(sa, 1).ok()?;
+        upper = SafeArrayGetUBound(sa, 1).ok()?;
+        let count = (upper - lower + 1) as usize;
+        if count < 4 {
+            return None; // Need at least x, y, w, h.
+        }
+        let mut data_ptr: *mut f64 = std::ptr::null_mut();
+        SafeArrayAccessData(sa, &mut data_ptr as *mut _ as *mut _).ok()?;
+        let x = *data_ptr;
+        let y = *data_ptr.add(1);
+        let _ = SafeArrayUnaccessData(sa);
+        Some((x, y))
+    }
+}
 use tokio::io::AsyncWriteExt;
 
 /// Shared state for download management.
@@ -193,8 +274,18 @@ pub fn make_hotkey_callback(
                     .map(|mut s| s.start_recording().is_ok())
                     .unwrap_or(false);
                 if can_record {
-                    // Show floating window.
+                    // Show floating window near text caret (upper-left 45°).
                     if let Some(win) = app.get_webview_window("floating") {
+                        let (cx, cy) = get_caret_screen_pos();
+                        // Window is 120x120, indicator is centered.
+                        // Place indicator center ~40px upper-left of caret.
+                        let win_half = 60.0;
+                        let offset = 40.0;
+                        let x = cx - offset - win_half;
+                        let y = cy - offset - win_half;
+                        let _ = win.set_position(Position::Logical(
+                            tauri::LogicalPosition::new(x, y),
+                        ));
                         let _ = win.show();
                     }
                     let _ = app.emit("recording-start", ());
