@@ -11,6 +11,7 @@ use crate::speech::AnyEngine;
 use crate::speech::SpeechEngine;
 use crate::state::StateMachine;
 use futures_util::StreamExt;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -77,6 +78,29 @@ fn get_caret_screen_pos() -> (f64, f64) {
     (pt.x as f64, pt.y as f64)
 }
 
+/// Returns the work area (excluding taskbar) of the monitor containing the given point.
+/// Returns `None` if the Win32 calls fail.
+fn get_monitor_work_area(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromPoint,
+    };
+
+    let pt = POINT { x, y };
+    let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_invalid() {
+        return None;
+    }
+
+    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    if !unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) }.as_bool() {
+        return None;
+    }
+
+    let rc = info.monitorInfo.rcWork;
+    Some((rc.left, rc.top, rc.right, rc.bottom))
+}
+
 /// Extracts the first bounding rectangle (x, y, w, h) from a SAFEARRAY of f64
 /// returned by IUIAutomationTextRange::GetBoundingRectangles.
 fn extract_first_rect_from_safearray(sa: *mut SAFEARRAY) -> Option<(f64, f64)> {
@@ -115,6 +139,37 @@ impl DownloadState {
 }
 
 impl Default for DownloadState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Metadata from the transcription pipeline needed for data-saving JSON update.
+struct ReviewData {
+    json_path: PathBuf,
+    raw_transcription: String,
+    llm_text: Option<String>,
+}
+
+/// Shared state for passing review text to the review window.
+/// The async task stores text here, and the review window fetches it on load.
+pub struct PendingReview {
+    /// Text for the review window to display. Consumed by `get_review_text`.
+    pub text: Arc<Mutex<Option<String>>>,
+    /// Data-saving metadata. Consumed by `confirm_inject` or `cancel_review`.
+    data_saving: Mutex<Option<ReviewData>>,
+}
+
+impl PendingReview {
+    pub fn new() -> Self {
+        Self {
+            text: Arc::new(Mutex::new(None)),
+            data_saving: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for PendingReview {
     fn default() -> Self {
         Self::new()
     }
@@ -423,6 +478,89 @@ pub fn make_hotkey_callback(
                             };
 
                             // -- Injection --
+                            if config.review_before_paste {
+                                // Save clipboard before entering review state.
+                                if let Ok(mut cb) = cb_clone.lock() {
+                                    let _ = cb.save();
+                                }
+                                // Transition to Reviewing.
+                                if let Ok(mut s) = sm_clone.lock() {
+                                    if config.llm_enabled {
+                                        let _ = s.llm_to_reviewing(final_text.clone());
+                                    } else {
+                                        let _ = s.transcribing_to_reviewing(final_text.clone());
+                                    }
+                                }
+                                // Store text for the review window to fetch on load.
+                                if let Some(pending) = app_clone.try_state::<PendingReview>() {
+                                    if let Ok(mut guard) = pending.text.lock() {
+                                        *guard = Some(final_text.clone());
+                                    }
+                                }
+
+                                // Show the pre-created review window near caret.
+                                let (cx, cy) = get_caret_screen_pos();
+                                let mut x = cx + 10.0;
+                                let mut y = cy + 20.0;
+                                let win_w = 420.0_f64;
+                                let win_h = 220.0_f64;
+                                // Clamp to the monitor the caret is on (works with multi-monitor).
+                                if let Some((left, top, right, bottom)) =
+                                    get_monitor_work_area(cx as i32, cy as i32)
+                                {
+                                    x = x.min(right as f64 - win_w).max(left as f64);
+                                    y = y.min(bottom as f64 - win_h).max(top as f64);
+                                }
+
+                                if let Some(win) = app_clone.get_webview_window("review") {
+                                    let _ = win.set_position(Position::Logical(
+                                        tauri::LogicalPosition::new(x, y),
+                                    ));
+                                    let _ = app_clone.emit("review-show", ());
+                                    let _ = win.show();
+
+                                    // Store data-saving metadata for confirm/cancel to consume later.
+                                    if let Some(sr) = save_result.as_ref() {
+                                        if let Some(pending) =
+                                            app_clone.try_state::<PendingReview>()
+                                        {
+                                            if let Ok(mut guard) = pending.data_saving.lock() {
+                                                *guard = Some(ReviewData {
+                                                    json_path: sr.json_path.clone(),
+                                                    raw_transcription: transcription.clone(),
+                                                    llm_text: if config.llm_enabled {
+                                                        Some(final_text.clone())
+                                                    } else {
+                                                        None
+                                                    },
+                                                });
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    eprintln!(
+                                        "Warning: review window not found. Falling back to direct injection."
+                                    );
+                                    if let Ok(mut s) = sm_clone.lock() {
+                                        s.reset();
+                                    }
+                                    if let Ok(mut cb) = cb_clone.lock() {
+                                        let _ = cb.save();
+                                        let _ = cb.inject_text(&final_text);
+                                    }
+                                    if let Ok(mut s) = sm_clone.lock() {
+                                        let _ = s.finish_injecting();
+                                    }
+                                    let _ = app_clone.emit("injection-complete", ());
+                                    if let Some(win) = app_clone.get_webview_window("floating") {
+                                        let _ = win.hide();
+                                    }
+                                }
+
+                                return; // Stop here — wait for confirm_inject or cancel_review.
+                            }
+
+                            // Direct injection path (review disabled).
                             if let Ok(mut s) = sm_clone.lock() {
                                 if config.llm_enabled {
                                     let _ = s.llm_to_injecting(final_text.clone());
@@ -465,6 +603,7 @@ pub fn make_hotkey_callback(
                                     &sr.json_path,
                                     &transcription,
                                     llm_text,
+                                    Some(&final_text),
                                 );
                             }
 
@@ -630,6 +769,130 @@ pub fn get_perf_history(
     n: Option<usize>,
 ) -> Result<Vec<PerfMetrics>, String> {
     Ok(perf.recent(n.unwrap_or(10)))
+}
+
+/// Fetch the pending review text (called by review window on load).
+#[tauri::command]
+pub fn get_review_text(pending: tauri::State<'_, PendingReview>) -> Result<Option<String>, String> {
+    let mut guard = pending
+        .text
+        .lock()
+        .map_err(|e| format!("lock failed: {}", e))?;
+    Ok(guard.take())
+}
+
+/// Confirm the reviewed text and inject it via clipboard paste.
+#[tauri::command]
+pub fn confirm_inject(
+    text: String,
+    state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
+    clipboard: tauri::State<'_, Arc<Mutex<crate::clipboard::ClipboardManager>>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    // 1. Transition Reviewing → Injecting
+    {
+        let mut sm = state_machine
+            .lock()
+            .map_err(|e| format!("lock failed: {}", e))?;
+        sm.reviewing_to_injecting(text.clone())
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 2. Hide review window FIRST so focus returns to the target app.
+    //    The review window has focus (focusable=true), so Ctrl+V would paste
+    //    into it instead of the target if we don't release focus first.
+    if let Some(win) = app.get_webview_window("review") {
+        let _ = win.hide();
+    }
+
+    // Brief delay for Windows to restore focus to the target application.
+    std::thread::sleep(Duration::from_millis(100));
+
+    // 3. Inject text (clipboard write + Ctrl+V + restore saved clipboard)
+    {
+        let cb = clipboard
+            .lock()
+            .map_err(|e| format!("lock failed: {}", e))?;
+        if let Err(e) = cb.inject_text(&text) {
+            let _ = app.emit("injection-error", e.to_string());
+        }
+    }
+
+    // 4. Transition → Idle
+    {
+        let mut sm = state_machine
+            .lock()
+            .map_err(|e| format!("lock failed: {}", e))?;
+        let _ = sm.finish_injecting();
+    }
+
+    // 5. Emit injection-complete + hide floating indicator
+    let _ = app.emit("injection-complete", ());
+    if let Some(win) = app.get_webview_window("floating") {
+        let _ = win.hide();
+    }
+
+    // 6. Update data-saving JSON with the final reviewed text.
+    if let Some(pending) = app.try_state::<PendingReview>() {
+        if let Ok(mut guard) = pending.data_saving.lock() {
+            if let Some(review_data) = guard.take() {
+                let _ = crate::data_saving::update_json_with_text(
+                    &review_data.json_path,
+                    &review_data.raw_transcription,
+                    review_data.llm_text.as_deref(),
+                    Some(&text),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+#[tauri::command]
+pub fn cancel_review(
+    state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
+    clipboard: tauri::State<'_, Arc<Mutex<crate::clipboard::ClipboardManager>>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    // 1. Cancel Reviewing → Idle
+    {
+        let mut sm = state_machine
+            .lock()
+            .map_err(|e| format!("lock failed: {}", e))?;
+        sm.cancel_reviewing().map_err(|e| e.to_string())?;
+    }
+
+    // 2. Restore clipboard
+    {
+        let mut cb = clipboard
+            .lock()
+            .map_err(|e| format!("lock failed: {}", e))?;
+        let _ = cb.restore();
+    }
+
+    // 3. Hide floating indicator + review window
+    if let Some(win) = app.get_webview_window("floating") {
+        let _ = win.hide();
+    }
+    if let Some(win) = app.get_webview_window("review") {
+        let _ = win.hide();
+    }
+
+    // 4. Update data-saving JSON: preserve raw transcription, mark no final text.
+    if let Some(pending) = app.try_state::<PendingReview>() {
+        if let Ok(mut guard) = pending.data_saving.lock() {
+            if let Some(review_data) = guard.take() {
+                let _ = crate::data_saving::update_json_with_text(
+                    &review_data.json_path,
+                    &review_data.raw_transcription,
+                    review_data.llm_text.as_deref(),
+                    None,
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

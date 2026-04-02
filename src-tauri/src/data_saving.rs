@@ -66,12 +66,17 @@ pub fn update_json_with_text(
     json_path: &std::path::Path,
     transcription: &str,
     llm_corrected: Option<&str>,
+    final_text: Option<&str>,
 ) -> Result<(), AppError> {
     let content = fs::read_to_string(json_path)?;
     let mut metadata: serde_json::Value = serde_json::from_str(&content)?;
 
     metadata["transcription"] = serde_json::Value::String(transcription.to_string());
     metadata["llm_corrected"] = match llm_corrected {
+        Some(text) => serde_json::Value::String(text.to_string()),
+        None => serde_json::Value::Null,
+    };
+    metadata["final_text"] = match final_text {
         Some(text) => serde_json::Value::String(text.to_string()),
         None => serde_json::Value::Null,
     };
@@ -391,12 +396,68 @@ mod tests {
         });
         fs::write(&json_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
-        update_json_with_text(&json_path, "你好世界", Some("你好世界")).unwrap();
+        update_json_with_text(&json_path, "你好世界", Some("你好世界"), None).unwrap();
 
         let updated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
         assert_eq!(updated["transcription"], "你好世界");
         assert_eq!(updated["llm_corrected"], "你好世界");
+        assert_eq!(updated["final_text"], serde_json::Value::Null);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_update_json_with_final_text() {
+        let dir = std::env::temp_dir().join("dl-voice-typing-test-final-text");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let json_path = dir.join("test.json");
+        let initial = serde_json::json!({
+            "transcription": serde_json::Value::Null,
+            "llm_corrected": serde_json::Value::Null,
+        });
+        fs::write(&json_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+
+        update_json_with_text(
+            &json_path,
+            "原始转录",
+            Some("LLM纠正"),
+            Some("编辑后最终文本"),
+        )
+        .unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
+        assert_eq!(updated["transcription"], "原始转录");
+        assert_eq!(updated["llm_corrected"], "LLM纠正");
+        assert_eq!(updated["final_text"], "编辑后最终文本");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_update_json_cancelled_review() {
+        let dir = std::env::temp_dir().join("dl-voice-typing-test-cancelled");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let json_path = dir.join("test.json");
+        let initial = serde_json::json!({
+            "transcription": serde_json::Value::Null,
+            "llm_corrected": serde_json::Value::Null,
+        });
+        fs::write(&json_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
+
+        // Cancel: final_text is None
+        update_json_with_text(&json_path, "原始转录", None, None).unwrap();
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
+        assert_eq!(updated["transcription"], "原始转录");
+        assert_eq!(updated["llm_corrected"], serde_json::Value::Null);
+        assert_eq!(updated["final_text"], serde_json::Value::Null);
 
         let _ = fs::remove_dir_all(&dir);
     }

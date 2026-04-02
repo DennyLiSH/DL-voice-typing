@@ -1,7 +1,7 @@
 {
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main", "floating", "settings", "onboarding"],
+  "windows": ["main", "floating", "settings", "onboarding", "review"],
   "permissions": [
     "core:default",
     "core:window:default",

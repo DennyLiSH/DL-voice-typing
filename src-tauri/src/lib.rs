@@ -20,7 +20,6 @@ use perf::PerfHistory;
 use speech::AnyEngine;
 use state::StateMachine;
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -76,6 +75,24 @@ pub fn run() {
             .center()
             .build()?;
 
+            // Pre-create review window (hidden) for fast show on demand.
+            let _review = tauri::webview::WebviewWindowBuilder::new(
+                app,
+                "review",
+                tauri::WebviewUrl::App("review.html".into()),
+            )
+            .title("Review")
+            .inner_size(420.0, 220.0)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .focusable(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .center()
+            .build()?;
+
             // Shared state managed by Tauri.
             app.manage(state_machine.clone());
             app.manage(audio_capture.clone());
@@ -96,10 +113,14 @@ pub fn run() {
                 .expect("failed to register hotkey");
 
             // Keep the hotkey manager alive for the lifetime of the app.
+            use tauri::Manager;
             app.manage(Mutex::new(hotkey_manager));
 
             // Download state for Whisper model downloads.
             app.manage(DownloadState::new());
+
+            // Pending review text for the review window to fetch on load.
+            app.manage(commands::PendingReview::new());
 
             Ok(())
         })
@@ -111,6 +132,9 @@ pub fn run() {
             commands::download_whisper_model,
             commands::cancel_download,
             commands::get_perf_history,
+            commands::confirm_inject,
+            commands::cancel_review,
+            commands::get_review_text,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

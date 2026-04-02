@@ -5,7 +5,9 @@
 ///
 /// ```text
 /// Idle → Recording → Transcribing → LLMRefining → Injecting → Idle
-///                              ↘ Injecting → Idle  (LLM disabled path)
+///                              ↘ Reviewing ↗         ↗
+///                                   ↓      (review disabled)
+///                              Injecting → Idle
 /// * → Idle  (error/cancel)
 /// ```
 #[derive(Debug)]
@@ -21,6 +23,9 @@ pub enum AppState {
 
     /// LLM is refining the transcribed text.
     LLMRefining { original_text: String },
+
+    /// Transcription done, waiting for user to review/edit text before injection.
+    Reviewing { text: String },
 
     /// Text is ready, injecting via clipboard paste.
     Injecting {
@@ -145,6 +150,74 @@ impl StateMachine {
         }
     }
 
+    /// Transition from Transcribing to Reviewing.
+    pub fn transcribing_to_reviewing(&mut self, text: String) -> Result<(), TransitionError> {
+        match std::mem::replace(&mut self.state, AppState::Idle) {
+            AppState::Transcribing { .. } => {
+                self.state = AppState::Reviewing { text };
+                Ok(())
+            }
+            other => {
+                self.state = other;
+                Err(TransitionError {
+                    from: self.state_name(),
+                    to: "Reviewing".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Transition from LLMRefining to Reviewing.
+    pub fn llm_to_reviewing(&mut self, text: String) -> Result<(), TransitionError> {
+        match std::mem::replace(&mut self.state, AppState::Idle) {
+            AppState::LLMRefining { .. } => {
+                self.state = AppState::Reviewing { text };
+                Ok(())
+            }
+            other => {
+                self.state = other;
+                Err(TransitionError {
+                    from: self.state_name(),
+                    to: "Reviewing".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Transition from Reviewing to Injecting (user confirmed).
+    pub fn reviewing_to_injecting(&mut self, text: String) -> Result<(), TransitionError> {
+        match std::mem::replace(&mut self.state, AppState::Idle) {
+            AppState::Reviewing { .. } => {
+                self.state = AppState::Injecting {
+                    text,
+                    saved_clipboard: None,
+                };
+                Ok(())
+            }
+            other => {
+                self.state = other;
+                Err(TransitionError {
+                    from: self.state_name(),
+                    to: "Injecting".to_string(),
+                })
+            }
+        }
+    }
+
+    /// Cancel review and return to Idle (user cancelled).
+    pub fn cancel_reviewing(&mut self) -> Result<(), TransitionError> {
+        match &self.state {
+            AppState::Reviewing { .. } => {
+                self.state = AppState::Idle;
+                Ok(())
+            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Idle".to_string(),
+            }),
+        }
+    }
+
     /// Transition from Injecting to Idle.
     pub fn finish_injecting(&mut self) -> Result<(), TransitionError> {
         match &self.state {
@@ -198,6 +271,7 @@ impl StateMachine {
             AppState::Recording { .. } => "Recording".to_string(),
             AppState::Transcribing { .. } => "Transcribing".to_string(),
             AppState::LLMRefining { .. } => "LLMRefining".to_string(),
+            AppState::Reviewing { .. } => "Reviewing".to_string(),
             AppState::Injecting { .. } => "Injecting".to_string(),
         }
     }
@@ -292,5 +366,71 @@ mod tests {
         let err = sm.stop_recording().unwrap_err();
         assert!(err.to_string().contains("Idle"));
         assert!(err.to_string().contains("Transcribing"));
+    }
+
+    #[test]
+    fn test_happy_path_with_review() {
+        let mut sm = StateMachine::new();
+        sm.start_recording().unwrap();
+        let _ = sm.stop_recording().unwrap();
+        sm.transcribing_to_reviewing("hello".to_string()).unwrap();
+        assert!(matches!(sm.state(), AppState::Reviewing { .. }));
+
+        sm.reviewing_to_injecting("hello edited".to_string())
+            .unwrap();
+        assert!(matches!(sm.state(), AppState::Injecting { .. }));
+
+        sm.finish_injecting().unwrap();
+        assert!(matches!(sm.state(), AppState::Idle));
+    }
+
+    #[test]
+    fn test_happy_path_with_llm_and_review() {
+        let mut sm = StateMachine::new();
+        sm.start_recording().unwrap();
+        let _ = sm.stop_recording().unwrap();
+        sm.add_partial_result("hello".to_string()).unwrap();
+        sm.start_llm_refining("hello world".to_string()).unwrap();
+
+        sm.llm_to_reviewing("hello world refined".to_string())
+            .unwrap();
+        assert!(matches!(sm.state(), AppState::Reviewing { .. }));
+
+        sm.reviewing_to_injecting("hello world refined".to_string())
+            .unwrap();
+        sm.finish_injecting().unwrap();
+        assert!(matches!(sm.state(), AppState::Idle));
+    }
+
+    #[test]
+    fn test_review_cancel() {
+        let mut sm = StateMachine::new();
+        sm.start_recording().unwrap();
+        let _ = sm.stop_recording().unwrap();
+        sm.transcribing_to_reviewing("hello".to_string()).unwrap();
+
+        sm.cancel_reviewing().unwrap();
+        assert!(matches!(sm.state(), AppState::Idle));
+    }
+
+    #[test]
+    fn test_review_reset() {
+        let mut sm = StateMachine::new();
+        sm.start_recording().unwrap();
+        let _ = sm.stop_recording().unwrap();
+        sm.transcribing_to_reviewing("hello".to_string()).unwrap();
+
+        sm.reset();
+        assert!(matches!(sm.state(), AppState::Idle));
+    }
+
+    #[test]
+    fn test_invalid_review_transitions() {
+        let mut sm = StateMachine::new();
+        // Cannot review from Idle
+        assert!(sm.transcribing_to_reviewing("text".to_string()).is_err());
+        assert!(sm.llm_to_reviewing("text".to_string()).is_err());
+        assert!(sm.reviewing_to_injecting("text".to_string()).is_err());
+        assert!(sm.cancel_reviewing().is_err());
     }
 }

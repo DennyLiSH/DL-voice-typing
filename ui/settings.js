@@ -27,6 +27,7 @@ const dataSavingToggle = document.getElementById('data-saving-toggle');
 const dataSavingFields = document.getElementById('data-saving-fields');
 const dataSavingPath = document.getElementById('data-saving-path');
 const btnBrowsePath = document.getElementById('btn-browse-path');
+const reviewToggle = document.getElementById('review-toggle');
 
 // State
 let loadedConfig = null;
@@ -71,6 +72,8 @@ function populateFields(config) {
     dataSavingToggle.setAttribute('aria-checked', String(!!config.data_saving_enabled));
     updateDataSavingFieldsState(!!config.data_saving_enabled);
     dataSavingPath.value = config.data_saving_path || '';
+    reviewToggle.classList.toggle('active', !!config.review_before_paste);
+    reviewToggle.setAttribute('aria-checked', String(!!config.review_before_paste));
 }
 
 // --- Model Select ---
@@ -235,6 +238,21 @@ dataSavingToggle.addEventListener('keydown', (e) => {
     }
 });
 
+// --- Review Before Paste Toggle ---
+
+reviewToggle.addEventListener('click', () => {
+    const isActive = reviewToggle.classList.toggle('active');
+    reviewToggle.setAttribute('aria-checked', String(isActive));
+    updateDirtyState();
+});
+
+reviewToggle.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+        e.preventDefault();
+        reviewToggle.click();
+    }
+});
+
 // --- Folder Browser ---
 
 btnBrowsePath.addEventListener('click', async () => {
@@ -314,7 +332,8 @@ function updateDirtyState() {
         current.llm_model !== loadedConfig.llm_model ||
         current.download_mirror !== loadedConfig.download_mirror ||
         current.data_saving_enabled !== loadedConfig.data_saving_enabled ||
-        current.data_saving_path !== loadedConfig.data_saving_path
+        current.data_saving_path !== loadedConfig.data_saving_path ||
+        current.review_before_paste !== loadedConfig.review_before_paste
     );
 
     saveBtn.disabled = !isDirty;
@@ -334,6 +353,7 @@ function getCurrentConfig() {
         download_mirror: downloadMirrorSelect.value,
         data_saving_enabled: dataSavingToggle.classList.contains('active'),
         data_saving_path: dataSavingPath.value.trim(),
+        review_before_paste: reviewToggle.classList.contains('active'),
     };
 }
 

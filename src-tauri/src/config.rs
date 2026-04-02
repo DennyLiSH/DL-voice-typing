@@ -102,6 +102,10 @@ pub struct AppConfig {
     /// Directory path for saving training data (WAV + JSON).
     #[serde(default)]
     pub data_saving_path: String,
+
+    /// Whether to show a review window before pasting transcribed text.
+    #[serde(default)]
+    pub review_before_paste: bool,
 }
 
 impl Default for AppConfig {
@@ -117,6 +121,7 @@ impl Default for AppConfig {
             download_mirror: "hf-mirror".to_string(),
             data_saving_enabled: false,
             data_saving_path: String::new(),
+            review_before_paste: false,
         }
     }
 }
