@@ -6,6 +6,7 @@ pub mod data_saving;
 pub mod error;
 pub mod hotkey;
 pub mod llm;
+pub mod perf;
 pub mod speech;
 pub mod state;
 pub mod tray;
@@ -15,6 +16,7 @@ use commands::DownloadState;
 use config::AppConfig;
 use hotkey::HotkeyManager;
 use hotkey::windows::WindowsHotkeyManager;
+use perf::PerfHistory;
 use speech::AnyEngine;
 use state::StateMachine;
 use std::sync::{Arc, Mutex};
@@ -25,6 +27,7 @@ pub fn run() {
     let state_machine = Arc::new(Mutex::new(StateMachine::new()));
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
     let clipboard_manager = Arc::new(Mutex::new(clipboard::ClipboardManager::new()));
+    let perf_history = Arc::new(PerfHistory::new());
 
     tauri::Builder::default()
         .setup(move |app| {
@@ -75,15 +78,17 @@ pub fn run() {
             app.manage(state_machine.clone());
             app.manage(audio_capture.clone());
             app.manage(clipboard_manager.clone());
+            app.manage(perf_history.clone());
 
             // Register hotkey.
             let hotkey_name = config.hotkey.clone();
             let sm = state_machine.clone();
             let ac = audio_capture.clone();
             let cb = clipboard_manager.clone();
+            let ph = perf_history.clone();
             let app_handle = app.handle().clone();
             let mut hotkey_manager = WindowsHotkeyManager::new();
-            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, app_handle);
+            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, ph, app_handle);
             hotkey_manager
                 .register(&hotkey_name, callback)
                 .expect("failed to register hotkey");
@@ -103,6 +108,7 @@ pub fn run() {
             commands::get_whisper_models,
             commands::download_whisper_model,
             commands::cancel_download,
+            commands::get_perf_history,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 /// Application state machine.
 ///
 /// All app behavior is driven by transitions between these states.
@@ -18,7 +16,6 @@ pub enum AppState {
     /// Hotkey pressed, audio is being captured.
     Recording {
         audio_buffer: Vec<f32>,
-        start_time: Instant,
     },
 
     /// Hotkey released, Whisper is transcribing.
@@ -64,7 +61,6 @@ impl StateMachine {
             AppState::Idle => {
                 self.state = AppState::Recording {
                     audio_buffer: Vec::new(),
-                    start_time: Instant::now(),
                 };
                 Ok(())
             }

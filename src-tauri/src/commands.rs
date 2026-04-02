@@ -6,13 +6,14 @@ use crate::config::{
 use crate::hotkey::windows::WindowsHotkeyManager;
 use crate::hotkey::{HotkeyCallback, HotkeyEvent, HotkeyManager};
 use crate::llm::LLMClient;
+use crate::perf::{PerfHistory, PerfMetrics};
 use crate::speech::AnyEngine;
 use crate::speech::SpeechEngine;
 use crate::state::StateMachine;
 use futures_util::StreamExt;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 
@@ -72,6 +73,7 @@ pub fn save_settings(
     _hotkey_manager: tauri::State<'_, Mutex<WindowsHotkeyManager>>,
     state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
     audio_capture: tauri::State<'_, Arc<Mutex<AudioCapture>>>,
+    perf_history: tauri::State<'_, Arc<PerfHistory>>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     // Validate first.
@@ -89,6 +91,7 @@ pub fn save_settings(
         let (tx, rx) = mpsc::channel();
         let sm = state_machine.inner().clone();
         let ac = audio_capture.inner().clone();
+        let ph = perf_history.inner().clone();
         let old_key = old_config.hotkey;
         let new_key = config.hotkey;
         let app_clone = app.clone();
@@ -116,7 +119,8 @@ pub fn save_settings(
                 .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
                 .inner()
                 .clone();
-            let callback = make_hotkey_callback(sm, ac, engine, cb, app_clone.clone());
+            let ph_clone = ph.clone();
+            let callback = make_hotkey_callback(sm, ac, engine, cb, ph_clone, app_clone.clone());
 
             // Try registering the new key.
             match hm.register(&new_key, callback) {
@@ -138,8 +142,9 @@ pub fn save_settings(
                         .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
                         .inner()
                         .clone();
+                    let ph2 = ph.clone();
                     let fallback_callback =
-                        make_hotkey_callback(sm2, ac2, engine2, cb2, app_clone.clone());
+                        make_hotkey_callback(sm2, ac2, engine2, cb2, ph2, app_clone.clone());
                     let _ = hm.register(&old_key, fallback_callback);
                     let _ = tx.send(Err(format!(
                         "新热键注册失败({})，已回退到旧热键: {}",
@@ -170,11 +175,19 @@ pub fn make_hotkey_callback(
     ac: Arc<Mutex<AudioCapture>>,
     engine: Arc<AnyEngine>,
     clipboard: Arc<Mutex<crate::clipboard::ClipboardManager>>,
+    perf_history: Arc<PerfHistory>,
     app: tauri::AppHandle,
 ) -> HotkeyCallback {
+    // Shared perf state between Pressed and Released invocations of the same cycle.
+    // Pressed creates it, Released takes it and moves into the async task.
+    let perf_slot: Arc<Mutex<Option<PerfMetrics>>> = Arc::new(Mutex::new(None));
+
     Box::new(move |event| {
         match event {
             HotkeyEvent::Pressed => {
+                let t_press = Instant::now();
+                let cycle_id = perf_history.next_cycle_id();
+
                 let can_record = sm
                     .lock()
                     .map(|mut s| s.start_recording().is_ok())
@@ -198,9 +211,28 @@ pub fn make_hotkey_callback(
                             let _ = app_for_rms.emit("audio-rms", rms_val);
                         }));
                     }
+
+                    // Store perf metrics with press timing.
+                    let press_latency = t_press.elapsed().as_millis() as u64;
+                    let mut perf = PerfMetrics::new(cycle_id);
+                    perf.press_latency_ms = Some(press_latency);
+                    if let Ok(mut slot) = perf_slot.lock() {
+                        *slot = Some(perf);
+                    }
                 }
             }
             HotkeyEvent::Released => {
+                let t_release = Instant::now();
+
+                // Take the perf metrics created by Pressed.
+                let mut perf = perf_slot
+                    .lock()
+                    .ok()
+                    .and_then(|mut s| s.take())
+                    .unwrap_or_else(|| PerfMetrics::new(perf_history.next_cycle_id()));
+
+                perf.audio_duration_ms = Some(t_release.elapsed().as_millis() as u64);
+
                 // Read sample rate BEFORE stop (stop clears config).
                 let sample_rate = ac.lock().ok().and_then(|a| a.sample_rate());
                 if let Ok(mut ac_guard) = ac.lock() {
@@ -208,6 +240,10 @@ pub fn make_hotkey_callback(
                 }
                 if let Ok(mut sm_guard) = sm.lock() {
                     if let Ok(audio_data) = sm_guard.stop_recording() {
+                        perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
+                        perf.audio_samples = audio_data.len();
+                        perf.audio_sample_rate = sample_rate.unwrap_or(48000);
+
                         // Save training data if enabled (audio first, text later).
                         let save_result = if let (Some(sr), Ok(config)) =
                             (sample_rate, AppConfig::load())
@@ -234,9 +270,13 @@ pub fn make_hotkey_callback(
                         let sm_clone = sm.clone();
                         let cb_clone = clipboard.clone();
                         let app_clone = app.clone();
+                        let ph_clone = perf_history.clone();
+                        let t_press_for_e2e = t_release
+                            - Duration::from_millis(perf.audio_duration_ms.unwrap_or(0));
 
                         tauri::async_runtime::spawn(async move {
                             // -- Transcription --
+                            let t_transcribe = Instant::now();
                             let transcription = match engine_clone.transcribe(&resampled).await {
                                 Ok(text) => {
                                     let _ = app_clone.emit("transcription-complete", &text);
@@ -258,21 +298,25 @@ pub fn make_hotkey_callback(
                                     return;
                                 }
                             };
+                            perf.transcription_ms =
+                                Some(t_transcribe.elapsed().as_millis() as u64);
 
                             // -- LLM Correction (optional) --
                             let config = AppConfig::load().unwrap_or_default();
+                            perf.llm_enabled = config.llm_enabled;
                             let final_text = if config.llm_enabled {
                                 if let Ok(mut s) = sm_clone.lock() {
                                     let _ = s.start_llm_refining(transcription.clone());
                                 }
                                 let _ = app_clone.emit("llm-refining", ());
 
+                                let t_llm = Instant::now();
                                 let llm = LLMClient::new(
                                     config.llm_api_url,
                                     config.llm_api_key,
                                     config.llm_model,
                                 );
-                                match llm.correct(&transcription).await {
+                                let result = match llm.correct(&transcription).await {
                                     Ok(corrected) => {
                                         let _ = app_clone.emit("llm-complete", &corrected);
                                         corrected
@@ -281,7 +325,10 @@ pub fn make_hotkey_callback(
                                         let _ = app_clone.emit("llm-error", e.to_string());
                                         transcription.clone()
                                     }
-                                }
+                                };
+                                perf.llm_correction_ms =
+                                    Some(t_llm.elapsed().as_millis() as u64);
+                                result
                             } else {
                                 transcription.clone()
                             };
@@ -295,6 +342,7 @@ pub fn make_hotkey_callback(
                                 }
                             }
 
+                            let t_inject = Instant::now();
                             {
                                 if let Ok(mut cb) = cb_clone.lock() {
                                     let _ = cb.save();
@@ -303,6 +351,10 @@ pub fn make_hotkey_callback(
                                     }
                                 }
                             }
+                            perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
+                            perf.end_to_end_ms =
+                                Some(t_press_for_e2e.elapsed().as_millis() as u64);
+                            perf.text_length = final_text.len();
 
                             if let Ok(mut s) = sm_clone.lock() {
                                 let _ = s.finish_injecting();
@@ -327,6 +379,11 @@ pub fn make_hotkey_callback(
                                     llm_text,
                                 );
                             }
+
+                            // Record and report performance metrics.
+                            ph_clone.record(perf.clone());
+                            let _ = app_clone.emit("perf-metrics", &perf);
+                            eprintln!("{}", perf.summary());
                         });
                     }
                 }
@@ -476,6 +533,15 @@ pub async fn test_llm_connection(
 ) -> Result<(), String> {
     let client = LLMClient::new(api_url, api_key, model);
     client.test_connection().await.map_err(|e| e.to_string())
+}
+
+/// Return recent performance metrics history.
+#[tauri::command]
+pub fn get_perf_history(
+    perf: tauri::State<'_, Arc<PerfHistory>>,
+    n: Option<usize>,
+) -> Result<Vec<PerfMetrics>, String> {
+    Ok(perf.recent(n.unwrap_or(10)))
 }
 
 #[cfg(test)]
