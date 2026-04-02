@@ -14,9 +14,8 @@ fn default_download_mirror() -> String {
 
 /// Available languages for speech recognition: (code, display name).
 pub const LANGUAGES: &[(&str, &str)] = &[
-    ("zh", "简体中文"),
+    ("zh", "中文"),
     ("en", "English"),
-    ("zh-TW", "繁體中文"),
     ("ja", "日本語"),
     ("ko", "한국어"),
 ];
@@ -175,7 +174,7 @@ impl AppConfig {
         if WindowsHotkeyManager::parse_key_code(&self.hotkey).is_none() {
             return Err(AppError::Config(format!("invalid hotkey: {}", self.hotkey)));
         }
-        let valid_langs: &[&str] = &["zh", "en", "zh-TW", "ja", "ko"];
+        let valid_langs: &[&str] = &["zh", "en", "ja", "ko"];
         if !valid_langs.contains(&self.language.as_str()) {
             return Err(AppError::Config(format!(
                 "invalid language: {}",

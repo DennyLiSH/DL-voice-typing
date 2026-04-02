@@ -3,6 +3,17 @@ use crate::speech::SpeechEngine;
 use std::path::PathBuf;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+/// Returns an initial prompt to anchor Whisper's output language.
+/// Prevents drift to English for non-English languages.
+fn initial_prompt_for_lang(lang: &str) -> Option<&'static str> {
+    match lang {
+        "zh" => Some("以下是普通话的句子。"),
+        "ja" => Some("以下は日本語の文章です。"),
+        "ko" => Some("다음은 한국어 문장입니다."),
+        _ => None,
+    }
+}
+
 /// Whisper.cpp speech engine.
 pub struct WhisperEngine {
     ctx: Option<WhisperContext>,
@@ -71,6 +82,10 @@ impl SpeechEngine for WhisperEngine {
         params.set_print_timestamps(false);
         params.set_no_timestamps(true);
         params.set_single_segment(true);
+        params.set_translate(false);
+        if let Some(prompt) = initial_prompt_for_lang(&self.language) {
+            params.set_initial_prompt(prompt);
+        }
 
         let mut state = ctx
             .create_state()

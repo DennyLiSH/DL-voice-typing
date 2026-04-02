@@ -3,8 +3,9 @@ use crate::hotkey::{HotkeyCallback, HotkeyEvent, HotkeyManager};
 use std::sync::Mutex;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, KBDLLHOOKSTRUCT_FLAGS, LLKHF_INJECTED,
+    SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP,
 };
 
 /// Global state shared between WindowsHotkeyManager and the hook procedure.
@@ -130,6 +131,12 @@ unsafe extern "system" fn keyboard_hook_proc(
     if n_code >= 0 {
         let kb_struct = unsafe { *(l_param.0 as *const KBDLLHOOKSTRUCT) };
         let vk = kb_struct.vkCode;
+
+        // Ignore synthetic (injected) key events from SendInput/keybd_event.
+        // This prevents tools like Ditto from accidentally triggering the hotkey.
+        if kb_struct.flags & LLKHF_INJECTED != KBDLLHOOKSTRUCT_FLAGS(0) {
+            return unsafe { CallNextHookEx(None, n_code, w_param, l_param) };
+        }
 
         // Determine event type from w_param.
         let event = match w_param.0 as u32 {
