@@ -51,6 +51,7 @@ async function init() {
         populateFields(config);
         populateModelSelect();
         updateModelAction();
+        loadComputeMode();
         updateDirtyState();
         dirtyCheckEnabled = true;
     } catch (e) {
@@ -132,6 +133,28 @@ whisperModelSelect.addEventListener('change', () => {
     updateModelAction();
     updateDirtyState();
 });
+
+// --- Compute Mode ---
+
+async function loadComputeMode() {
+    const badge = document.getElementById('compute-mode-badge');
+    try {
+        const mode = await invoke('get_compute_mode');
+        if (mode === 'gpu') {
+            badge.textContent = 'GPU 加速';
+            badge.className = 'mode-badge gpu';
+        } else if (mode === 'cpu') {
+            badge.textContent = 'CPU 模式（未检测到 GPU）';
+            badge.className = 'mode-badge cpu';
+        } else {
+            badge.textContent = '模型未加载';
+            badge.className = 'mode-badge unloaded';
+        }
+    } catch (e) {
+        badge.textContent = '检测失败';
+        badge.className = 'mode-badge unloaded';
+    }
+}
 
 // --- Download ---
 

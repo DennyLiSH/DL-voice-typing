@@ -310,6 +310,18 @@
             outline: 2px solid var(--focus);
             outline-offset: 2px;
         }
+
+        /* Compute mode badge */
+        .mode-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .mode-badge.gpu { background: rgba(22, 163, 74, 0.1); color: var(--success); }
+        .mode-badge.cpu { background: rgba(234, 179, 8, 0.15); color: #ca8a04; }
+        .mode-badge.unloaded { background: rgba(220, 38, 38, 0.1); color: var(--error); }
     </style>
 </head>
 <body>
@@ -387,6 +399,10 @@
                     <option value="huggingface">HuggingFace (国际)</option>
                 </select>
                 <div class="shortcut-hint">国内用户推荐使用 HF-Mirror 加速下载</div>
+            </div>
+            <div class="form-group" id="compute-mode-group">
+                <label>运行模式</label>
+                <span class="mode-badge unloaded" id="compute-mode-badge">检测中...</span>
             </div>
         </div>
 

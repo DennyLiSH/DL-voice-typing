@@ -19,8 +19,8 @@ use hotkey::windows::WindowsHotkeyManager;
 use perf::PerfHistory;
 use speech::AnyEngine;
 use state::StateMachine;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -52,7 +52,8 @@ pub fn run() {
             };
             if let Err(e) = engine.load_model() {
                 eprintln!(
-                    "Warning: model load failed: {}. Download a model from Settings.",
+                    "Warning: model load failed: {}. \
+                     This may be due to missing GPU drivers or a corrupted model file.",
                     e
                 );
             }
@@ -135,6 +136,7 @@ pub fn run() {
             commands::download_whisper_model,
             commands::cancel_download,
             commands::get_perf_history,
+            commands::get_compute_mode,
             commands::confirm_inject,
             commands::cancel_review,
             commands::get_review_text,

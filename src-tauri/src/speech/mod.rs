@@ -17,6 +17,11 @@ pub trait SpeechEngine: Send + Sync {
     /// Check if the engine's model is loaded and ready.
     fn is_ready(&self) -> bool;
 
+    /// Check if the engine is running on GPU (vs CPU fallback).
+    fn is_gpu_mode(&self) -> bool {
+        false
+    }
+
     /// Get the engine name for display.
     fn name(&self) -> &str;
 }
@@ -66,6 +71,14 @@ impl SpeechEngine for AnyEngine {
             #[cfg(feature = "whisper")]
             Self::Whisper(e) => e.is_ready(),
             Self::Mock(e) => e.is_ready(),
+        }
+    }
+
+    fn is_gpu_mode(&self) -> bool {
+        match self {
+            #[cfg(feature = "whisper")]
+            Self::Whisper(e) => e.is_gpu_mode(),
+            Self::Mock(_) => false,
         }
     }
 

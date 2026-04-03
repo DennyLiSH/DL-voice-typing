@@ -804,6 +804,20 @@ pub fn get_perf_history(
     Ok(perf.recent(n.unwrap_or(10)))
 }
 
+/// Return the current compute mode: "gpu", "cpu", or "unloaded".
+#[tauri::command]
+pub fn get_compute_mode(engine: tauri::State<'_, Arc<AnyEngine>>) -> Result<String, String> {
+    if engine.is_ready() {
+        Ok(if engine.is_gpu_mode() {
+            "gpu".to_string()
+        } else {
+            "cpu".to_string()
+        })
+    } else {
+        Ok("unloaded".to_string())
+    }
+}
+
 /// Fetch the pending review text (called by review window on load).
 #[tauri::command]
 pub fn get_review_text(pending: tauri::State<'_, PendingReview>) -> Result<Option<String>, String> {

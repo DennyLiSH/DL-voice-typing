@@ -23,6 +23,7 @@ pub struct WhisperEngine {
     ctx: Option<WhisperContext>,
     model_path: PathBuf,
     language: String,
+    gpu_mode: bool,
 }
 
 impl WhisperEngine {
@@ -32,10 +33,12 @@ impl WhisperEngine {
             ctx: None,
             model_path,
             language,
+            gpu_mode: false,
         }
     }
 
     /// Load the Whisper model. Must be called before transcribe.
+    /// Tries GPU first, falls back to CPU if GPU initialization fails.
     pub fn load_model(&mut self) -> Result<(), AppError> {
         if !self.model_path.exists() {
             return Err(AppError::Speech(format!(
@@ -44,12 +47,32 @@ impl WhisperEngine {
             )));
         }
 
-        let params = WhisperContextParameters::default();
-        let ctx =
-            WhisperContext::new_with_params(self.model_path.to_string_lossy().as_ref(), params)
-                .map_err(|e| AppError::Speech(format!("failed to load model: {}", e)))?;
+        let path = self.model_path.to_string_lossy().to_string();
 
+        // Phase 1: Try GPU (use_gpu defaults to true when vulkan feature is enabled).
+        let params = WhisperContextParameters::default();
+        match WhisperContext::new_with_params(&path, params) {
+            Ok(ctx) => {
+                self.gpu_mode = true;
+                self.ctx = Some(ctx);
+                eprintln!("Whisper: model loaded on GPU");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Whisper: GPU init failed ({}), falling back to CPU...", e);
+            }
+        }
+
+        // Phase 2: CPU fallback.
+        let params = WhisperContextParameters {
+            use_gpu: false,
+            ..Default::default()
+        };
+        let ctx = WhisperContext::new_with_params(&path, params)
+            .map_err(|e| AppError::Speech(format!("failed to load model (GPU and CPU): {}", e)))?;
+        self.gpu_mode = false;
         self.ctx = Some(ctx);
+        eprintln!("Whisper: model loaded on CPU (no GPU acceleration)");
         Ok(())
     }
 
@@ -136,6 +159,10 @@ impl SpeechEngine for WhisperEngine {
 
     fn is_ready(&self) -> bool {
         self.ctx.is_some()
+    }
+
+    fn is_gpu_mode(&self) -> bool {
+        self.gpu_mode && self.ctx.is_some()
     }
 
     fn name(&self) -> &str {
