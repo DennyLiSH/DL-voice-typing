@@ -9,7 +9,6 @@ on:
 
 env:
   CARGO_TARGET_DIR: 'C:\t'
-  VULKAN_SDK_VERSION: '1.4.341.1'
 
 jobs:
   build:
@@ -29,31 +28,11 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      - name: Cache Vulkan SDK
-        id: cache-vulkan
-        uses: actions/cache@v4
-        with:
-          path: C:\VulkanSDK\1.4.341.1
-          key: vulkan-sdk-1.4.341.1
-
       - name: Install Vulkan SDK
-        if: steps.cache-vulkan.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          $url = "https://sdk.lunarg.com/sdk/download/${env:VULKAN_SDK_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_SDK_VERSION}.exe"
-          $installer = "${env:RUNNER_TEMP}\vulkansdk.exe"
-          Write-Host "Downloading Vulkan SDK from $url"
-          Invoke-WebRequest -Uri $url -OutFile $installer -MaximumRetryCount 3
-          Write-Host "Installing Vulkan SDK..."
-          Start-Process -FilePath $installer -ArgumentList '/S' -Wait
-          Write-Host "Vulkan SDK installed."
-
-      - name: Set Vulkan environment
-        shell: pwsh
-        run: |
-          $sdk = "C:\VulkanSDK\${env:VULKAN_SDK_VERSION}"
-          echo "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
-          echo "$sdk\Bin" >> $env:GITHUB_PATH
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2"
