@@ -3,6 +3,10 @@ use crate::speech::SpeechEngine;
 use std::path::PathBuf;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+/// If Whisper's no_speech probability exceeds this threshold, the segment is
+/// treated as silence/hallucination and discarded.
+const NO_SPEECH_PROB_THRESHOLD: f32 = 0.6;
+
 /// Returns an initial prompt to anchor Whisper's output language.
 /// Prevents drift to English for non-English languages.
 fn initial_prompt_for_lang(lang: &str) -> Option<&'static str> {
@@ -108,6 +112,17 @@ impl SpeechEngine for WhisperEngine {
                 Some(s) => s,
                 None => continue,
             };
+
+            // Skip segments Whisper identifies as no-speech (hallucination guard).
+            if segment.no_speech_probability() > NO_SPEECH_PROB_THRESHOLD {
+                eprintln!(
+                    "Whisper: skipping segment {} (no_speech_prob={:.3})",
+                    i,
+                    segment.no_speech_probability()
+                );
+                continue;
+            }
+
             text.push_str(
                 segment
                     .to_str()

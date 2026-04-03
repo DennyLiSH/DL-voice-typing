@@ -390,6 +390,17 @@ pub fn make_hotkey_callback(
                         perf.audio_samples = audio_data.len();
                         perf.audio_sample_rate = sample_rate.unwrap_or(48000);
 
+                        // Skip transcription if audio is near-silent (hallucination guard).
+                        let rms = rms::calculate_rms(&audio_data);
+                        if rms < 0.01 {
+                            eprintln!("Silent audio (rms={rms:.4}), skipping transcription");
+                            sm_guard.reset();
+                            if let Some(win) = app.get_webview_window("floating") {
+                                let _ = win.hide();
+                            }
+                            return;
+                        }
+
                         // Save training data if enabled (audio first, text later).
                         let save_result = if let (Some(sr), Ok(config)) =
                             (sample_rate, AppConfig::load())
@@ -446,6 +457,21 @@ pub fn make_hotkey_callback(
                             };
                             perf.transcription_ms = Some(t_transcribe.elapsed().as_millis() as u64);
 
+                            // Skip LLM + injection if transcription is empty (all segments
+                            // filtered by no_speech probability).
+                            if transcription.is_empty() {
+                                eprintln!(
+                                    "Empty transcription (all segments filtered), skipping injection"
+                                );
+                                if let Ok(mut s) = sm_clone.lock() {
+                                    s.reset();
+                                }
+                                if let Some(win) = app_clone.get_webview_window("floating") {
+                                    let _ = win.hide();
+                                }
+                                return;
+                            }
+
                             // -- LLM Correction (optional) --
                             let config = AppConfig::load().unwrap_or_default();
                             perf.llm_enabled = config.llm_enabled;
@@ -475,6 +501,13 @@ pub fn make_hotkey_callback(
                                 result
                             } else {
                                 transcription.clone()
+                            };
+
+                            // Normalize Chinese punctuation (half-width → full-width) when surrounded by CJK.
+                            let final_text = if config.language == "zh" {
+                                normalize_chinese_punctuation(&final_text)
+                            } else {
+                                final_text
                             };
 
                             // -- Injection --
@@ -985,5 +1018,81 @@ mod tests {
         assert!(!ds.cancel.load(std::sync::atomic::Ordering::SeqCst));
         ds.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(ds.cancel.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+/// Replace ASCII comma/period with full-width Chinese equivalents
+/// when surrounded by CJK Unified Ideographs, or at end-of-string preceded by CJK.
+fn normalize_chinese_punctuation(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut result = String::with_capacity(text.len());
+
+    fn is_cjk(ch: char) -> bool {
+        matches!(ch, '\u{4E00}'..='\u{9FFF}')
+    }
+
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch == ',' || ch == '.' {
+            let prev_cjk = i > 0 && is_cjk(chars[i - 1]);
+            let next_cjk = i + 1 < chars.len() && is_cjk(chars[i + 1]);
+            let at_end = i + 1 == chars.len();
+            if prev_cjk && (next_cjk || at_end) {
+                result.push(if ch == ',' { '，' } else { '。' });
+                continue;
+            }
+        }
+        result.push(ch);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests_normalize_chinese_punctuation {
+    use super::*;
+
+    #[test]
+    fn test_between_chinese() {
+        assert_eq!(normalize_chinese_punctuation("你好,世界"), "你好，世界");
+        assert_eq!(normalize_chinese_punctuation("今天.明天"), "今天。明天");
+    }
+
+    #[test]
+    fn test_mixed_language_unchanged() {
+        assert_eq!(normalize_chinese_punctuation("Hello,世界"), "Hello,世界");
+        assert_eq!(normalize_chinese_punctuation("你好, world"), "你好, world");
+    }
+
+    #[test]
+    fn test_decimal_unchanged() {
+        assert_eq!(normalize_chinese_punctuation("版本3.5"), "版本3.5");
+        assert_eq!(normalize_chinese_punctuation("3.14"), "3.14");
+    }
+
+    #[test]
+    fn test_already_fullwidth_unchanged() {
+        assert_eq!(normalize_chinese_punctuation("你好，世界"), "你好，世界");
+        assert_eq!(normalize_chinese_punctuation("今天。明天"), "今天。明天");
+    }
+
+    #[test]
+    fn test_multiple_replacements() {
+        assert_eq!(
+            normalize_chinese_punctuation("你好,今天天气不错.我们去玩吧"),
+            "你好，今天天气不错。我们去玩吧"
+        );
+    }
+
+    #[test]
+    fn test_boundary_cases() {
+        assert_eq!(normalize_chinese_punctuation(","), ",");
+        assert_eq!(normalize_chinese_punctuation("你好."), "你好。");
+        assert_eq!(normalize_chinese_punctuation("你好,"), "你好，");
+        assert_eq!(normalize_chinese_punctuation(",你好"), ",你好");
+    }
+
+    #[test]
+    fn test_end_of_string_not_cjk() {
+        assert_eq!(normalize_chinese_punctuation("3."), "3.");
+        assert_eq!(normalize_chinese_punctuation("hello."), "hello.");
     }
 }

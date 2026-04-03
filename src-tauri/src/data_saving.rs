@@ -162,14 +162,7 @@ fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Resu
 
 /// Generate a timestamp-based filename (e.g., "2026-04-02_14-30-25").
 fn generate_timestamp_filename() -> String {
-    let now = std::time::SystemTime::now();
-    let duration = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    // Simple formatting without chrono dependency.
-    let total_secs = duration.as_secs();
-    // Days since 1970-01-01 → convert to year/month/day
-    let (year, month, day, hour, minute, second) = unix_time_to_date(total_secs);
+    let (year, month, day, hour, minute, second) = now_local();
     format!(
         "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
         year, month, day, hour, minute, second
@@ -221,18 +214,52 @@ fn is_leap_year(year: u64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
+/// Current local time as (year, month, day, hour, minute, second).
+fn now_local() -> (u64, u64, u64, u64, u64, u64) {
+    let utc_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let offset_secs = local_utc_offset_seconds();
+    let local_secs = (utc_secs as i64 + offset_secs).max(0) as u64;
+    unix_time_to_date(local_secs)
+}
+
+/// Returns the local timezone offset from UTC in seconds (e.g., +28800 for UTC+8).
+/// Uses Windows `GetTimeZoneInformation` API.
+fn local_utc_offset_seconds() -> i64 {
+    use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+    unsafe {
+        let mut tz: TIME_ZONE_INFORMATION = std::mem::zeroed();
+        let _ = GetTimeZoneInformation(&mut tz);
+        // Bias: UTC = local_time + Bias → offset (for display) = -Bias (in minutes)
+        -(tz.Bias as i64) * 60
+    }
+}
+
+/// Local timezone offset formatted as `+HH:MM` or `-HH:MM`.
+fn local_utc_offset_string() -> String {
+    let offset_secs = local_utc_offset_seconds();
+    let total_minutes = (offset_secs / 60) as i32;
+    let sign = if total_minutes >= 0 { '+' } else { '-' };
+    let abs_minutes = total_minutes.abs();
+    let hours = abs_minutes / 60;
+    let minutes = abs_minutes % 60;
+    format!("{}{:02}:{:02}", sign, hours, minutes)
+}
+
 /// RFC 3339 formatted timestamp using the local timezone offset.
 fn chrono_now_rfc3339() -> String {
-    // Without chrono, produce a basic ISO 8601-like string.
-    let now = std::time::SystemTime::now();
-    let duration = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let total_secs = duration.as_secs();
-    let (year, month, day, hour, minute, second) = unix_time_to_date(total_secs);
+    let (year, month, day, hour, minute, second) = now_local();
     format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}+08:00",
-        year, month, day, hour, minute, second
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{}",
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        local_utc_offset_string()
     )
 }
 
