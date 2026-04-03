@@ -333,9 +333,9 @@ pub fn make_hotkey_callback(
                     // Show floating window near text caret (upper-left 45°).
                     if let Some(win) = app.get_webview_window("floating") {
                         let (cx, cy) = get_caret_screen_pos();
-                        // Window is 120x120, indicator is centered.
+                        // Window is 180x180, indicator is centered.
                         // Place indicator center ~40px upper-left of caret.
-                        let win_half = 60.0;
+                        let win_half = 90.0;
                         let offset = 40.0;
                         let x = cx - offset - win_half;
                         let y = cy - offset - win_half;

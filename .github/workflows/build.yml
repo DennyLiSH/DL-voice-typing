@@ -46,7 +46,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DL-Voice-Typing-windows-x64
+          name: yuwenbbit-windows-x64
           path: C:\t\release\bundle\nsis\*.exe
 
       - name: Create GitHub Release

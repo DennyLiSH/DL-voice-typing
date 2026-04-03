@@ -21,7 +21,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
 
     TrayIconBuilder::new()
         .menu(&menu)
-        .tooltip("DL 语音输入 - 就绪")
+        .tooltip("语文兔 - 就绪")
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "quit" => {
                 use std::sync::atomic::Ordering;
@@ -41,7 +41,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                         "settings",
                         tauri::WebviewUrl::App("settings.html".into()),
                     )
-                    .title("DL 语音输入 - 设置")
+                    .title("语文兔语音输入法 - 设置")
                     .inner_size(480.0, 620.0)
                     .resizable(true)
                     .center()
