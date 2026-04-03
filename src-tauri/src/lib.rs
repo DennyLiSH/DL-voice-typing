@@ -20,6 +20,7 @@ use perf::PerfHistory;
 use speech::AnyEngine;
 use state::StateMachine;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,6 +28,7 @@ pub fn run() {
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
     let clipboard_manager = Arc::new(Mutex::new(clipboard::ClipboardManager::new()));
     let perf_history = Arc::new(PerfHistory::new());
+    let shutting_down = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -98,6 +100,7 @@ pub fn run() {
             app.manage(audio_capture.clone());
             app.manage(clipboard_manager.clone());
             app.manage(perf_history.clone());
+            app.manage(shutting_down.clone());
 
             // Register hotkey.
             let hotkey_name = config.hotkey.clone();
@@ -138,6 +141,11 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use tauri::Manager;
+                let shutting_down = window.state::<Arc<AtomicBool>>();
+                if shutting_down.load(Ordering::SeqCst) {
+                    return; // allow close during shutdown
+                }
                 api.prevent_close();
                 let _ = window.hide();
             }

@@ -24,6 +24,10 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
         .tooltip("DL 语音输入 - 就绪")
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "quit" => {
+                use std::sync::atomic::Ordering;
+                if let Some(flag) = app.try_state::<std::sync::Arc<std::sync::atomic::AtomicBool>>() {
+                    flag.store(true, Ordering::SeqCst);
+                }
                 app.exit(0);
             }
             "settings" => {
