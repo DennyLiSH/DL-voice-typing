@@ -29,6 +29,7 @@ windows = { version = "0.58", features = [
 ] }
 dirs = "6"
 tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
 rand = "0.9"
 
 [features]

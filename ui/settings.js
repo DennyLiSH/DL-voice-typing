@@ -28,6 +28,7 @@ const dataSavingFields = document.getElementById('data-saving-fields');
 const dataSavingPath = document.getElementById('data-saving-path');
 const btnBrowsePath = document.getElementById('btn-browse-path');
 const reviewToggle = document.getElementById('review-toggle');
+const autostartToggle = document.getElementById('autostart-toggle');
 
 // State
 let loadedConfig = null;
@@ -36,6 +37,7 @@ let selectedModel = 'base';
 let activeDownload = null;
 let isDirty = false;
 let dirtyCheckEnabled = false;
+let loadedAutostart = false;
 
 // --- Initialization ---
 
@@ -54,6 +56,17 @@ async function init() {
         loadComputeMode();
         updateDirtyState();
         dirtyCheckEnabled = true;
+
+        // Load autostart state from plugin.
+        try {
+            loadedAutostart = await window.__TAURI__.autostart.isEnabled();
+            autostartToggle.classList.toggle('active', loadedAutostart);
+            autostartToggle.setAttribute('aria-checked', String(loadedAutostart));
+        } catch (e) {
+            // Plugin may not be available in dev mode
+            console.warn('autostart isEnabled failed:', e);
+        }
+        updateDirtyState();
     } catch (e) {
         showError('加载配置失败: ' + e);
     }
@@ -276,6 +289,21 @@ reviewToggle.addEventListener('keydown', (e) => {
     }
 });
 
+// --- Autostart Toggle ---
+
+autostartToggle.addEventListener('click', () => {
+    const isActive = autostartToggle.classList.toggle('active');
+    autostartToggle.setAttribute('aria-checked', String(isActive));
+    updateDirtyState();
+});
+
+autostartToggle.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+        e.preventDefault();
+        autostartToggle.click();
+    }
+});
+
 // --- Folder Browser ---
 
 btnBrowsePath.addEventListener('click', async () => {
@@ -356,7 +384,8 @@ function updateDirtyState() {
         current.download_mirror !== loadedConfig.download_mirror ||
         current.data_saving_enabled !== loadedConfig.data_saving_enabled ||
         current.data_saving_path !== loadedConfig.data_saving_path ||
-        current.review_before_paste !== loadedConfig.review_before_paste
+        current.review_before_paste !== loadedConfig.review_before_paste ||
+        autostartToggle.classList.contains('active') !== loadedAutostart
     );
 
     saveBtn.disabled = !isDirty;
@@ -418,6 +447,19 @@ saveBtn.addEventListener('click', async () => {
     try {
         await invoke('save_settings', { config });
         loadedConfig = config;
+
+        // Sync autostart state with OS.
+        try {
+            const wantAutostart = autostartToggle.classList.contains('active');
+            if (wantAutostart) {
+                await window.__TAURI__.autostart.enable();
+            } else {
+                await window.__TAURI__.autostart.disable();
+            }
+            loadedAutostart = wantAutostart;
+        } catch (e) {
+            console.warn('autostart sync failed:', e);
+        }
         isDirty = false;
         setSaveStatus('✓ 已保存', 'success');
         setTimeout(() => { saveStatus.textContent = ''; }, 1500);

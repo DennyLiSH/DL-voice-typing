@@ -35,6 +35,12 @@ pub fn run() {
         .setup(move |app| {
             tray::setup_tray(app)?;
 
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                None,
+            ))?;
+
             // Load config.
             let config = AppConfig::load().expect("failed to load config");
 
