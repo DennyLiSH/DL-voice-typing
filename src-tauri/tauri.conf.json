@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "语文兔语音输入法",
+  "productName": "DL-voice-typing",
   "version": "0.1.0",
-  "identifier": "com.dl.voice-typing",
+  "identifier": "xyz.20260304.dl-voice-typing",
   "build": {
     "frontendDist": "../ui"
   },
@@ -15,6 +15,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Denny LI Guang",
     "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",

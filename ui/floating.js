@@ -11,15 +11,16 @@ const STIFFNESS = 0.28;
 const DAMPING = 0.75;
 
 // Color stops: [r, g, b, a] at visual RMS thresholds (after sqrt remap)
+// 青玉色 Jade Teal: #3ABAB4 → dark teal to bright teal
 const COLOR_STOPS = [
-    { at: 0.0, color: [15, 25, 55, 0.82] },
-    { at: 0.25, color: [35, 90, 200, 0.88] },
-    { at: 0.6, color: [0, 180, 220, 0.92] },
-    { at: 1.0, color: [120, 230, 250, 0.98] },
+    { at: 0.0, color: [18, 40, 48, 0.82] },
+    { at: 0.25, color: [30, 110, 120, 0.88] },
+    { at: 0.6, color: [58, 186, 180, 0.92] },
+    { at: 1.0, color: [130, 230, 220, 0.98] },
 ];
 
-const BASE_BG = 'rgba(15, 25, 55, 0.82)';
-const BASE_SHADOW = '0 4px 18px rgba(25,60,160,0.2)';
+const BASE_BG = 'rgba(18, 40, 48, 0.82)';
+const BASE_SHADOW = '0 4px 18px rgba(58,186,180,0.2)';
 
 // Spring state
 let currentScale = MIN_SCALE;
@@ -60,15 +61,15 @@ function getColor(visualRms) {
 }
 
 function getShadow(visualRms) {
-    const r = Math.round(25 + 20 * visualRms);
-    const g = Math.round(60 + 120 * visualRms);
-    const b = Math.round(160 + 50 * visualRms);
+    const r = Math.round(30 + 28 * visualRms);
+    const g = Math.round(120 + 66 * visualRms);
+    const b = Math.round(140 + 40 * visualRms);
     const alpha = (0.2 + visualRms * 0.15).toFixed(2);
     const spread = 18 + visualRms * 8;
     let shadow = `0 4px ${Math.round(spread)}px rgba(${r},${g},${b},${alpha})`;
     if (visualRms > 0.35) {
         const glowAlpha = ((visualRms - 0.35) * 0.25).toFixed(2);
-        shadow += `, 0 0 ${Math.round(22 + visualRms * 15)}px rgba(0,180,220,${glowAlpha})`;
+        shadow += `, 0 0 ${Math.round(22 + visualRms * 15)}px rgba(58,186,180,${glowAlpha})`;
     }
     return shadow;
 }

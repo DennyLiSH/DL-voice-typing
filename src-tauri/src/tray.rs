@@ -1,5 +1,6 @@
 use tauri::{
     App, Manager, Runtime,
+    image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     webview::WebviewWindowBuilder,
@@ -19,7 +20,14 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
         ],
     )?;
 
+    let icon_bytes = include_bytes!("../icons/32x32.png");
+    let icon = image::load_from_memory(icon_bytes)
+        .expect("embedded icon should be valid")
+        .to_rgba8();
+    let (w, h) = icon.dimensions();
+
     TrayIconBuilder::new()
+        .icon(Image::new_owned(icon.into_raw(), w, h))
         .menu(&menu)
         .tooltip("语文兔 - 就绪")
         .on_menu_event(move |app, event| match event.id().as_ref() {
