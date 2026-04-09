@@ -158,6 +158,8 @@ pub struct PendingReview {
     pub text: Arc<Mutex<Option<String>>>,
     /// Data-saving metadata. Consumed by `confirm_inject` or `cancel_review`.
     data_saving: Mutex<Option<ReviewData>>,
+    /// Foreground window HWND before review window appeared. Used to restore focus.
+    foreground_hwnd: Mutex<Option<isize>>,
 }
 
 impl PendingReview {
@@ -165,7 +167,22 @@ impl PendingReview {
         Self {
             text: Arc::new(Mutex::new(None)),
             data_saving: Mutex::new(None),
+            foreground_hwnd: Mutex::new(None),
         }
+    }
+
+    /// Save the current foreground window handle.
+    pub fn save_foreground(&self) {
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        let hwnd = unsafe { GetForegroundWindow() };
+        if let Ok(mut guard) = self.foreground_hwnd.lock() {
+            *guard = Some(hwnd.0 as isize);
+        }
+    }
+
+    /// Take and return the saved foreground window handle.
+    pub fn take_foreground(&self) -> Option<isize> {
+        self.foreground_hwnd.lock().ok().and_then(|mut g| g.take())
     }
 }
 
@@ -546,11 +563,17 @@ pub fn make_hotkey_callback(
                                 }
 
                                 if let Some(win) = app_clone.get_webview_window("review") {
+                                    // Save foreground HWND before showing review window,
+                                    // so we can restore focus after confirm/cancel.
+                                    if let Some(pending) = app_clone.try_state::<PendingReview>() {
+                                        pending.save_foreground();
+                                    }
                                     let _ = win.set_position(Position::Logical(
                                         tauri::LogicalPosition::new(x, y),
                                     ));
                                     let _ = app_clone.emit("review-show", ());
                                     let _ = win.show();
+                                    let _ = win.set_focus();
 
                                     // Store data-saving metadata for confirm/cancel to consume later.
                                     if let Some(sr) = save_result.as_ref() {
@@ -845,15 +868,20 @@ pub fn confirm_inject(
             .map_err(|e| e.to_string())?;
     }
 
-    // 2. Hide review window FIRST so focus returns to the target app.
-    //    The review window has focus (focusable=true), so Ctrl+V would paste
-    //    into it instead of the target if we don't release focus first.
+    // 2. Restore focus to target app, then hide review window.
+    let saved_hwnd = app
+        .try_state::<PendingReview>()
+        .and_then(|p| p.take_foreground());
+    if let Some(hwnd_val) = saved_hwnd {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+        unsafe {
+            let _ = SetForegroundWindow(HWND(hwnd_val as *mut _));
+        }
+    }
     if let Some(win) = app.get_webview_window("review") {
         let _ = win.hide();
     }
-
-    // Brief delay for Windows to restore focus to the target application.
-    std::thread::sleep(Duration::from_millis(100));
 
     // 3. Inject text (clipboard write + Ctrl+V + restore saved clipboard)
     {
@@ -917,7 +945,17 @@ pub fn cancel_review(
         let _ = cb.restore();
     }
 
-    // 3. Hide floating indicator + review window
+    // 3. Restore focus to target app, then hide windows.
+    let saved_hwnd = app
+        .try_state::<PendingReview>()
+        .and_then(|p| p.take_foreground());
+    if let Some(hwnd_val) = saved_hwnd {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+        unsafe {
+            let _ = SetForegroundWindow(HWND(hwnd_val as *mut _));
+        }
+    }
     if let Some(win) = app.get_webview_window("floating") {
         let _ = win.hide();
     }
@@ -1032,6 +1070,31 @@ mod tests {
         assert!(!ds.cancel.load(std::sync::atomic::Ordering::SeqCst));
         ds.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(ds.cancel.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_foreground_save_and_take() {
+        let review = PendingReview::new();
+        review.save_foreground();
+        let hwnd = review.take_foreground();
+        assert!(hwnd.is_some());
+        let hwnd2 = review.take_foreground();
+        assert!(hwnd2.is_none());
+    }
+
+    #[test]
+    fn test_take_foreground_empty() {
+        let review = PendingReview::new();
+        assert!(review.take_foreground().is_none());
+    }
+
+    #[test]
+    fn test_take_foreground_idempotent() {
+        let review = PendingReview::new();
+        review.save_foreground();
+        assert!(review.take_foreground().is_some());
+        assert!(review.take_foreground().is_none());
+        assert!(review.take_foreground().is_none());
     }
 }
 
