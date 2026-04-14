@@ -28,6 +28,23 @@ listen('review-show', async () => {
     container.classList.add('visible');
 });
 
+// First-load fallback: WebView2 may defer JS init for hidden windows.
+// If review-show was emitted before this script loaded, the event was lost.
+// This IIFE catches that case by pulling pending text directly.
+(async () => {
+    try {
+        const text = await invoke('get_review_text');
+        if (text) {
+            textarea.value = text;
+            errorMsg.textContent = '';
+            isClosing = false;
+            textarea.focus();
+            textarea.select();
+            container.classList.add('visible');
+        }
+    } catch (_) {}
+})();
+
 // Confirm button click.
 btnConfirm.addEventListener('click', () => {
     doConfirm();

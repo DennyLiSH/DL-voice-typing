@@ -545,6 +545,10 @@ pub fn make_hotkey_callback(
                                 if let Some(pending) = app_clone.try_state::<PendingReview>() {
                                     if let Ok(mut guard) = pending.text.lock() {
                                         *guard = Some(final_text.clone());
+                                        eprintln!(
+                                            "Review: stored pending text ({} chars)",
+                                            final_text.len()
+                                        );
                                     }
                                 }
 
@@ -571,9 +575,10 @@ pub fn make_hotkey_callback(
                                     let _ = win.set_position(Position::Logical(
                                         tauri::LogicalPosition::new(x, y),
                                     ));
-                                    let _ = app_clone.emit("review-show", ());
                                     let _ = win.show();
+                                    let _ = app_clone.emit("review-show", ());
                                     let _ = win.set_focus();
+                                    eprintln!("Review: window shown, review-show emitted");
 
                                     // Store data-saving metadata for confirm/cancel to consume later.
                                     if let Some(sr) = save_result.as_ref() {
@@ -848,7 +853,16 @@ pub fn get_review_text(pending: tauri::State<'_, PendingReview>) -> Result<Optio
         .text
         .lock()
         .map_err(|e| format!("lock failed: {}", e))?;
-    Ok(guard.take())
+    let result = guard.take();
+    eprintln!(
+        "Review: get_review_text called, text={}",
+        if result.is_some() {
+            "Some"
+        } else {
+            "None"
+        }
+    );
+    Ok(result)
 }
 
 /// Confirm the reviewed text and inject it via clipboard paste.
