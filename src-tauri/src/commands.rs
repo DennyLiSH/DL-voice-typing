@@ -13,6 +13,7 @@ use crate::state::StateMachine;
 use futures_util::StreamExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+use tracing::{debug, info, warn};
 
 /// Sentinel value returned to frontend when an API key exists but should not be exposed.
 pub const MASKED_MARKER: &str = "__MASKED__";
@@ -247,7 +248,9 @@ pub fn save_settings(
 
     // If the frontend sent the masked marker, preserve the existing decrypted key.
     let mut config = config;
-    if config.llm_api_key == MASKED_MARKER || (config.llm_api_key.is_empty() && !old_config.llm_api_key.is_empty()) {
+    if config.llm_api_key == MASKED_MARKER
+        || (config.llm_api_key.is_empty() && !old_config.llm_api_key.is_empty())
+    {
         config.llm_api_key = old_config.llm_api_key;
     }
 
@@ -424,7 +427,7 @@ pub fn make_hotkey_callback(
                         // Skip transcription if audio is near-silent (hallucination guard).
                         let rms = rms::calculate_rms(&audio_data);
                         if rms < 0.01 {
-                            eprintln!("Silent audio (rms={rms:.4}), skipping transcription");
+                            debug!("Silent audio (rms={rms:.4}), skipping transcription");
                             sm_guard.reset();
                             if let Some(win) = app.get_webview_window("floating") {
                                 let _ = win.hide();
@@ -491,7 +494,7 @@ pub fn make_hotkey_callback(
                             // Skip LLM + injection if transcription is empty (all segments
                             // filtered by no_speech probability).
                             if transcription.is_empty() {
-                                eprintln!(
+                                debug!(
                                     "Empty transcription (all segments filtered), skipping injection"
                                 );
                                 if let Ok(mut s) = sm_clone.lock() {
@@ -559,7 +562,7 @@ pub fn make_hotkey_callback(
                                 if let Some(pending) = app_clone.try_state::<PendingReview>() {
                                     if let Ok(mut guard) = pending.text.lock() {
                                         *guard = Some(final_text.clone());
-                                        eprintln!(
+                                        debug!(
                                             "Review: stored pending text ({} chars)",
                                             final_text.len()
                                         );
@@ -592,7 +595,7 @@ pub fn make_hotkey_callback(
                                     let _ = win.show();
                                     let _ = app_clone.emit("review-show", ());
                                     let _ = win.set_focus();
-                                    eprintln!("Review: window shown, review-show emitted");
+                                    debug!("Review: window shown, review-show emitted");
 
                                     // Store data-saving metadata for confirm/cancel to consume later.
                                     if let Some(sr) = save_result.as_ref() {
@@ -613,8 +616,8 @@ pub fn make_hotkey_callback(
                                         }
                                     }
                                 } else {
-                                    eprintln!(
-                                        "Warning: review window not found. Falling back to direct injection."
+                                    warn!(
+                                        "review window not found. Falling back to direct injection."
                                     );
                                     if let Ok(mut s) = sm_clone.lock() {
                                         s.reset();
@@ -685,7 +688,7 @@ pub fn make_hotkey_callback(
                             // Record and report performance metrics.
                             ph_clone.record(perf.clone());
                             let _ = app_clone.emit("perf-metrics", &perf);
-                            eprintln!("{}", perf.summary());
+                            info!("{}", perf.summary());
                         });
                     }
                 }
@@ -875,13 +878,9 @@ pub fn get_review_text(pending: tauri::State<'_, PendingReview>) -> Result<Optio
         .lock()
         .map_err(|e| format!("lock failed: {}", e))?;
     let result = guard.take();
-    eprintln!(
+    debug!(
         "Review: get_review_text called, text={}",
-        if result.is_some() {
-            "Some"
-        } else {
-            "None"
-        }
+        if result.is_some() { "Some" } else { "None" }
     );
     Ok(result)
 }

@@ -20,11 +20,31 @@ use hotkey::windows::WindowsHotkeyManager;
 use perf::PerfHistory;
 use speech::AnyEngine;
 use state::StateMachine;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use tracing::warn;
+use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize structured logging to file (%APPDATA%\dl-voice-typing\logs\).
+    let log_dir = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("dl-voice-typing")
+        .join("logs");
+
+    let file_appender = tracing_appender::rolling::daily(log_dir, "dl-voice-typing.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .init();
+
     let state_machine = Arc::new(Mutex::new(StateMachine::new()));
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
     let clipboard_manager = Arc::new(Mutex::new(clipboard::ClipboardManager::new()));
@@ -52,10 +72,10 @@ pub fn run() {
                 let manager = app.autolaunch();
                 if config.autostart {
                     if let Err(e) = manager.enable() {
-                        eprintln!("Warning: failed to enable autostart: {}", e);
+                        warn!("failed to enable autostart: {e}");
                     }
                 } else if let Err(e) = manager.disable() {
-                    eprintln!("Warning: failed to disable autostart: {}", e);
+                    warn!("failed to disable autostart: {e}");
                 }
             }
 
@@ -72,10 +92,8 @@ pub fn run() {
                 }
             };
             if let Err(e) = engine.load_model() {
-                eprintln!(
-                    "Warning: model load failed: {}. \
-                     This may be due to missing GPU drivers or a corrupted model file.",
-                    e
+                warn!(
+                    "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
                 );
             }
             let engine = Arc::new(engine);

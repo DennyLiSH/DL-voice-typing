@@ -4,6 +4,7 @@ use crate::error::AppError;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use std::sync::mpsc;
+use tracing::error;
 
 /// Callback type for audio data: receives a slice of f32 samples.
 pub type AudioCallback = Box<dyn Fn(&[f32]) + Send>;
@@ -49,7 +50,7 @@ impl AudioCapture {
                 on_data(data);
             },
             |err| {
-                eprintln!("audio capture error: {}", err);
+                error!("audio capture error: {err}");
             },
             None,
         )?;

@@ -1,6 +1,7 @@
 use crate::error::AppError;
 use crate::speech::SpeechEngine;
 use std::path::PathBuf;
+use tracing::{debug, info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// If Whisper's no_speech probability exceeds this threshold, the segment is
@@ -55,11 +56,11 @@ impl WhisperEngine {
             Ok(ctx) => {
                 self.gpu_mode = true;
                 self.ctx = Some(ctx);
-                eprintln!("Whisper: model loaded on GPU");
+                info!("Whisper: model loaded on GPU");
                 return Ok(());
             }
             Err(e) => {
-                eprintln!("Whisper: GPU init failed ({}), falling back to CPU...", e);
+                warn!("Whisper: GPU init failed ({e}), falling back to CPU...");
             }
         }
 
@@ -72,7 +73,7 @@ impl WhisperEngine {
             .map_err(|e| AppError::Speech(format!("failed to load model (GPU and CPU): {}", e)))?;
         self.gpu_mode = false;
         self.ctx = Some(ctx);
-        eprintln!("Whisper: model loaded on CPU (no GPU acceleration)");
+        info!("Whisper: model loaded on CPU (no GPU acceleration)");
         Ok(())
     }
 
@@ -123,9 +124,8 @@ impl SpeechEngine for WhisperEngine {
             .map_err(|e| AppError::Speech(format!("transcription failed: {}", e)))?;
 
         let num_segments = state.full_n_segments();
-        eprintln!(
-            "Whisper: {} segments, {} samples",
-            num_segments,
+        debug!(
+            "Whisper: {num_segments} segments, {} samples",
             samples.len()
         );
 
@@ -138,9 +138,8 @@ impl SpeechEngine for WhisperEngine {
 
             // Skip segments Whisper identifies as no-speech (hallucination guard).
             if segment.no_speech_probability() > NO_SPEECH_PROB_THRESHOLD {
-                eprintln!(
-                    "Whisper: skipping segment {} (no_speech_prob={:.3})",
-                    i,
+                debug!(
+                    "Whisper: skipping segment {i} (no_speech_prob={:.3})",
                     segment.no_speech_probability()
                 );
                 continue;
@@ -153,7 +152,7 @@ impl SpeechEngine for WhisperEngine {
             );
         }
 
-        eprintln!("Whisper result: {:?} ({} chars)", text, text.len());
+        info!("Whisper result: {text:?} ({} chars)", text.len());
         Ok(text.trim().to_string())
     }
 
