@@ -14,7 +14,7 @@ pub mod tray;
 
 use audio::AudioCapture;
 use commands::DownloadState;
-use config::AppConfig;
+use config::{AppConfig, ConfigCache};
 use hotkey::HotkeyManager;
 use hotkey::windows::WindowsHotkeyManager;
 use perf::PerfHistory;
@@ -63,7 +63,16 @@ pub fn run() {
             ))?;
 
             // Load config.
-            let config = AppConfig::load().expect("failed to load config");
+            let config = match AppConfig::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("failed to load config, using defaults: {e}");
+                    AppConfig::default()
+                }
+            };
+
+            let config_cache = ConfigCache::new(std::sync::RwLock::new(config.clone()));
+            app.manage(config_cache);
 
             // Sync autostart registry with config preference.
             #[cfg(desktop)]
@@ -150,10 +159,11 @@ pub fn run() {
             let ph = perf_history.clone();
             let app_handle = app.handle().clone();
             let mut hotkey_manager = WindowsHotkeyManager::new();
-            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, ph, app_handle);
-            hotkey_manager
-                .register(&hotkey_name, callback)
-                .expect("failed to register hotkey");
+            let cc = app.state::<ConfigCache>().inner().clone();
+            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, ph, app_handle, cc);
+            if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
+                warn!("failed to register hotkey '{hotkey_name}': {e}");
+            }
 
             // Keep the hotkey manager alive for the lifetime of the app.
             use tauri::Manager;
@@ -168,17 +178,17 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::get_config,
-            commands::save_settings,
-            commands::test_llm_connection,
-            commands::get_whisper_models,
-            commands::download_whisper_model,
-            commands::cancel_download,
-            commands::get_perf_history,
-            commands::get_compute_mode,
-            commands::confirm_inject,
-            commands::cancel_review,
-            commands::get_review_text,
+            commands::config_cmd::get_config,
+            commands::config_cmd::save_settings,
+            commands::misc_cmd::test_llm_connection,
+            commands::download::get_whisper_models,
+            commands::download::download_whisper_model,
+            commands::download::cancel_download,
+            commands::misc_cmd::get_perf_history,
+            commands::misc_cmd::get_compute_mode,
+            commands::review::confirm_inject,
+            commands::review::cancel_review,
+            commands::review::get_review_text,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -192,5 +202,6 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .inspect_err(|e| tracing::error!("fatal: error running application: {e}"))
+        .ok();
 }

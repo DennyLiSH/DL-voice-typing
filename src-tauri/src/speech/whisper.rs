@@ -99,6 +99,10 @@ impl WhisperEngine {
 
 impl SpeechEngine for WhisperEngine {
     async fn transcribe(&self, samples: &[f32]) -> Result<String, AppError> {
+        self.transcribe_sync(samples)
+    }
+
+    fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
         let ctx = self
             .ctx
             .as_ref()

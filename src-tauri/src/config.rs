@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 const APP_DIR_NAME: &str = "dl-voice-typing";
 const CONFIG_FILE_NAME: &str = "config.json";
@@ -258,6 +259,28 @@ impl AppConfig {
             return Err(AppError::Config(
                 "Data saving path is required when data saving is enabled".to_string(),
             ));
+        }
+        Ok(())
+    }
+}
+
+/// In-memory config cache to avoid repeated disk reads.
+pub type ConfigCache = Arc<RwLock<AppConfig>>;
+
+impl AppConfig {
+    /// Read from the in-memory cache.
+    pub fn read_cached(cache: &ConfigCache) -> Result<Self, AppError> {
+        cache
+            .read()
+            .map(|guard| guard.clone())
+            .map_err(|e| AppError::Config(format!("cache read failed: {}", e)))
+    }
+
+    /// Save to disk AND update the in-memory cache.
+    pub fn save_cached(&self, cache: &ConfigCache) -> Result<(), AppError> {
+        self.save()?;
+        if let Ok(mut guard) = cache.write() {
+            *guard = self.clone();
         }
         Ok(())
     }

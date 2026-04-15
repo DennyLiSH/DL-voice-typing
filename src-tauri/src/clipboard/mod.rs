@@ -23,6 +23,8 @@ impl ClipboardManager {
     }
 
     /// Write text to clipboard and simulate Ctrl+V to paste.
+    /// **Blocking:** contains a 200ms sleep for paste processing.
+    /// Must be called via `spawn_blocking` from async contexts.
     pub fn inject_text(&self, text: &str) -> Result<(), AppError> {
         write_clipboard_with_retry(text)?;
         simulate_paste()?;

@@ -32,6 +32,13 @@ impl SpeechEngine for MockEngine {
         Ok(self.response.clone())
     }
 
+    fn transcribe_sync(&self, _samples: &[f32]) -> Result<String, AppError> {
+        if !self.ready {
+            return Err(AppError::Speech("mock engine not ready".to_string()));
+        }
+        Ok(self.response.clone())
+    }
+
     fn is_ready(&self) -> bool {
         self.ready
     }

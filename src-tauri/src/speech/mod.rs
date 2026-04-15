@@ -14,6 +14,9 @@ pub trait SpeechEngine: Send + Sync {
     /// `samples` is 16kHz mono f32 audio.
     async fn transcribe(&self, samples: &[f32]) -> Result<String, AppError>;
 
+    /// Synchronous transcription (blocking). Use via `spawn_blocking` from async contexts.
+    fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError>;
+
     /// Check if the engine's model is loaded and ready.
     fn is_ready(&self) -> bool;
 
@@ -63,6 +66,14 @@ impl SpeechEngine for AnyEngine {
             #[cfg(feature = "whisper")]
             Self::Whisper(e) => e.transcribe(samples).await,
             Self::Mock(e) => e.transcribe(samples).await,
+        }
+    }
+
+    fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
+        match self {
+            #[cfg(feature = "whisper")]
+            Self::Whisper(e) => e.transcribe_sync(samples),
+            Self::Mock(e) => e.transcribe_sync(samples),
         }
     }
 
