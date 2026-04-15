@@ -50,7 +50,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                         tauri::WebviewUrl::App("settings.html".into()),
                     )
                     .title("语文兔语音输入法 - 设置")
-                    .inner_size(480.0, 620.0)
+                    .inner_size(560.0, 620.0)
                     .resizable(true)
                     .center()
                     .build();

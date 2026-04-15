@@ -30,6 +30,10 @@ const btnBrowsePath = document.getElementById('btn-browse-path');
 const reviewToggle = document.getElementById('review-toggle');
 const autostartToggle = document.getElementById('autostart-toggle');
 
+// Sidebar elements
+const sidebarItems = document.querySelectorAll('.sidebar-item');
+const pageContents = document.querySelectorAll('.page-content');
+
 // State
 let loadedConfig = null;
 let modelStatus = {};  // { tiny: true, base: false, ... }
@@ -38,6 +42,45 @@ let activeDownload = null;
 let isDirty = false;
 let dirtyCheckEnabled = false;
 let loadedAutostart = false;
+let currentPage = 'general';
+
+// --- Sidebar Navigation ---
+
+function switchPage(pageName) {
+    currentPage = pageName;
+    sidebarItems.forEach(item => {
+        const isActive = item.dataset.page === pageName;
+        item.classList.toggle('active', isActive);
+        item.setAttribute('aria-selected', String(isActive));
+        item.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
+    pageContents.forEach(page => {
+        page.classList.toggle('active', page.id === 'page-' + pageName);
+    });
+}
+
+sidebarItems.forEach(item => {
+    item.addEventListener('click', () => switchPage(item.dataset.page));
+    item.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            switchPage(item.dataset.page);
+        }
+    });
+});
+
+// Keyboard navigation: arrow keys in sidebar
+document.querySelector('.sidebar').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    const pages = Array.from(sidebarItems).map(item => item.dataset.page);
+    const idx = pages.indexOf(currentPage);
+    const next = e.key === 'ArrowDown'
+        ? pages[(idx + 1) % pages.length]
+        : pages[(idx - 1 + pages.length) % pages.length];
+    switchPage(next);
+    document.querySelector(`.sidebar-item[data-page="${next}"]`).focus();
+});
 
 // --- Initialization ---
 
