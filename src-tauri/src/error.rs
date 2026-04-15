@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("hotkey error: {0}")]
     Hotkey(String),
 
+    #[error("crypto error: {0}")]
+    Crypto(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

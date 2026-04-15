@@ -2,6 +2,7 @@ pub mod audio;
 pub mod clipboard;
 pub mod commands;
 pub mod config;
+pub mod crypto;
 pub mod data_saving;
 pub mod error;
 pub mod hotkey;
