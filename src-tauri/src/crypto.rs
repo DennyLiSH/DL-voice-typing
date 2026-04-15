@@ -2,7 +2,7 @@ use crate::error::AppError;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
+    CRYPT_INTEGER_BLOB, CryptProtectData, CryptUnprotectData,
 };
 
 /// Prefix for DPAPI-encrypted values stored in config.
@@ -21,17 +21,8 @@ pub fn encrypt(plaintext: &str) -> Result<String, AppError> {
         pbData: std::ptr::null_mut(),
     };
 
-    let result = unsafe {
-        CryptProtectData(
-            &input_blob,
-            None,
-            None,
-            None,
-            None,
-            0,
-            &mut output_blob,
-        )
-    };
+    let result =
+        unsafe { CryptProtectData(&input_blob, None, None, None, None, 0, &mut output_blob) };
 
     if result.is_err() || output_blob.pbData.is_null() {
         return Err(AppError::Crypto("CryptProtectData failed".to_string()));
@@ -60,7 +51,7 @@ pub fn decrypt(ciphertext: &str) -> Result<String, AppError> {
         .decode(b64_data)
         .map_err(|e| AppError::Crypto(format!("base64 decode failed: {}", e)))?;
 
-    let mut input_blob = CRYPT_INTEGER_BLOB {
+    let input_blob = CRYPT_INTEGER_BLOB {
         cbData: encrypted_bytes.len() as u32,
         pbData: encrypted_bytes.as_ptr() as *mut u8,
     };
@@ -69,17 +60,8 @@ pub fn decrypt(ciphertext: &str) -> Result<String, AppError> {
         pbData: std::ptr::null_mut(),
     };
 
-    let result = unsafe {
-        CryptUnprotectData(
-            &mut input_blob,
-            None,
-            None,
-            None,
-            None,
-            0,
-            &mut output_blob,
-        )
-    };
+    let result =
+        unsafe { CryptUnprotectData(&input_blob, None, None, None, None, 0, &mut output_blob) };
 
     if result.is_err() || output_blob.pbData.is_null() {
         return Err(AppError::Crypto("CryptUnprotectData failed".to_string()));

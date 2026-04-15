@@ -1,6 +1,6 @@
+use crate::crypto;
 use crate::error::AppError;
 use crate::hotkey::windows::WindowsHotkeyManager;
-use crate::crypto;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -122,7 +122,14 @@ impl fmt::Debug for AppConfig {
             .field("whisper_model", &self.whisper_model)
             .field("llm_enabled", &self.llm_enabled)
             .field("llm_api_url", &self.llm_api_url)
-            .field("llm_api_key", &if self.llm_api_key.is_empty() { "" } else { "******" })
+            .field(
+                "llm_api_key",
+                &if self.llm_api_key.is_empty() {
+                    ""
+                } else {
+                    "******"
+                },
+            )
             .field("llm_model", &self.llm_model)
             .field("download_mirror", &self.download_mirror)
             .field("data_saving_enabled", &self.data_saving_enabled)

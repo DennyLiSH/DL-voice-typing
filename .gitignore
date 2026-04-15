@@ -4,7 +4,6 @@
 
 # Tauri
 src-tauri/gen/
-src-tauri/Cargo.lock
 
 # OS
 .DS_Store

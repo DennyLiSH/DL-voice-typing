@@ -308,7 +308,7 @@ mod tests {
             .join("dl-voice-typing-test-mkdir")
             .join("subdir")
             .join("nested");
-        let _ = fs::remove_dir_all(&dir.parent().unwrap().parent().unwrap());
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
 
         let config = AppConfig {
             data_saving_enabled: true,
