@@ -117,8 +117,15 @@ function populateFields(config) {
     llmToggle.setAttribute('aria-checked', String(!!config.llm_enabled));
     updateLlmFieldsState(config.llm_enabled);
     apiUrlInput.value = config.llm_api_url || '';
-    apiKeyInput.value = config.llm_api_key || '';
     modelInput.value = config.llm_model || '';
+    // Handle masked API key: clear input, show placeholder
+    if (config.llm_api_key === '__MASKED__') {
+        apiKeyInput.value = '';
+        apiKeyInput.placeholder = 'API Key 已设置';
+    } else {
+        apiKeyInput.value = config.llm_api_key || '';
+        apiKeyInput.placeholder = 'sk-...';
+    }
     downloadMirrorSelect.value = config.download_mirror || 'hf-mirror';
     dataSavingToggle.classList.toggle('active', !!config.data_saving_enabled);
     dataSavingToggle.setAttribute('aria-checked', String(!!config.data_saving_enabled));
@@ -377,8 +384,13 @@ toggleKeyBtn.addEventListener('click', () => {
 
 testBtn.addEventListener('click', async () => {
     const apiUrl = apiUrlInput.value.trim();
-    const apiKey = apiKeyInput.value.trim();
+    const apiKeyRaw = apiKeyInput.value.trim();
     const model = modelInput.value.trim();
+
+    // If key input is empty and a key was previously set, use masked marker.
+    // Otherwise, require the user to enter a key.
+    const hasExistingKey = loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
+    const apiKey = apiKeyRaw || (hasExistingKey ? '__MASKED__' : '');
 
     if (!apiUrl || !apiKey || !model) {
         setTestStatus('请填写所有字段', 'error');
@@ -411,13 +423,15 @@ function updateDirtyState() {
     if (!loadedConfig || !dirtyCheckEnabled) return;
 
     const current = getCurrentConfig();
+    // API key dirty check: only dirty if user typed a new key (non-empty, non-masked)
+    const apiKeyDirty = current.llm_api_key !== '__MASKED__';
     isDirty = (
         current.language !== loadedConfig.language ||
         current.hotkey !== loadedConfig.hotkey ||
         current.whisper_model !== loadedConfig.whisper_model ||
         current.llm_enabled !== loadedConfig.llm_enabled ||
         current.llm_api_url !== loadedConfig.llm_api_url ||
-        current.llm_api_key !== loadedConfig.llm_api_key ||
+        apiKeyDirty ||
         current.llm_model !== loadedConfig.llm_model ||
         current.download_mirror !== loadedConfig.download_mirror ||
         current.data_saving_enabled !== loadedConfig.data_saving_enabled ||
@@ -432,13 +446,16 @@ function updateDirtyState() {
 }
 
 function getCurrentConfig() {
+    const apiKeyValue = apiKeyInput.value.trim();
+    // Send masked marker only if user hasn't typed anything AND a key was previously set
+    const hasExistingKey = loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
     return {
         language: languageSelect.value,
         hotkey: hotkeySelect.value,
         whisper_model: selectedModel,
         llm_enabled: llmToggle.classList.contains('active'),
         llm_api_url: apiUrlInput.value.trim(),
-        llm_api_key: apiKeyInput.value.trim(),
+        llm_api_key: apiKeyValue || (hasExistingKey ? '__MASKED__' : ''),
         llm_model: modelInput.value.trim(),
         download_mirror: downloadMirrorSelect.value,
         data_saving_enabled: dataSavingToggle.classList.contains('active'),
@@ -511,13 +528,6 @@ saveBtn.addEventListener('click', async () => {
     }
 });
 
-// Ctrl+S shortcut
-document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        if (!saveBtn.disabled) saveBtn.click();
-    }
-});
 
 function setSaveStatus(message, type) {
     saveStatus.textContent = message;
