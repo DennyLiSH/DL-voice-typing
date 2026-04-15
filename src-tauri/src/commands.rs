@@ -13,6 +13,9 @@ use crate::state::StateMachine;
 use futures_util::StreamExt;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
+
+/// Sentinel value returned to frontend when an API key exists but should not be exposed.
+pub const MASKED_MARKER: &str = "__MASKED__";
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, Position};
@@ -215,9 +218,14 @@ impl Drop for DownloadGuard {
 }
 
 /// Return the current application config to the frontend.
+/// The API key is replaced with a masked marker if set.
 #[tauri::command]
 pub fn get_config() -> Result<AppConfig, String> {
-    AppConfig::load().map_err(|e| e.to_string())
+    let mut config = AppConfig::load().map_err(|e| e.to_string())?;
+    if !config.llm_api_key.is_empty() {
+        config.llm_api_key = MASKED_MARKER.to_string();
+    }
+    Ok(config)
 }
 
 /// Save all settings. Handles hotkey re-registration on the main thread.
@@ -233,11 +241,17 @@ pub fn save_settings(
     // Validate first.
     config.validate().map_err(|e| e.to_string())?;
 
-    // Load old config to detect hotkey change.
+    // Load old config to detect hotkey change and preserve API key if masked.
     let old_config = AppConfig::load().map_err(|e| e.to_string())?;
     let hotkey_changed = config.hotkey != old_config.hotkey;
 
-    // Save new config to disk.
+    // If the frontend sent the masked marker, preserve the existing decrypted key.
+    let mut config = config;
+    if config.llm_api_key == MASKED_MARKER || (config.llm_api_key.is_empty() && !old_config.llm_api_key.is_empty()) {
+        config.llm_api_key = old_config.llm_api_key;
+    }
+
+    // Save new config to disk (save() encrypts the API key).
     config.save().map_err(|e| e.to_string())?;
 
     // Re-register hotkey if changed.
@@ -813,12 +827,19 @@ pub fn cancel_download(download_state: tauri::State<'_, DownloadState>) -> Resul
 }
 
 /// Test the LLM connection with the given settings.
+/// If api_key is the masked marker, uses the saved key from config.
 #[tauri::command]
 pub async fn test_llm_connection(
     api_url: String,
     api_key: String,
     model: String,
 ) -> Result<(), String> {
+    let api_key = if api_key == MASKED_MARKER {
+        let config = AppConfig::load().map_err(|e| e.to_string())?;
+        config.llm_api_key
+    } else {
+        api_key
+    };
     let client = LLMClient::new(api_url, api_key, model);
     client.test_connection().await.map_err(|e| e.to_string())
 }
