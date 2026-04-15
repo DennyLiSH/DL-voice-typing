@@ -1,0 +1,10 @@
+{
+  "identifier": "floating",
+  "description": "Floating waveform indicator (listen-only, Rust controls visibility)",
+  "windows": ["floating"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen"
+  ]
+}

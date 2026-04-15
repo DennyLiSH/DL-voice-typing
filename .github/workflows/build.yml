@@ -20,6 +20,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # CI pins a specific version for reproducibility.
+      # MSRV is 1.85 — see Cargo.toml rust-version.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -42,7 +44,7 @@ jobs:
       - name: Install Vulkan SDK
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          version: 1.4.309.0
+          version: 1.4.341.1
           cache: true
 
       - name: Install Tauri CLI

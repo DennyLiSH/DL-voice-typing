@@ -53,10 +53,12 @@ pub fn make_hotkey_callback(
                     }
                     let _ = app.emit("recording-start", ());
 
-                    // Start audio capture with RMS-emitting callback.
+                    // Start audio capture with RMS-emitting callback (throttled to ~30 fps).
+                    let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
                     if let Some(mut ac_guard) = crate::util::lock_mutex(&ac, "audio_capture") {
                         let sm_for_audio = Arc::clone(&sm);
                         let app_for_rms = app.clone();
+                        let last_rms_for_cb = Arc::clone(&last_rms_emit);
                         let _ = ac_guard.start(Box::new(move |data: &[f32]| {
                             if let Some(mut s) =
                                 crate::util::lock_mutex(&sm_for_audio, "state_machine")
@@ -64,7 +66,14 @@ pub fn make_hotkey_callback(
                                 let _ = s.append_audio(data);
                             }
                             let rms_val = rms::calculate_rms(data);
-                            let _ = app_for_rms.emit("audio-rms", rms_val);
+                            if let Some(mut last) =
+                                crate::util::lock_mutex(&last_rms_for_cb, "last_rms_emit")
+                            {
+                                if last.elapsed() >= Duration::from_millis(33) {
+                                    *last = Instant::now();
+                                    let _ = app_for_rms.emit("audio-rms", rms_val);
+                                }
+                            }
                         }));
                     }
 

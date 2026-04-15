@@ -22,6 +22,7 @@ Desktop.ini
 CLAUDE.md
 _*/
 _*
+!__tests__
 .gstack/
 
 node_modules/

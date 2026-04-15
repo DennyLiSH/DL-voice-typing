@@ -44,9 +44,9 @@ pub fn get_caret_screen_pos() -> (f64, f64) {
                         if count > 0 {
                             if let Ok(range) = unsafe { ranges.GetElement(0) } {
                                 if let Ok(sa) = unsafe { range.GetBoundingRectangles() } {
-                                    if let Some((x, y)) = unsafe {
-                                        extract_first_rect_from_safearray(sa)
-                                    } {
+                                    if let Some((x, y)) =
+                                        unsafe { extract_first_rect_from_safearray(sa) }
+                                    {
                                         return (x, y);
                                     }
                                 }

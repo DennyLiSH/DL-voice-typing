@@ -1,0 +1,42 @@
+/* === Shared Styles for DL-Voice-Typing UI === */
+
+/* Design system variables */
+:root {
+  --accent: #3ABAB4;
+  --accent-rgb: 58, 186, 180;
+  --font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+/* Reset */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.8);
+  outline-offset: 2px;
+}
+
+/* High contrast mode */
+@media (forced-colors: active) {
+  button, textarea, select, input {
+    border: 1px solid ButtonText;
+  }
+}
+
+/* Button base */
+button {
+  height: 32px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+}

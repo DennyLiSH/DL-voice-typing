@@ -1,0 +1,10 @@
+{
+  "identifier": "review",
+  "description": "Review-before-paste window (listen for show, invoke confirm/cancel)",
+  "windows": ["review"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen"
+  ]
+}

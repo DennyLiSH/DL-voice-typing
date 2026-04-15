@@ -1,0 +1,10 @@
+{
+  "identifier": "main",
+  "description": "Main window (tray-controlled, minimal frontend needs)",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:event:default"
+  ]
+}
