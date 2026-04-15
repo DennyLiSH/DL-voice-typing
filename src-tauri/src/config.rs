@@ -106,6 +106,10 @@ pub struct AppConfig {
     /// Whether to show a review window before pasting transcribed text.
     #[serde(default)]
     pub review_before_paste: bool,
+
+    /// Whether to auto-start on system boot.
+    #[serde(default)]
+    pub autostart: bool,
 }
 
 impl Default for AppConfig {
@@ -122,6 +126,7 @@ impl Default for AppConfig {
             data_saving_enabled: false,
             data_saving_path: String::new(),
             review_before_paste: false,
+            autostart: false,
         }
     }
 }

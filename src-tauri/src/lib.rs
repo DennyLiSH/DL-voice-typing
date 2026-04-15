@@ -44,6 +44,20 @@ pub fn run() {
             // Load config.
             let config = AppConfig::load().expect("failed to load config");
 
+            // Sync autostart registry with config preference.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let manager = app.autolaunch();
+                if config.autostart {
+                    if let Err(e) = manager.enable() {
+                        eprintln!("Warning: failed to enable autostart: {}", e);
+                    }
+                } else if let Err(e) = manager.disable() {
+                    eprintln!("Warning: failed to disable autostart: {}", e);
+                }
+            }
+
             // Initialize speech engine.
             let mut engine = {
                 #[cfg(feature = "whisper")]

@@ -57,15 +57,10 @@ async function init() {
         updateDirtyState();
         dirtyCheckEnabled = true;
 
-        // Load autostart state from plugin.
-        try {
-            loadedAutostart = await window.__TAURI__.autostart.isEnabled();
-            autostartToggle.classList.toggle('active', loadedAutostart);
-            autostartToggle.setAttribute('aria-checked', String(loadedAutostart));
-        } catch (e) {
-            // Plugin may not be available in dev mode
-            console.warn('autostart isEnabled failed:', e);
-        }
+        // Load autostart state from config (source of truth).
+        loadedAutostart = !!config.autostart;
+        autostartToggle.classList.toggle('active', loadedAutostart);
+        autostartToggle.setAttribute('aria-checked', String(loadedAutostart));
         updateDirtyState();
     } catch (e) {
         showError('加载配置失败: ' + e);
@@ -385,7 +380,7 @@ function updateDirtyState() {
         current.data_saving_enabled !== loadedConfig.data_saving_enabled ||
         current.data_saving_path !== loadedConfig.data_saving_path ||
         current.review_before_paste !== loadedConfig.review_before_paste ||
-        autostartToggle.classList.contains('active') !== loadedAutostart
+        current.autostart !== loadedConfig.autostart
     );
 
     saveBtn.disabled = !isDirty;
@@ -406,6 +401,7 @@ function getCurrentConfig() {
         data_saving_enabled: dataSavingToggle.classList.contains('active'),
         data_saving_path: dataSavingPath.value.trim(),
         review_before_paste: reviewToggle.classList.contains('active'),
+        autostart: autostartToggle.classList.contains('active'),
     };
 }
 
