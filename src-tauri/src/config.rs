@@ -1,7 +1,9 @@
 use crate::error::AppError;
 use crate::hotkey::windows::WindowsHotkeyManager;
+use crate::crypto;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 
@@ -68,7 +70,7 @@ pub fn check_whisper_models() -> HashMap<String, bool> {
 }
 
 /// Application configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Hotkey keycode name (default: "RightCtrl").
     pub hotkey: String,
@@ -112,6 +114,25 @@ pub struct AppConfig {
     pub autostart: bool,
 }
 
+impl fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppConfig")
+            .field("hotkey", &self.hotkey)
+            .field("language", &self.language)
+            .field("whisper_model", &self.whisper_model)
+            .field("llm_enabled", &self.llm_enabled)
+            .field("llm_api_url", &self.llm_api_url)
+            .field("llm_api_key", &if self.llm_api_key.is_empty() { "" } else { "******" })
+            .field("llm_model", &self.llm_model)
+            .field("download_mirror", &self.download_mirror)
+            .field("data_saving_enabled", &self.data_saving_enabled)
+            .field("data_saving_path", &self.data_saving_path)
+            .field("review_before_paste", &self.review_before_paste)
+            .field("autostart", &self.autostart)
+            .finish()
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -146,21 +167,47 @@ impl AppConfig {
 
     /// Load config from disk. Returns default if file doesn't exist.
     /// Returns default + logs warning if file is corrupt.
+    /// Automatically decrypts DPAPI-encrypted API keys; plaintext keys
+    /// are left as-is (migrated to encrypted on next save).
     pub fn load() -> Result<Self, AppError> {
         let path = Self::config_path()?;
         if !path.exists() {
             return Ok(Self::default());
         }
         let content = fs::read_to_string(&path)?;
-        let config: AppConfig = serde_json::from_str(&content)?;
+        let mut config: AppConfig = serde_json::from_str(&content)?;
+
+        // Decrypt API key if encrypted; plaintext keys stay as-is (auto-migrate on next save).
+        if !config.llm_api_key.is_empty() && crypto::is_encrypted(&config.llm_api_key) {
+            config.llm_api_key = crypto::decrypt(&config.llm_api_key)?;
+        }
+
         Ok(config)
     }
 
-    /// Save config to disk.
+    /// Load config and return the raw (possibly encrypted) API key without decrypting.
+    /// Used when the frontend sends a masked marker and we need to preserve the existing key.
+    pub fn load_raw_api_key() -> Result<String, AppError> {
+        let path = Self::config_path()?;
+        if !path.exists() {
+            return Ok(String::new());
+        }
+        let content = fs::read_to_string(&path)?;
+        let config: AppConfig = serde_json::from_str(&content)?;
+        Ok(config.llm_api_key)
+    }
+
+    /// Save config to disk. The API key is encrypted via DPAPI before writing.
     pub fn save(&self) -> Result<(), AppError> {
         let dir = Self::config_dir()?;
         fs::create_dir_all(&dir)?;
-        let content = serde_json::to_string_pretty(self)?;
+
+        let mut for_disk = self.clone();
+        if !for_disk.llm_api_key.is_empty() {
+            for_disk.llm_api_key = crypto::encrypt(&for_disk.llm_api_key)?;
+        }
+
+        let content = serde_json::to_string_pretty(&for_disk)?;
         fs::write(Self::config_path()?, content)?;
         Ok(())
     }
@@ -313,5 +360,81 @@ mod tests {
         let parsed: AppConfig = serde_json::from_str(&json).unwrap();
         assert!(parsed.data_saving_enabled);
         assert_eq!(parsed.data_saving_path, "/some/path");
+    }
+
+    #[test]
+    fn test_save_encrypts_api_key() {
+        // save() encrypts the key via DPAPI before writing to JSON.
+        let config = AppConfig {
+            llm_api_key: "sk-test-secret-key".to_string(),
+            ..Default::default()
+        };
+        // Clone config and encrypt key manually (same logic as save()).
+        let mut for_disk = config.clone();
+        for_disk.llm_api_key = crate::crypto::encrypt(&for_disk.llm_api_key).unwrap();
+        let json = serde_json::to_string(&for_disk).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let stored_key = parsed["llm_api_key"].as_str().unwrap();
+        assert!(stored_key.starts_with("DPAPI:"));
+        assert_ne!(stored_key, "sk-test-secret-key");
+    }
+
+    #[test]
+    fn test_save_empty_key_not_encrypted() {
+        let config = AppConfig {
+            llm_api_key: String::new(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["llm_api_key"].as_str().unwrap(), "");
+    }
+
+    #[test]
+    fn test_load_decrypts_encrypted_key() {
+        let encrypted = crate::crypto::encrypt("sk-test-key").unwrap();
+        let config = AppConfig {
+            llm_api_key: encrypted,
+            ..Default::default()
+        };
+        let json = serde_json::to_string_pretty(&config).unwrap();
+
+        // Parse it back as if loading from disk — but we need to parse
+        // without the save() encryption step.
+        // The key in json is still DPAPI:... because we bypassed save()
+        // Simulate load behavior manually:
+        let mut loaded: AppConfig = serde_json::from_str(&json).unwrap();
+        if !loaded.llm_api_key.is_empty() && crate::crypto::is_encrypted(&loaded.llm_api_key) {
+            loaded.llm_api_key = crate::crypto::decrypt(&loaded.llm_api_key).unwrap();
+        }
+        assert_eq!(loaded.llm_api_key, "sk-test-key");
+    }
+
+    #[test]
+    fn test_load_preserves_plaintext_key() {
+        // Plaintext key should remain as-is (auto-migrate on next save).
+        let json = r#"{"hotkey":"RightCtrl","language":"zh","whisper_model":"base","llm_enabled":false,"llm_api_url":"","llm_api_key":"sk-plaintext-legacy","llm_model":"","download_mirror":"hf-mirror","data_saving_enabled":false,"data_saving_path":"","review_before_paste":false,"autostart":false}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.llm_api_key, "sk-plaintext-legacy");
+    }
+
+    #[test]
+    fn test_debug_masks_api_key() {
+        let config = AppConfig {
+            llm_api_key: "sk-super-secret".to_string(),
+            ..Default::default()
+        };
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("******"));
+        assert!(!debug_str.contains("sk-super-secret"));
+    }
+
+    #[test]
+    fn test_debug_shows_empty_key() {
+        let config = AppConfig::default();
+        let debug_str = format!("{:?}", config);
+        // Empty key should show as "" not "******"
+        assert!(!debug_str.contains("******"));
+        assert!(debug_str.contains("llm_api_key"));
     }
 }
