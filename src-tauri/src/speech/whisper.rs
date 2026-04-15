@@ -1,3 +1,4 @@
+use crate::config::Language;
 use crate::error::AppError;
 use crate::speech::SpeechEngine;
 use std::path::PathBuf;
@@ -10,12 +11,12 @@ const NO_SPEECH_PROB_THRESHOLD: f32 = 0.6;
 
 /// Returns an initial prompt to anchor Whisper's output language.
 /// Prevents drift to English for non-English languages.
-fn initial_prompt_for_lang(lang: &str) -> Option<&'static str> {
+fn initial_prompt_for_lang(lang: Language) -> Option<&'static str> {
     match lang {
-        "zh" => Some("以下是普通话的句子。"),
-        "ja" => Some("以下は日本語の文章です。"),
-        "ko" => Some("다음은 한국어 문장입니다."),
-        _ => None,
+        Language::Zh => Some("以下是普通话的句子。"),
+        Language::Ja => Some("以下は日本語の文章です。"),
+        Language::Ko => Some("다음은 한국어 문장입니다."),
+        Language::En => None,
     }
 }
 
@@ -23,13 +24,13 @@ fn initial_prompt_for_lang(lang: &str) -> Option<&'static str> {
 pub struct WhisperEngine {
     ctx: Option<WhisperContext>,
     model_path: PathBuf,
-    language: String,
+    language: Language,
     gpu_mode: bool,
 }
 
 impl WhisperEngine {
     /// Create a new WhisperEngine with the given model path and language.
-    pub fn new(model_path: PathBuf, language: String) -> Self {
+    pub fn new(model_path: PathBuf, language: Language) -> Self {
         Self {
             ctx: None,
             model_path,
@@ -76,25 +77,6 @@ impl WhisperEngine {
         info!("Whisper: model loaded on CPU (no GPU acceleration)");
         Ok(())
     }
-
-    /// Get the expected model file path for a given model size.
-    pub fn model_path_for_size(model_size: &str) -> PathBuf {
-        let filename = match model_size {
-            "tiny" => "ggml-tiny.bin",
-            "base" => "ggml-base.bin",
-            "small" => "ggml-small.bin",
-            _ => "ggml-base.bin",
-        };
-        Self::models_dir().join(filename)
-    }
-
-    /// Get the models directory (%APPDATA%/dl-voice-typing/models).
-    pub fn models_dir() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("dl-voice-typing")
-            .join("models")
-    }
 }
 
 impl SpeechEngine for WhisperEngine {
@@ -109,13 +91,13 @@ impl SpeechEngine for WhisperEngine {
             .ok_or_else(|| AppError::Speech("model not loaded".to_string()))?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some(&self.language));
+        params.set_language(Some(self.language.code()));
         params.set_print_progress(false);
         params.set_print_timestamps(false);
         params.set_no_timestamps(true);
         params.set_single_segment(true);
         params.set_translate(false);
-        if let Some(prompt) = initial_prompt_for_lang(&self.language) {
+        if let Some(prompt) = initial_prompt_for_lang(self.language) {
             params.set_initial_prompt(prompt);
         }
 

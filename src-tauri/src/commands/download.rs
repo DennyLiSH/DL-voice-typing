@@ -1,6 +1,4 @@
-use crate::config::{
-    AppConfig, DOWNLOAD_MIRRORS, WHISPER_MODELS, check_whisper_models, models_dir,
-};
+use crate::config::{AppConfig, WhisperModel, check_whisper_models, models_dir};
 use crate::error::{AppError, CommandError};
 use futures_util::StreamExt;
 use std::sync::atomic::AtomicBool;
@@ -36,7 +34,7 @@ struct DownloadGuard {
 
 impl DownloadGuard {
     fn new(active: Arc<Mutex<Option<String>>>, model: String) -> Self {
-        if let Ok(mut g) = active.lock() {
+        if let Some(mut g) = crate::util::lock_mutex(&active, "download_active") {
             *g = Some(model);
         }
         Self { active }
@@ -45,7 +43,7 @@ impl DownloadGuard {
 
 impl Drop for DownloadGuard {
     fn drop(&mut self) {
-        if let Ok(mut g) = self.active.lock() {
+        if let Some(mut g) = crate::util::lock_mutex(&self.active, "download_active") {
             *g = None;
         }
     }
@@ -66,14 +64,15 @@ pub async fn download_whisper_model(
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
     // Validate size.
-    let (filename, _display_size) = WHISPER_MODELS
+    let model = WhisperModel::all()
         .iter()
-        .find(|(s, _, _)| *s == size)
-        .map(|(_, f, d)| (*f, *d))
+        .find(|m| m.size_str() == size)
+        .copied()
         .ok_or_else(|| CommandError {
             code: "VALIDATION".to_string(),
             message: format!("unknown model size: {}", size),
         })?;
+    let filename = model.filename();
 
     // Check not already downloading.
     {
@@ -103,11 +102,7 @@ pub async fn download_whisper_model(
 
     let url = {
         let config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
-        let base_url = DOWNLOAD_MIRRORS
-            .iter()
-            .find(|(id, _, _)| *id == config.download_mirror)
-            .map(|(_, _, url)| *url)
-            .unwrap_or(DOWNLOAD_MIRRORS[0].2);
+        let base_url = config.download_mirror.base_url();
         format!("{}/{}", base_url, filename)
     };
     let temp_path = dir.join(format!("{}.tmp", filename));
@@ -207,7 +202,7 @@ pub fn cancel_download(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{WHISPER_MODELS, check_whisper_models};
+    use crate::config::{WhisperModel, check_whisper_models};
 
     #[test]
     fn test_check_whisper_models() {
@@ -221,10 +216,7 @@ mod tests {
 
     #[test]
     fn test_download_rejects_invalid_size() {
-        let valid = WHISPER_MODELS
-            .iter()
-            .find(|(s, _, _)| *s == "huge")
-            .map(|(_, f, d)| (*f, *d));
+        let valid = WhisperModel::all().iter().find(|m| m.size_str() == "huge");
         assert!(valid.is_none());
     }
 

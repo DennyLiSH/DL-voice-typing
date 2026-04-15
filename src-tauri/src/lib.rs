@@ -11,6 +11,8 @@ pub mod perf;
 pub mod speech;
 pub mod state;
 pub mod tray;
+pub mod util;
+pub mod win32;
 
 use audio::AudioCapture;
 use commands::DownloadState;
@@ -93,7 +95,7 @@ pub fn run() {
                 #[cfg(feature = "whisper")]
                 {
                     let model_path = config::model_path_for_size(&config.whisper_model);
-                    AnyEngine::new_whisper(model_path, config.language.clone())
+                    AnyEngine::new_whisper(model_path, config.language)
                 }
                 #[cfg(not(feature = "whisper"))]
                 {
@@ -204,4 +206,9 @@ pub fn run() {
         .run(tauri::generate_context!())
         .inspect_err(|e| tracing::error!("fatal: error running application: {e}"))
         .ok();
+}
+
+#[cfg(test)]
+mod tests {
+    mod pipeline_test;
 }

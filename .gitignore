@@ -23,3 +23,5 @@ CLAUDE.md
 _*/
 _*
 .gstack/
+
+node_modules/

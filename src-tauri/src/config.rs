@@ -11,10 +11,6 @@ use std::sync::{Arc, RwLock};
 const APP_DIR_NAME: &str = "dl-voice-typing";
 const CONFIG_FILE_NAME: &str = "config.json";
 
-fn default_download_mirror() -> String {
-    "hf-mirror".to_string()
-}
-
 /// Available languages for speech recognition: (code, display name).
 pub const LANGUAGES: &[(&str, &str)] = &[
     ("zh", "中文"),
@@ -45,6 +41,124 @@ pub const DOWNLOAD_MIRRORS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+// ---------------------------------------------------------------------------
+// Typed enums for config fields (serde serializes as lowercase strings)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhisperModel {
+    Tiny,
+    #[default]
+    Base,
+    Small,
+    Medium,
+}
+
+impl WhisperModel {
+    pub fn filename(self) -> &'static str {
+        match self {
+            Self::Tiny => "ggml-tiny.bin",
+            Self::Base => "ggml-base.bin",
+            Self::Small => "ggml-small.bin",
+            Self::Medium => "ggml-medium.bin",
+        }
+    }
+
+    pub fn display_size(self) -> &'static str {
+        match self {
+            Self::Tiny => "75MB",
+            Self::Base => "142MB",
+            Self::Small => "466MB",
+            Self::Medium => "1.5GB",
+        }
+    }
+
+    /// All variants in order.
+    pub fn all() -> &'static [WhisperModel] {
+        &[Self::Tiny, Self::Base, Self::Small, Self::Medium]
+    }
+
+    /// The size identifier string used by the frontend and download API (e.g. "tiny", "base").
+    pub fn size_str(self) -> &'static str {
+        match self {
+            Self::Tiny => "tiny",
+            Self::Base => "base",
+            Self::Small => "small",
+            Self::Medium => "medium",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    #[default]
+    Zh,
+    En,
+    Ja,
+    Ko,
+}
+
+impl Language {
+    /// All variants in order.
+    pub fn all() -> &'static [Language] {
+        &[Self::Zh, Self::En, Self::Ja, Self::Ko]
+    }
+
+    /// Short language code (e.g. "zh", "en").
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Zh => "zh",
+            Self::En => "en",
+            Self::Ja => "ja",
+            Self::Ko => "ko",
+        }
+    }
+
+    /// Human-readable display name.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Zh => "中文",
+            Self::En => "English",
+            Self::Ja => "日本語",
+            Self::Ko => "한국어",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadMirror {
+    #[default]
+    #[serde(rename = "hf-mirror")]
+    HfMirror,
+    HuggingFace,
+}
+
+impl DownloadMirror {
+    /// All variants in order.
+    pub fn all() -> &'static [DownloadMirror] {
+        &[Self::HfMirror, Self::HuggingFace]
+    }
+
+    /// Human-readable display name.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::HfMirror => "HF-Mirror (国内加速)",
+            Self::HuggingFace => "HuggingFace (国际)",
+        }
+    }
+
+    /// Base URL for downloading Whisper models.
+    pub fn base_url(self) -> &'static str {
+        match self {
+            Self::HfMirror => "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main",
+            Self::HuggingFace => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main",
+        }
+    }
+}
+
 /// Returns the models directory path.
 pub fn models_dir() -> PathBuf {
     AppConfig::config_dir()
@@ -52,21 +166,16 @@ pub fn models_dir() -> PathBuf {
         .join("models")
 }
 
-/// Returns the model file path for a given model size.
-pub fn model_path_for_size(size: &str) -> PathBuf {
-    let filename = WHISPER_MODELS
-        .iter()
-        .find(|(s, _, _)| *s == size)
-        .map(|(_, f, _)| *f)
-        .unwrap_or("ggml-base.bin");
-    models_dir().join(filename)
+/// Returns the model file path for a given model.
+pub fn model_path_for_size(model: &WhisperModel) -> PathBuf {
+    models_dir().join(model.filename())
 }
 
 /// Check which Whisper models are present on disk.
 pub fn check_whisper_models() -> HashMap<String, bool> {
-    WHISPER_MODELS
+    WhisperModel::all()
         .iter()
-        .map(|(size, _, _)| (size.to_string(), model_path_for_size(size).exists()))
+        .map(|m| (m.size_str().to_string(), model_path_for_size(m).exists()))
         .collect()
 }
 
@@ -76,11 +185,13 @@ pub struct AppConfig {
     /// Hotkey keycode name (default: "RightCtrl").
     pub hotkey: String,
 
-    /// Recognition language (default: "zh").
-    pub language: String,
+    /// Recognition language.
+    #[serde(default)]
+    pub language: Language,
 
-    /// Whisper model size: "tiny", "base", "small", "medium".
-    pub whisper_model: String,
+    /// Whisper model size.
+    #[serde(default)]
+    pub whisper_model: WhisperModel,
 
     /// Whether LLM post-processing is enabled.
     pub llm_enabled: bool,
@@ -94,9 +205,9 @@ pub struct AppConfig {
     /// LLM model name.
     pub llm_model: String,
 
-    /// Download mirror: "hf-mirror" or "huggingface".
-    #[serde(default = "default_download_mirror")]
-    pub download_mirror: String,
+    /// Download mirror.
+    #[serde(default)]
+    pub download_mirror: DownloadMirror,
 
     /// Whether to save training data (audio + transcription) locally.
     #[serde(default)]
@@ -145,13 +256,13 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             hotkey: "RightCtrl".to_string(),
-            language: "zh".to_string(),
-            whisper_model: "base".to_string(),
+            language: Language::Zh,
+            whisper_model: WhisperModel::Base,
             llm_enabled: false,
             llm_api_url: String::new(),
             llm_api_key: String::new(),
             llm_model: String::new(),
-            download_mirror: "hf-mirror".to_string(),
+            download_mirror: DownloadMirror::HfMirror,
             data_saving_enabled: false,
             data_saving_path: String::new(),
             review_before_paste: false,
@@ -221,30 +332,10 @@ impl AppConfig {
     }
 
     /// Validate config fields.
+    /// Model, language, and mirror are enforced by the type system (enums).
     pub fn validate(&self) -> Result<(), AppError> {
-        let valid_models: &[&str] = &["tiny", "base", "small", "medium"];
-        if !valid_models.contains(&self.whisper_model.as_str()) {
-            return Err(AppError::Config(format!(
-                "invalid whisper model: {}",
-                self.whisper_model
-            )));
-        }
-        let valid_mirrors: &[&str] = &["hf-mirror", "huggingface"];
-        if !valid_mirrors.contains(&self.download_mirror.as_str()) {
-            return Err(AppError::Config(format!(
-                "invalid download mirror: {}",
-                self.download_mirror
-            )));
-        }
         if WindowsHotkeyManager::parse_key_code(&self.hotkey).is_none() {
             return Err(AppError::Config(format!("invalid hotkey: {}", self.hotkey)));
-        }
-        let valid_langs: &[&str] = &["zh", "en", "ja", "ko"];
-        if !valid_langs.contains(&self.language.as_str()) {
-            return Err(AppError::Config(format!(
-                "invalid language: {}",
-                self.language
-            )));
         }
         if self.llm_enabled
             && (self.llm_api_url.is_empty()
@@ -295,8 +386,9 @@ mod tests {
     fn test_default_values() {
         let config = AppConfig::default();
         assert_eq!(config.hotkey, "RightCtrl");
-        assert_eq!(config.language, "zh");
-        assert_eq!(config.whisper_model, "base");
+        assert_eq!(config.language, Language::Zh);
+        assert_eq!(config.whisper_model, WhisperModel::Base);
+        assert_eq!(config.download_mirror, DownloadMirror::HfMirror);
         assert!(!config.llm_enabled);
         assert!(config.llm_api_url.is_empty());
     }
@@ -311,6 +403,114 @@ mod tests {
     }
 
     #[test]
+    fn test_enum_serialization_format() {
+        // Verify serde(rename_all = "lowercase") produces the expected strings.
+        assert_eq!(serde_json::to_string(&Language::Zh).unwrap(), r#""zh""#);
+        assert_eq!(serde_json::to_string(&Language::En).unwrap(), r#""en""#);
+        assert_eq!(
+            serde_json::to_string(&WhisperModel::Base).unwrap(),
+            r#""base""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DownloadMirror::HfMirror).unwrap(),
+            r#""hf-mirror""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DownloadMirror::HuggingFace).unwrap(),
+            r#""huggingface""#
+        );
+    }
+
+    #[test]
+    fn test_enum_deserialization_from_string() {
+        // Verify old JSON string values can be parsed back into enums.
+        assert_eq!(
+            serde_json::from_str::<WhisperModel>(r#""tiny""#).unwrap(),
+            WhisperModel::Tiny
+        );
+        assert_eq!(
+            serde_json::from_str::<Language>(r#""ja""#).unwrap(),
+            Language::Ja
+        );
+        assert_eq!(
+            serde_json::from_str::<DownloadMirror>(r#""huggingface""#).unwrap(),
+            DownloadMirror::HuggingFace
+        );
+    }
+
+    #[test]
+    fn test_whisper_model_helpers() {
+        assert_eq!(WhisperModel::Tiny.filename(), "ggml-tiny.bin");
+        assert_eq!(WhisperModel::Base.filename(), "ggml-base.bin");
+        assert_eq!(WhisperModel::Small.filename(), "ggml-small.bin");
+        assert_eq!(WhisperModel::Medium.filename(), "ggml-medium.bin");
+
+        assert_eq!(WhisperModel::Tiny.display_size(), "75MB");
+        assert_eq!(WhisperModel::Base.display_size(), "142MB");
+        assert_eq!(WhisperModel::Small.display_size(), "466MB");
+        assert_eq!(WhisperModel::Medium.display_size(), "1.5GB");
+
+        assert_eq!(WhisperModel::all().len(), 4);
+
+        assert_eq!(WhisperModel::Tiny.size_str(), "tiny");
+        assert_eq!(WhisperModel::Base.size_str(), "base");
+        assert_eq!(WhisperModel::Small.size_str(), "small");
+        assert_eq!(WhisperModel::Medium.size_str(), "medium");
+    }
+
+    #[test]
+    fn test_language_helpers() {
+        assert_eq!(Language::all().len(), 4);
+        assert_eq!(Language::Zh.code(), "zh");
+        assert_eq!(Language::En.code(), "en");
+        assert_eq!(Language::Ja.code(), "ja");
+        assert_eq!(Language::Ko.code(), "ko");
+        assert_eq!(Language::Zh.display_name(), "中文");
+        assert_eq!(Language::En.display_name(), "English");
+        assert_eq!(Language::Ja.display_name(), "日本語");
+        assert_eq!(Language::Ko.display_name(), "한국어");
+    }
+
+    #[test]
+    fn test_download_mirror_helpers() {
+        assert_eq!(DownloadMirror::all().len(), 2);
+        assert_eq!(
+            DownloadMirror::HfMirror.display_name(),
+            "HF-Mirror (国内加速)"
+        );
+        assert_eq!(
+            DownloadMirror::HuggingFace.display_name(),
+            "HuggingFace (国际)"
+        );
+        assert!(
+            DownloadMirror::HfMirror
+                .base_url()
+                .starts_with("https://hf-mirror.com")
+        );
+        assert!(
+            DownloadMirror::HuggingFace
+                .base_url()
+                .starts_with("https://huggingface.co")
+        );
+    }
+
+    #[test]
+    fn test_model_path_for_size() {
+        let path = model_path_for_size(&WhisperModel::Base);
+        assert!(path.to_string_lossy().contains("ggml-base.bin"));
+    }
+
+    #[test]
+    fn test_check_whisper_models() {
+        let models = check_whisper_models();
+        assert_eq!(models.len(), 4);
+        assert!(models.contains_key("tiny"));
+        assert!(models.contains_key("base"));
+        assert!(models.contains_key("small"));
+        assert!(models.contains_key("medium"));
+    }
+
+    #[test]
     fn test_save_and_load() {
         let dir = std::env::temp_dir().join("dl-voice-typing-test-config");
         let _ = fs::remove_dir_all(&dir);
@@ -318,7 +518,7 @@ mod tests {
 
         let config = AppConfig {
             hotkey: "F9".to_string(),
-            language: "en".to_string(),
+            language: Language::En,
             ..Default::default()
         };
 
@@ -329,7 +529,7 @@ mod tests {
 
         let loaded: AppConfig = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(loaded.hotkey, "F9");
-        assert_eq!(loaded.language, "en");
+        assert_eq!(loaded.language, Language::En);
 
         let _ = fs::remove_dir_all(&dir);
     }

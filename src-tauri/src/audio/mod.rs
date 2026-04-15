@@ -93,8 +93,10 @@ impl Default for AudioCapture {
     }
 }
 
-// cpal::Stream is not Send/Sync due to platform-specific internals,
-// but we only use it on the main thread and protect with Mutex.
+// SAFETY: cpal::Stream is not Send/Sync due to platform-specific internals,
+// but AudioCapture is only ever accessed through `Arc<Mutex<AudioCapture>>`.
+// The Mutex guarantees exclusive access — Stream is started/stopped exclusively
+// within the Mutex guard scope. See lib.rs for the Arc<Mutex<>> wrapper.
 unsafe impl Send for AudioCapture {}
 unsafe impl Sync for AudioCapture {}
 
@@ -114,5 +116,11 @@ mod tests {
         let mut capture = AudioCapture::new();
         capture.stop(); // Should not panic
         assert!(!capture.is_capturing());
+    }
+
+    #[test]
+    fn test_audio_capture_is_send_sync_via_mutex() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<std::sync::Mutex<AudioCapture>>();
     }
 }

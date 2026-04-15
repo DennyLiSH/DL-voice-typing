@@ -34,16 +34,15 @@ impl PendingReview {
 
     /// Save the current foreground window handle.
     pub fn save_foreground(&self) {
-        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-        let hwnd = unsafe { GetForegroundWindow() };
-        if let Ok(mut guard) = self.foreground_hwnd.lock() {
-            *guard = Some(hwnd.0 as isize);
+        let hwnd = crate::win32::get_foreground_hwnd();
+        if let Some(mut guard) = crate::util::lock_mutex(&self.foreground_hwnd, "foreground_hwnd") {
+            *guard = Some(hwnd);
         }
     }
 
     /// Take and return the saved foreground window handle.
     pub fn take_foreground(&self) -> Option<isize> {
-        self.foreground_hwnd.lock().ok().and_then(|mut g| g.take())
+        crate::util::lock_mutex(&self.foreground_hwnd, "foreground_hwnd").and_then(|mut g| g.take())
     }
 }
 
@@ -96,11 +95,7 @@ pub fn confirm_inject(
         .try_state::<PendingReview>()
         .and_then(|p| p.take_foreground());
     if let Some(hwnd_val) = saved_hwnd {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-        unsafe {
-            let _ = SetForegroundWindow(HWND(hwnd_val as *mut _));
-        }
+        crate::win32::restore_foreground_hwnd(hwnd_val);
     }
     if let Some(win) = app.get_webview_window("review") {
         let _ = win.hide();
@@ -134,7 +129,7 @@ pub fn confirm_inject(
 
     // 6. Update data-saving JSON with the final reviewed text.
     if let Some(pending) = app.try_state::<PendingReview>() {
-        if let Ok(mut guard) = pending.data_saving.lock() {
+        if let Some(mut guard) = crate::util::lock_mutex(&pending.data_saving, "pending_data") {
             if let Some(review_data) = guard.take() {
                 let _ = crate::data_saving::update_json_with_text(
                     &review_data.json_path,
@@ -182,11 +177,7 @@ pub fn cancel_review(
         .try_state::<PendingReview>()
         .and_then(|p| p.take_foreground());
     if let Some(hwnd_val) = saved_hwnd {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-        unsafe {
-            let _ = SetForegroundWindow(HWND(hwnd_val as *mut _));
-        }
+        crate::win32::restore_foreground_hwnd(hwnd_val);
     }
     if let Some(win) = app.get_webview_window("floating") {
         let _ = win.hide();
@@ -197,7 +188,7 @@ pub fn cancel_review(
 
     // 4. Update data-saving JSON: preserve raw transcription, mark no final text.
     if let Some(pending) = app.try_state::<PendingReview>() {
-        if let Ok(mut guard) = pending.data_saving.lock() {
+        if let Some(mut guard) = crate::util::lock_mutex(&pending.data_saving, "pending_data") {
             if let Some(review_data) = guard.take() {
                 let _ = crate::data_saving::update_json_with_text(
                     &review_data.json_path,

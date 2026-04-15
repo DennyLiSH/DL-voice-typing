@@ -157,6 +157,7 @@ pub fn save_settings(
 #[cfg(test)]
 mod tests {
     use crate::config::AppConfig;
+    use crate::config::WhisperModel;
 
     #[test]
     fn test_read_cached_returns_default() {
@@ -167,12 +168,23 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_rejects_invalid_whisper_model() {
-        let config = AppConfig {
-            whisper_model: "huge".to_string(),
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
+    fn test_default_config_validates() {
+        let config = AppConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_enum_serialization_roundtrip() {
+        let config = AppConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        // WhisperModel::Base should serialize as "base".
+        assert!(json.contains("\"whisper_model\":\"base\""));
+        // Language::Zh should serialize as "zh".
+        assert!(json.contains("\"language\":\"zh\""));
+        // DownloadMirror::HfMirror should serialize as "hf-mirror".
+        assert!(json.contains("\"download_mirror\":\"hf-mirror\""));
+        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.whisper_model, WhisperModel::Base);
     }
 
     #[test]

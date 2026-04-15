@@ -104,8 +104,11 @@ impl Default for WindowsHotkeyManager {
     }
 }
 
-// HHOOK contains *mut c_void which is not Send/Sync by default,
-// but the Windows hook handle is safe to send across threads on Windows.
+// SAFETY: HHOOK is a Windows hook handle (pointer) not Send/Sync by default.
+// WindowsHotkeyManager is only accessed through `Mutex<WindowsHotkeyManager>`
+// (see lib.rs). The Mutex guarantees exclusive access. The hook handle
+// is created in register(), used in the static hook proc (via separate HOOK_STATE
+// Mutex), and destroyed in unregister()/Drop — all under Mutex protection.
 unsafe impl Send for WindowsHotkeyManager {}
 unsafe impl Sync for WindowsHotkeyManager {}
 
@@ -198,5 +201,11 @@ mod tests {
     fn test_new_manager() {
         let manager = WindowsHotkeyManager::new();
         assert!(!manager.is_registered());
+    }
+
+    #[test]
+    fn test_hotkey_manager_is_send_sync_via_mutex() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<std::sync::Mutex<WindowsHotkeyManager>>();
     }
 }

@@ -1,6 +1,6 @@
 use crate::audio::AudioCapture;
 use crate::audio::rms;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, Language};
 use crate::hotkey::{HotkeyCallback, HotkeyEvent};
 use crate::llm::LLMClient;
 use crate::perf::{PerfHistory, PerfMetrics};
@@ -11,113 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, Position};
 use tracing::{debug, info, warn};
-use windows::Win32::Foundation::POINT;
-use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, SAFEARRAY};
-use windows::Win32::System::Ole::{
-    SafeArrayAccessData, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayUnaccessData,
-};
-use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
-};
-use windows::Win32::UI::WindowsAndMessaging::{GUITHREADINFO, GetCursorPos, GetGUIThreadInfo};
 
 use super::review::{PendingReview, ReviewData};
-
-/// Returns the text caret (cursor) position in screen coordinates.
-/// Falls back through three strategies:
-///   1. GetGUIThreadInfo (Win32 apps: Notepad, Word, etc.)
-///   2. UI Automation TextPattern (Chrome, Edge, VS Code, Electron, etc.)
-///   3. Mouse cursor position (last resort)
-fn get_caret_screen_pos() -> (f64, f64) {
-    // Strategy 1: GetGUIThreadInfo — works for classic Win32 apps.
-    let mut gui: GUITHREADINFO = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..Default::default()
-    };
-    if unsafe { GetGUIThreadInfo(0, &mut gui) }.is_ok() && !gui.hwndCaret.is_invalid() {
-        let mut pt = POINT {
-            x: gui.rcCaret.left,
-            y: gui.rcCaret.top,
-        };
-        let _ = unsafe { ClientToScreen(gui.hwndCaret, &mut pt) };
-        return (pt.x as f64, pt.y as f64);
-    }
-
-    // Strategy 2: UI Automation — works for Chrome, Edge, VS Code, etc.
-    let automation: Result<IUIAutomation, _> =
-        unsafe { CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_ALL) };
-    if let Ok(automation) = automation {
-        if let Ok(element) = unsafe { automation.GetFocusedElement() } {
-            if let Ok(text_pattern) = unsafe {
-                element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-            } {
-                if let Ok(ranges) = unsafe { text_pattern.GetSelection() } {
-                    if let Ok(count) = unsafe { ranges.Length() } {
-                        if count > 0 {
-                            if let Ok(range) = unsafe { ranges.GetElement(0) } {
-                                if let Ok(sa) = unsafe { range.GetBoundingRectangles() } {
-                                    if let Some((x, y)) = extract_first_rect_from_safearray(sa) {
-                                        return (x, y);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Strategy 3: Fallback to mouse cursor.
-    let mut pt = POINT { x: 0, y: 0 };
-    let _ = unsafe { GetCursorPos(&mut pt) };
-    (pt.x as f64, pt.y as f64)
-}
-
-/// Returns the work area (excluding taskbar) of the monitor containing the given point.
-/// Returns `None` if the Win32 calls fail.
-fn get_monitor_work_area(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromPoint,
-    };
-
-    let pt = POINT { x, y };
-    let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
-    if monitor.is_invalid() {
-        return None;
-    }
-
-    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
-    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-    if !unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) }.as_bool() {
-        return None;
-    }
-
-    let rc = info.monitorInfo.rcWork;
-    Some((rc.left, rc.top, rc.right, rc.bottom))
-}
-
-/// Extracts the first bounding rectangle (x, y, w, h) from a SAFEARRAY of f64
-/// returned by IUIAutomationTextRange::GetBoundingRectangles.
-fn extract_first_rect_from_safearray(sa: *mut SAFEARRAY) -> Option<(f64, f64)> {
-    let lower;
-    let upper;
-    unsafe {
-        lower = SafeArrayGetLBound(sa, 1).ok()?;
-        upper = SafeArrayGetUBound(sa, 1).ok()?;
-        let count = (upper - lower + 1) as usize;
-        if count < 4 {
-            return None; // Need at least x, y, w, h.
-        }
-        let mut data_ptr: *mut f64 = std::ptr::null_mut();
-        SafeArrayAccessData(sa, &mut data_ptr as *mut _ as *mut _).ok()?;
-        let x = *data_ptr;
-        let y = *data_ptr.add(1);
-        let _ = SafeArrayUnaccessData(sa);
-        Some((x, y))
-    }
-}
 
 /// Build the hotkey callback that starts/stops recording and runs the full pipeline.
 pub fn make_hotkey_callback(
@@ -139,14 +34,13 @@ pub fn make_hotkey_callback(
                 let t_press = Instant::now();
                 let cycle_id = perf_history.next_cycle_id();
 
-                let can_record = sm
-                    .lock()
+                let can_record = crate::util::lock_mutex(&sm, "state_machine")
                     .map(|mut s| s.start_recording().is_ok())
                     .unwrap_or(false);
                 if can_record {
                     // Show floating window near text caret (upper-left 45°).
                     if let Some(win) = app.get_webview_window("floating") {
-                        let (cx, cy) = get_caret_screen_pos();
+                        let (cx, cy) = crate::win32::get_caret_screen_pos();
                         // Window is 180x180, indicator is centered.
                         // Place indicator center ~40px upper-left of caret.
                         let win_half = 90.0;
@@ -160,11 +54,13 @@ pub fn make_hotkey_callback(
                     let _ = app.emit("recording-start", ());
 
                     // Start audio capture with RMS-emitting callback.
-                    if let Ok(mut ac_guard) = ac.lock() {
+                    if let Some(mut ac_guard) = crate::util::lock_mutex(&ac, "audio_capture") {
                         let sm_for_audio = Arc::clone(&sm);
                         let app_for_rms = app.clone();
                         let _ = ac_guard.start(Box::new(move |data: &[f32]| {
-                            if let Ok(mut s) = sm_for_audio.lock() {
+                            if let Some(mut s) =
+                                crate::util::lock_mutex(&sm_for_audio, "state_machine")
+                            {
                                 let _ = s.append_audio(data);
                             }
                             let rms_val = rms::calculate_rms(data);
@@ -176,7 +72,7 @@ pub fn make_hotkey_callback(
                     let press_latency = t_press.elapsed().as_millis() as u64;
                     let mut perf = PerfMetrics::new(cycle_id);
                     perf.press_latency_ms = Some(press_latency);
-                    if let Ok(mut slot) = perf_slot.lock() {
+                    if let Some(mut slot) = crate::util::lock_mutex(&perf_slot, "perf") {
                         *slot = Some(perf);
                     }
                 }
@@ -185,20 +81,19 @@ pub fn make_hotkey_callback(
                 let t_release = Instant::now();
 
                 // Take the perf metrics created by Pressed.
-                let mut perf = perf_slot
-                    .lock()
-                    .ok()
+                let mut perf = crate::util::lock_mutex(&perf_slot, "perf")
                     .and_then(|mut s| s.take())
                     .unwrap_or_else(|| PerfMetrics::new(perf_history.next_cycle_id()));
 
                 perf.audio_duration_ms = Some(t_release.elapsed().as_millis() as u64);
 
                 // Read sample rate BEFORE stop (stop clears config).
-                let sample_rate = ac.lock().ok().and_then(|a| a.sample_rate());
-                if let Ok(mut ac_guard) = ac.lock() {
+                let sample_rate =
+                    crate::util::lock_mutex(&ac, "audio_capture").and_then(|a| a.sample_rate());
+                if let Some(mut ac_guard) = crate::util::lock_mutex(&ac, "audio_capture") {
                     ac_guard.stop();
                 }
-                if let Ok(mut sm_guard) = sm.lock() {
+                if let Some(mut sm_guard) = crate::util::lock_mutex(&sm, "state_machine") {
                     if let Ok(audio_data) = sm_guard.stop_recording() {
                         perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
                         perf.audio_samples = audio_data.len();
@@ -260,7 +155,9 @@ pub fn make_hotkey_callback(
                                     Ok(Ok(text)) => {
                                         let _ = app_clone.emit("transcription-complete", &text);
                                         {
-                                            if let Ok(mut s) = sm_clone.lock() {
+                                            if let Some(mut s) =
+                                                crate::util::lock_mutex(&sm_clone, "state_machine")
+                                            {
                                                 let _ = s.add_partial_result(text.clone());
                                             }
                                         }
@@ -268,7 +165,9 @@ pub fn make_hotkey_callback(
                                     }
                                     Ok(Err(e)) => {
                                         let _ = app_clone.emit("speech-error", e.to_string());
-                                        if let Ok(mut s) = sm_clone.lock() {
+                                        if let Some(mut s) =
+                                            crate::util::lock_mutex(&sm_clone, "state_machine")
+                                        {
                                             s.reset();
                                         }
                                         if let Some(win) = app_clone.get_webview_window("floating")
@@ -279,7 +178,9 @@ pub fn make_hotkey_callback(
                                     }
                                     Err(e) => {
                                         let _ = app_clone.emit("speech-error", e.to_string());
-                                        if let Ok(mut s) = sm_clone.lock() {
+                                        if let Some(mut s) =
+                                            crate::util::lock_mutex(&sm_clone, "state_machine")
+                                        {
                                             s.reset();
                                         }
                                         if let Some(win) = app_clone.get_webview_window("floating")
@@ -297,7 +198,9 @@ pub fn make_hotkey_callback(
                                 debug!(
                                     "Empty transcription (all segments filtered), skipping injection"
                                 );
-                                if let Ok(mut s) = sm_clone.lock() {
+                                if let Some(mut s) =
+                                    crate::util::lock_mutex(&sm_clone, "state_machine")
+                                {
                                     s.reset();
                                 }
                                 if let Some(win) = app_clone.get_webview_window("floating") {
@@ -310,7 +213,9 @@ pub fn make_hotkey_callback(
                             let config = AppConfig::read_cached(&cc).unwrap_or_default();
                             perf.llm_enabled = config.llm_enabled;
                             let final_text = if config.llm_enabled {
-                                if let Ok(mut s) = sm_clone.lock() {
+                                if let Some(mut s) =
+                                    crate::util::lock_mutex(&sm_clone, "state_machine")
+                                {
                                     let _ = s.start_llm_refining(transcription.clone());
                                 }
                                 let _ = app_clone.emit("llm-refining", ());
@@ -338,7 +243,7 @@ pub fn make_hotkey_callback(
                             };
 
                             // Normalize Chinese punctuation (half-width → full-width) when surrounded by CJK.
-                            let final_text = if config.language == "zh" {
+                            let final_text = if config.language == Language::Zh {
                                 normalize_chinese_punctuation(&final_text)
                             } else {
                                 final_text
@@ -347,11 +252,15 @@ pub fn make_hotkey_callback(
                             // -- Injection --
                             if config.review_before_paste {
                                 // Save clipboard before entering review state.
-                                if let Ok(mut cb) = cb_clone.lock() {
+                                if let Some(mut cb) =
+                                    crate::util::lock_mutex(&cb_clone, "clipboard")
+                                {
                                     let _ = cb.save();
                                 }
                                 // Transition to Reviewing.
-                                if let Ok(mut s) = sm_clone.lock() {
+                                if let Some(mut s) =
+                                    crate::util::lock_mutex(&sm_clone, "state_machine")
+                                {
                                     if config.llm_enabled {
                                         let _ = s.llm_to_reviewing(final_text.clone());
                                     } else {
@@ -360,7 +269,9 @@ pub fn make_hotkey_callback(
                                 }
                                 // Store text for the review window to fetch on load.
                                 if let Some(pending) = app_clone.try_state::<PendingReview>() {
-                                    if let Ok(mut guard) = pending.text.lock() {
+                                    if let Some(mut guard) =
+                                        crate::util::lock_mutex(&pending.text, "pending_text")
+                                    {
                                         *guard = Some(final_text.clone());
                                         debug!(
                                             "Review: stored pending text ({} chars)",
@@ -370,14 +281,14 @@ pub fn make_hotkey_callback(
                                 }
 
                                 // Show the pre-created review window near caret.
-                                let (cx, cy) = get_caret_screen_pos();
+                                let (cx, cy) = crate::win32::get_caret_screen_pos();
                                 let mut x = cx + 10.0;
                                 let mut y = cy + 20.0;
                                 let win_w = 420.0_f64;
                                 let win_h = 220.0_f64;
                                 // Clamp to the monitor the caret is on (works with multi-monitor).
                                 if let Some((left, top, right, bottom)) =
-                                    get_monitor_work_area(cx as i32, cy as i32)
+                                    crate::win32::get_monitor_work_area(cx as i32, cy as i32)
                                 {
                                     x = x.min(right as f64 - win_w).max(left as f64);
                                     y = y.min(bottom as f64 - win_h).max(top as f64);
@@ -402,7 +313,10 @@ pub fn make_hotkey_callback(
                                         if let Some(pending) =
                                             app_clone.try_state::<PendingReview>()
                                         {
-                                            if let Ok(mut guard) = pending.data_saving.lock() {
+                                            if let Some(mut guard) = crate::util::lock_mutex(
+                                                &pending.data_saving,
+                                                "pending_data",
+                                            ) {
                                                 *guard = Some(ReviewData {
                                                     json_path: sr.json_path.clone(),
                                                     raw_transcription: transcription.clone(),
@@ -419,19 +333,25 @@ pub fn make_hotkey_callback(
                                     warn!(
                                         "review window not found. Falling back to direct injection."
                                     );
-                                    if let Ok(mut s) = sm_clone.lock() {
+                                    if let Some(mut s) =
+                                        crate::util::lock_mutex(&sm_clone, "state_machine")
+                                    {
                                         s.reset();
                                     }
                                     let cb_fb = cb_clone.clone();
                                     let text_fb = final_text.clone();
                                     let _ = tauri::async_runtime::spawn_blocking(move || {
-                                        if let Ok(mut cb) = cb_fb.lock() {
+                                        if let Some(mut cb) =
+                                            crate::util::lock_mutex(&cb_fb, "clipboard")
+                                        {
                                             let _ = cb.save();
                                             let _ = cb.inject_text(&text_fb);
                                         }
                                     })
                                     .await;
-                                    if let Ok(mut s) = sm_clone.lock() {
+                                    if let Some(mut s) =
+                                        crate::util::lock_mutex(&sm_clone, "state_machine")
+                                    {
                                         let _ = s.finish_injecting();
                                     }
                                     let _ = app_clone.emit("injection-complete", ());
@@ -444,7 +364,8 @@ pub fn make_hotkey_callback(
                             }
 
                             // Direct injection path (review disabled).
-                            if let Ok(mut s) = sm_clone.lock() {
+                            if let Some(mut s) = crate::util::lock_mutex(&sm_clone, "state_machine")
+                            {
                                 if config.llm_enabled {
                                     let _ = s.llm_to_injecting(final_text.clone());
                                 } else {
@@ -476,7 +397,8 @@ pub fn make_hotkey_callback(
                             perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
                             perf.text_length = final_text.len();
 
-                            if let Ok(mut s) = sm_clone.lock() {
+                            if let Some(mut s) = crate::util::lock_mutex(&sm_clone, "state_machine")
+                            {
                                 let _ = s.finish_injecting();
                             }
                             let _ = app_clone.emit("injection-complete", ());

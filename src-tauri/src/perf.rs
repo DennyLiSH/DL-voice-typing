@@ -102,7 +102,7 @@ impl PerfHistory {
 
     /// Record a completed cycle's metrics.
     pub fn record(&self, metrics: PerfMetrics) {
-        if let Ok(mut buf) = self.buffer.lock() {
+        if let Some(mut buf) = crate::util::lock_mutex(&self.buffer, "perf_history") {
             if buf.len() >= Self::CAPACITY {
                 buf.pop_front();
             }
@@ -112,7 +112,7 @@ impl PerfHistory {
 
     /// Return the last `n` recorded metrics (most recent last).
     pub fn recent(&self, n: usize) -> Vec<PerfMetrics> {
-        if let Ok(buf) = self.buffer.lock() {
+        if let Some(buf) = crate::util::lock_mutex(&self.buffer, "perf_history") {
             buf.iter()
                 .rev()
                 .take(n)

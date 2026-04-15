@@ -2,6 +2,7 @@ pub mod mock;
 #[cfg(feature = "whisper")]
 pub mod whisper;
 
+use crate::config::Language;
 use crate::error::AppError;
 
 /// Trait for speech-to-text engines.
@@ -42,7 +43,7 @@ pub enum AnyEngine {
 impl AnyEngine {
     /// Create the appropriate engine based on the active feature flag.
     #[cfg(feature = "whisper")]
-    pub fn new_whisper(model_path: std::path::PathBuf, language: String) -> Self {
+    pub fn new_whisper(model_path: std::path::PathBuf, language: Language) -> Self {
         Self::Whisper(whisper::WhisperEngine::new(model_path, language))
     }
 
