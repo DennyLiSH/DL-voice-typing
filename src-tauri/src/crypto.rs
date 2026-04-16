@@ -30,7 +30,8 @@ pub fn encrypt(plaintext: &str) -> Result<String, AppError> {
 
     let encrypted_bytes =
         unsafe { std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize) };
-    let encoded = format!("{}{}", DPAPI_PREFIX, BASE64.encode(encrypted_bytes));
+    let b64 = BASE64.encode(encrypted_bytes);
+    let encoded = format!("{DPAPI_PREFIX}{b64}");
 
     // Free the buffer allocated by DPAPI.
     unsafe {

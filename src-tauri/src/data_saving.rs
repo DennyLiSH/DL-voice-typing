@@ -163,9 +163,7 @@ fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Resu
 /// Generate a timestamp-based filename (e.g., "2026-04-02_14-30-25").
 fn generate_timestamp_filename() -> String {
     let (year, month, day, hour, minute, second) = now_local();
-    format!(
-        "{year:04}-{month:02}-{day:02}_{hour:02}-{minute:02}-{second:02}"
-    )
+    format!("{year:04}-{month:02}-{day:02}_{hour:02}-{minute:02}-{second:02}")
 }
 
 /// Convert Unix timestamp to (year, month, day, hour, minute, second).

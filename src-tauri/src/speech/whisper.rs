@@ -43,10 +43,8 @@ impl WhisperEngine {
     /// Tries GPU first, falls back to CPU if GPU initialization fails.
     pub fn load_model(&mut self) -> Result<(), AppError> {
         if !self.model_path.exists() {
-            return Err(AppError::Speech(format!(
-                "model file not found: {}",
-                self.model_path.display()
-            )));
+            let path = self.model_path.display();
+            return Err(AppError::Speech(format!("model file not found: {path}")));
         }
 
         let path = self.model_path.to_string_lossy().to_string();

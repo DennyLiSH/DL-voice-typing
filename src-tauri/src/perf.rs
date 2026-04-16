@@ -59,7 +59,10 @@ impl PerfMetrics {
     pub fn summary(&self) -> String {
         let fmt_ms = |v: Option<u64>| -> String {
             match v {
-                Some(ms) if ms >= 1000 => format!("{:.2}s", ms as f64 / 1000.0),
+                Some(ms) if ms >= 1000 => {
+                    let secs = ms as f64 / 1000.0;
+                    format!("{secs:.2}s")
+                }
                 Some(ms) => format!("{ms}ms"),
                 None => "-".to_string(),
             }

@@ -71,10 +71,11 @@ impl LLMClient {
             temperature: 0.1,
         };
 
+        let api_key = &self.api_key;
         let response = self
             .client
             .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -112,10 +113,11 @@ impl LLMClient {
             temperature: 0.0,
         };
 
+        let api_key = &self.api_key;
         let response = self
             .client
             .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -125,9 +127,9 @@ impl LLMClient {
         if response.status().is_success() {
             Ok(())
         } else {
+            let status = response.status();
             Err(AppError::Llm(format!(
-                "connection test failed: HTTP {}",
-                response.status()
+                "connection test failed: HTTP {status}"
             )))
         }
     }

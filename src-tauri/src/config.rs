@@ -335,7 +335,8 @@ impl AppConfig {
     /// Model, language, and mirror are enforced by the type system (enums).
     pub fn validate(&self) -> Result<(), AppError> {
         if WindowsHotkeyManager::parse_key_code(&self.hotkey).is_none() {
-            return Err(AppError::Config(format!("invalid hotkey: {}", self.hotkey)));
+            let hotkey = &self.hotkey;
+            return Err(AppError::Config(format!("invalid hotkey: {hotkey}")));
         }
         if self.llm_enabled
             && (self.llm_api_url.is_empty()
