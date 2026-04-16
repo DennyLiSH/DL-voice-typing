@@ -9,6 +9,7 @@ on:
 
 env:
   CARGO_TARGET_DIR: 'C:\t'
+  CMAKE_GENERATOR: 'Ninja'
 
 jobs:
   build:
@@ -38,6 +39,17 @@ jobs:
         with:
           version: 1.4.341.1
           cache: true
+
+      - name: Verify Vulkan SDK
+        shell: pwsh
+        run: |
+          Write-Host "VULKAN_SDK=$env:VULKAN_SDK"
+          Write-Host "CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
+          if (Test-Path "$env:VULKAN_SDK") {
+            Write-Host "SDK dir exists"
+            if (Test-Path "$env:VULKAN_SDK\Lib\vulkan-1.lib") { Write-Host "OK vulkan-1.lib" } else { Write-Host "MISSING vulkan-1.lib" }
+          } else { Write-Host "SDK dir MISSING" }
+          ninja --version
 
       - name: Format check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
