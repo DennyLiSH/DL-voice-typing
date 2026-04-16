@@ -25,7 +25,8 @@ use state::StateMachine;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tracing::warn;
+use tauri::Emitter;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -90,8 +91,8 @@ pub fn run() {
                 }
             }
 
-            // Initialize speech engine.
-            let mut engine = {
+            // Initialize speech engine (model loaded asynchronously below).
+            let engine = {
                 #[cfg(feature = "whisper")]
                 {
                     let model_path = config::model_path_for_size(&config.whisper_model);
@@ -102,13 +103,25 @@ pub fn run() {
                     AnyEngine::new_mock("[mock transcription]")
                 }
             };
-            if let Err(e) = engine.load_model() {
-                warn!(
-                    "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
-                );
-            }
-            let engine = Arc::new(engine);
+            let engine: Arc<Mutex<AnyEngine>> = Arc::new(Mutex::new(engine));
             app.manage(engine.clone());
+
+            // Load model in background to avoid blocking the main thread.
+            // The tray icon and event loop are responsive immediately.
+            let engine_bg = engine.clone();
+            let app_handle_bg = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                info!("background model loading started");
+                if let Some(mut e) = util::lock_mutex(&engine_bg, "engine") {
+                    if let Err(e) = e.load_model() {
+                        warn!(
+                            "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
+                        );
+                    }
+                }
+                let _ = app_handle_bg.emit("model-loaded", ());
+                info!("background model loading finished");
+            });
 
             // Create floating window (hidden by default).
             let _floating = tauri::webview::WebviewWindowBuilder::new(

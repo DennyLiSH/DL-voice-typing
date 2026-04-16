@@ -4,7 +4,7 @@ use crate::llm::LLMClient;
 use crate::perf::{PerfHistory, PerfMetrics};
 use crate::speech::AnyEngine;
 use crate::speech::SpeechEngine;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::MASKED_MARKER;
 
@@ -38,9 +38,15 @@ pub fn get_perf_history(
 
 /// Return the current compute mode: "gpu", "cpu", or "unloaded".
 #[tauri::command]
-pub fn get_compute_mode(engine: tauri::State<'_, Arc<AnyEngine>>) -> Result<String, CommandError> {
-    if engine.is_ready() {
-        Ok(if engine.is_gpu_mode() {
+pub fn get_compute_mode(
+    engine: tauri::State<'_, Arc<Mutex<AnyEngine>>>,
+) -> Result<String, CommandError> {
+    let e = crate::util::lock_mutex(&engine, "engine").ok_or_else(|| CommandError {
+        code: "LOCK".to_string(),
+        message: "engine lock poisoned".to_string(),
+    })?;
+    if e.is_ready() {
+        Ok(if e.is_gpu_mode() {
             "gpu".to_string()
         } else {
             "cpu".to_string()

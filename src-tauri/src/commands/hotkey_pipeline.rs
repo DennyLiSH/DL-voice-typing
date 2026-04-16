@@ -18,7 +18,7 @@ use super::review::{PendingReview, ReviewData};
 pub fn make_hotkey_callback(
     sm: Arc<Mutex<StateMachine>>,
     ac: Arc<Mutex<AudioCapture>>,
-    engine: Arc<AnyEngine>,
+    engine: Arc<Mutex<AnyEngine>>,
     clipboard: Arc<Mutex<crate::clipboard::ClipboardManager>>,
     perf_history: Arc<PerfHistory>,
     app: tauri::AppHandle,
@@ -37,6 +37,20 @@ pub fn make_hotkey_callback(
                 let can_record = crate::util::lock_mutex(&sm, "state_machine")
                     .map(|mut s| s.start_recording().is_ok())
                     .unwrap_or(false);
+
+                // Block recording if the model is still loading in the background.
+                if can_record {
+                    let engine_ready = crate::util::lock_mutex(&engine, "engine")
+                        .map(|e| e.is_ready())
+                        .unwrap_or(false);
+                    if !engine_ready {
+                        if let Some(mut s) = crate::util::lock_mutex(&sm, "state_machine") {
+                            s.reset();
+                        }
+                        let _ = app.emit("speech-error", "模型加载中，请稍候...");
+                        return;
+                    }
+                }
                 if can_record {
                     // Show floating window near text caret (upper-left 45°).
                     if let Some(win) = app.get_webview_window("floating") {
@@ -157,7 +171,12 @@ pub fn make_hotkey_callback(
                             let samples_owned = resampled.clone();
                             let transcription =
                                 match tauri::async_runtime::spawn_blocking(move || {
-                                    engine_ref.transcribe_sync(&samples_owned)
+                                    match crate::util::lock_mutex(&engine_ref, "engine") {
+                                        Some(e) => e.transcribe_sync(&samples_owned),
+                                        None => Err(crate::error::AppError::Speech(
+                                            "engine lock poisoned".to_string(),
+                                        )),
+                                    }
                                 })
                                 .await
                                 {

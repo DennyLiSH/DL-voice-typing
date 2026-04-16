@@ -277,6 +277,11 @@ listen('hotkey-error', (event) => {
     showError(event.payload);
 });
 
+// Listen for background model loading completion
+listen('model-loaded', () => {
+    loadComputeMode();
+});
+
 // --- LLM Toggle ---
 
 function updateLlmFieldsState(enabled) {

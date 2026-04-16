@@ -84,7 +84,7 @@ pub fn save_settings(
             }
 
             // Build callback with current state references.
-            let engine = app_clone.state::<Arc<AnyEngine>>().inner().clone();
+            let engine = app_clone.state::<Arc<Mutex<AnyEngine>>>().inner().clone();
             let cb = app_clone
                 .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
                 .inner()
@@ -112,7 +112,7 @@ pub fn save_settings(
                         .state::<Arc<Mutex<AudioCapture>>>()
                         .inner()
                         .clone();
-                    let engine2 = app_clone.state::<Arc<AnyEngine>>().inner().clone();
+                    let engine2 = app_clone.state::<Arc<Mutex<AnyEngine>>>().inner().clone();
                     let cb2 = app_clone
                         .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
                         .inner()
