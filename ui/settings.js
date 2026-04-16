@@ -105,6 +105,14 @@ async function init() {
         autostartToggle.classList.toggle('active', loadedAutostart);
         autostartToggle.setAttribute('aria-checked', String(loadedAutostart));
         updateDirtyState();
+
+        // Display version
+        try {
+            const version = await window.__TAURI__.app.getVersion();
+            document.getElementById('version-info').textContent = '语文兔 v' + version;
+        } catch (e) {
+            // Version display is non-critical, silently ignore
+        }
     } catch (e) {
         showError('加载配置失败: ' + e);
     }
@@ -424,7 +432,10 @@ function updateDirtyState() {
 
     const current = getCurrentConfig();
     // API key dirty check: only dirty if user typed a new key (non-empty, non-masked)
-    const apiKeyDirty = current.llm_api_key !== '__MASKED__';
+    const hasExistingKey = loadedConfig.llm_api_key === '__MASKED__';
+    const apiKeyDirty = hasExistingKey
+        ? (current.llm_api_key !== '__MASKED__')
+        : (current.llm_api_key !== loadedConfig.llm_api_key);
     isDirty = (
         current.language !== loadedConfig.language ||
         current.hotkey !== loadedConfig.hotkey ||

@@ -53,6 +53,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                     .inner_size(560.0, 620.0)
                     .resizable(true)
                     .center()
+                    .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
                     .build();
                 }
             }
