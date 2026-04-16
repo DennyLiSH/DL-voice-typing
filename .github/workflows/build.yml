@@ -35,16 +35,13 @@ jobs:
           workspaces: src-tauri -> target
 
       - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.341.1
-          cache: true
-
-      - name: Set CMAKE_PREFIX_PATH for Vulkan
         shell: pwsh
         run: |
-          echo "CMAKE_PREFIX_PATH=$env:VULKAN_SDK" >> $env:GITHUB_ENV
-          echo "VK_SDK_PATH=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+          $env:VULKAN_VERSION = "1.4.341.1"
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
       - name: Set up MSVC developer environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -53,8 +50,6 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "VULKAN_SDK=$env:VULKAN_SDK"
-          Write-Host "VK_SDK_PATH=$env:VK_SDK_PATH"
-          Write-Host "CMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH"
           Write-Host "CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
           if (Test-Path "$env:VULKAN_SDK") {
             Write-Host "SDK dir exists"
