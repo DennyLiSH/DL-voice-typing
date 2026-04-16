@@ -72,14 +72,14 @@ pub fn save_settings(
             let mut hm = match hm_state.lock() {
                 Ok(hm) => hm,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("lock failed: {}", e)));
+                    let _ = tx.send(Err(format!("lock failed: {e}")));
                     return;
                 }
             };
 
             // Unregister old.
             if let Err(e) = hm.unregister() {
-                let _ = tx.send(Err(format!("unregister failed: {}", e)));
+                let _ = tx.send(Err(format!("unregister failed: {e}")));
                 return;
             }
 
@@ -126,8 +126,7 @@ pub fn save_settings(
                         make_hotkey_callback(sm2, ac2, engine2, cb2, ph2, app_clone.clone(), cc2);
                     let _ = hm.register(&old_key, fallback_callback);
                     let _ = tx.send(Err(format!(
-                        "新热键注册失败({})，已回退到旧热键: {}",
-                        e, old_key
+                        "新热键注册失败({e})，已回退到旧热键: {old_key}"
                     )));
                 }
             }

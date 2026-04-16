@@ -56,13 +56,13 @@ impl WindowsHotkeyManager {
 impl HotkeyManager for WindowsHotkeyManager {
     fn register(&mut self, key: &str, callback: HotkeyCallback) -> Result<(), AppError> {
         let vk_code = WindowsHotkeyManager::parse_key_code(key)
-            .ok_or_else(|| AppError::Hotkey(format!("unknown key: {}", key)))?;
+            .ok_or_else(|| AppError::Hotkey(format!("unknown key: {key}")))?;
 
         // Store callback + key_code in global state for the hook proc to access.
         {
             let mut state = HOOK_STATE
                 .lock()
-                .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {}", e)))?;
+                .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
             *state = Some(HookState {
                 key_code: vk_code,
                 callback: Some(callback),
@@ -71,7 +71,7 @@ impl HotkeyManager for WindowsHotkeyManager {
 
         unsafe {
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), None, 0)
-                .map_err(|e| AppError::Hotkey(format!("failed to set hook: {}", e)))?;
+                .map_err(|e| AppError::Hotkey(format!("failed to set hook: {e}")))?;
 
             self.hook = Some(hook);
         }
@@ -83,7 +83,7 @@ impl HotkeyManager for WindowsHotkeyManager {
         if let Some(hook) = self.hook.take() {
             unsafe {
                 UnhookWindowsHookEx(hook)
-                    .map_err(|e| AppError::Hotkey(format!("failed to unhook: {}", e)))?;
+                    .map_err(|e| AppError::Hotkey(format!("failed to unhook: {e}")))?;
             }
         }
         // Clear global state.

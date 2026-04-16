@@ -24,8 +24,8 @@ pub fn save_audio(
     fs::create_dir_all(&save_dir)?;
 
     let filename = generate_timestamp_filename();
-    let wav_path = save_dir.join(format!("{}.wav", filename));
-    let json_path = save_dir.join(format!("{}.json", filename));
+    let wav_path = save_dir.join(format!("{filename}.wav"));
+    let json_path = save_dir.join(format!("{filename}.json"));
 
     // Resample to 16kHz if needed.
     let resampled = if original_sample_rate != TARGET_SAMPLE_RATE {
@@ -164,8 +164,7 @@ fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Resu
 fn generate_timestamp_filename() -> String {
     let (year, month, day, hour, minute, second) = now_local();
     format!(
-        "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
-        year, month, day, hour, minute, second
+        "{year:04}-{month:02}-{day:02}_{hour:02}-{minute:02}-{second:02}"
     )
 }
 
@@ -245,7 +244,7 @@ fn local_utc_offset_string() -> String {
     let abs_minutes = total_minutes.abs();
     let hours = abs_minutes / 60;
     let minutes = abs_minutes % 60;
-    format!("{}{:02}:{:02}", sign, hours, minutes)
+    format!("{sign}{hours:02}:{minutes:02}")
 }
 
 /// RFC 3339 formatted timestamp using the local timezone offset.

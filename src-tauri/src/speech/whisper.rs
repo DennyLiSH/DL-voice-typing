@@ -71,7 +71,7 @@ impl WhisperEngine {
             ..Default::default()
         };
         let ctx = WhisperContext::new_with_params(&path, params)
-            .map_err(|e| AppError::Speech(format!("failed to load model (GPU and CPU): {}", e)))?;
+            .map_err(|e| AppError::Speech(format!("failed to load model (GPU and CPU): {e}")))?;
         self.gpu_mode = false;
         self.ctx = Some(ctx);
         info!("Whisper: model loaded on CPU (no GPU acceleration)");
@@ -103,11 +103,11 @@ impl SpeechEngine for WhisperEngine {
 
         let mut state = ctx
             .create_state()
-            .map_err(|e| AppError::Speech(format!("failed to create state: {}", e)))?;
+            .map_err(|e| AppError::Speech(format!("failed to create state: {e}")))?;
 
         state
             .full(params, samples)
-            .map_err(|e| AppError::Speech(format!("transcription failed: {}", e)))?;
+            .map_err(|e| AppError::Speech(format!("transcription failed: {e}")))?;
 
         let num_segments = state.full_n_segments();
         debug!(
@@ -134,7 +134,7 @@ impl SpeechEngine for WhisperEngine {
             text.push_str(
                 segment
                     .to_str()
-                    .map_err(|e| AppError::Speech(format!("segment text failed: {}", e)))?,
+                    .map_err(|e| AppError::Speech(format!("segment text failed: {e}")))?,
             );
         }
 

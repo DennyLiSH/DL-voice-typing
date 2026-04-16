@@ -70,7 +70,7 @@ pub async fn download_whisper_model(
         .copied()
         .ok_or_else(|| CommandError {
             code: "VALIDATION".to_string(),
-            message: format!("unknown model size: {}", size),
+            message: format!("unknown model size: {size}"),
         })?;
     let filename = model.filename();
 
@@ -103,9 +103,9 @@ pub async fn download_whisper_model(
     let url = {
         let config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
         let base_url = config.download_mirror.base_url();
-        format!("{}/{}", base_url, filename)
+        format!("{base_url}/{filename}")
     };
-    let temp_path = dir.join(format!("{}.tmp", filename));
+    let temp_path = dir.join(format!("{filename}.tmp"));
     let final_path = dir.join(filename);
 
     // Stream download.
@@ -140,7 +140,7 @@ pub async fn download_whisper_model(
             let _ = std::fs::remove_file(&temp_path);
             CommandError {
                 code: "NETWORK".to_string(),
-                message: format!("download stream error: {}", e),
+                message: format!("download stream error: {e}"),
             }
         })?;
 
@@ -148,7 +148,7 @@ pub async fn download_whisper_model(
             let _ = std::fs::remove_file(&temp_path);
             CommandError {
                 code: "IO".to_string(),
-                message: format!("write error: {}", e),
+                message: format!("write error: {e}"),
             }
         })?;
 
@@ -181,7 +181,7 @@ pub async fn download_whisper_model(
         let _ = std::fs::remove_file(&temp_path);
         CommandError {
             code: "IO".to_string(),
-            message: format!("rename failed: {}", e),
+            message: format!("rename failed: {e}"),
         }
     })?;
 

@@ -49,7 +49,7 @@ pub fn decrypt(ciphertext: &str) -> Result<String, AppError> {
 
     let encrypted_bytes = BASE64
         .decode(b64_data)
-        .map_err(|e| AppError::Crypto(format!("base64 decode failed: {}", e)))?;
+        .map_err(|e| AppError::Crypto(format!("base64 decode failed: {e}")))?;
 
     let input_blob = CRYPT_INTEGER_BLOB {
         cbData: encrypted_bytes.len() as u32,
@@ -70,7 +70,7 @@ pub fn decrypt(ciphertext: &str) -> Result<String, AppError> {
     let plaintext_bytes =
         unsafe { std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize) };
     let plaintext = String::from_utf8(plaintext_bytes.to_vec())
-        .map_err(|e| AppError::Crypto(format!("utf8 conversion failed: {}", e)))?;
+        .map_err(|e| AppError::Crypto(format!("utf8 conversion failed: {e}")))?;
 
     // Free the buffer allocated by DPAPI.
     unsafe {

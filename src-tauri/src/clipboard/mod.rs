@@ -58,12 +58,12 @@ fn read_clipboard() -> Result<String, AppError> {
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 
     unsafe {
-        OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {}", e)))?;
+        OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
 
         let result = (|| -> Result<String, AppError> {
             // CF_UNICODETEXT = 13
             let handle = GetClipboardData(13u32)
-                .map_err(|e| AppError::Clipboard(format!("get data failed: {}", e)))?;
+                .map_err(|e| AppError::Clipboard(format!("get data failed: {e}")))?;
 
             // GlobalLock accepts Param<HGLOBAL>, but GetClipboardData returns HANDLE.
             // We need to use the raw handle value.
@@ -79,7 +79,7 @@ fn read_clipboard() -> Result<String, AppError> {
             }
             let slice = std::slice::from_raw_parts(u16_ptr, len);
             let text = String::from_utf16(slice)
-                .map_err(|e| AppError::Clipboard(format!("utf16 decode failed: {}", e)))?;
+                .map_err(|e| AppError::Clipboard(format!("utf16 decode failed: {e}")))?;
 
             let _ = GlobalUnlock(windows::Win32::Foundation::HGLOBAL(handle.0));
             Ok(text)
@@ -112,14 +112,14 @@ fn write_clipboard(text: &str) -> Result<(), AppError> {
     use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 
     unsafe {
-        OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {}", e)))?;
-        EmptyClipboard().map_err(|e| AppError::Clipboard(format!("empty failed: {}", e)))?;
+        OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
+        EmptyClipboard().map_err(|e| AppError::Clipboard(format!("empty failed: {e}")))?;
 
         let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0u16)).collect();
         let byte_len = wide.len() * 2;
 
         let hglobal = GlobalAlloc(GMEM_MOVEABLE, byte_len)
-            .map_err(|e| AppError::Clipboard(format!("alloc failed: {}", e)))?;
+            .map_err(|e| AppError::Clipboard(format!("alloc failed: {e}")))?;
 
         let ptr = GlobalLock(hglobal);
         if ptr.is_null() {
@@ -133,7 +133,7 @@ fn write_clipboard(text: &str) -> Result<(), AppError> {
         // We need to convert HGLOBAL -> HANDLE
         let handle = windows::Win32::Foundation::HANDLE(hglobal.0);
         SetClipboardData(13u32, handle)
-            .map_err(|e| AppError::Clipboard(format!("set data failed: {}", e)))?;
+            .map_err(|e| AppError::Clipboard(format!("set data failed: {e}")))?;
 
         let _ = CloseClipboard();
         Ok(())

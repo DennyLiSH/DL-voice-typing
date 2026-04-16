@@ -60,7 +60,7 @@ impl PerfMetrics {
         let fmt_ms = |v: Option<u64>| -> String {
             match v {
                 Some(ms) if ms >= 1000 => format!("{:.2}s", ms as f64 / 1000.0),
-                Some(ms) => format!("{}ms", ms),
+                Some(ms) => format!("{ms}ms"),
                 None => "-".to_string(),
             }
         };

@@ -79,18 +79,18 @@ impl LLMClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| AppError::Llm(format!("request failed: {}", e)))?;
+            .map_err(|e| AppError::Llm(format!("request failed: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(AppError::Llm(format!("API error {}: {}", status, body)));
+            return Err(AppError::Llm(format!("API error {status}: {body}")));
         }
 
         let chat_response: ChatResponse = response
             .json()
             .await
-            .map_err(|e| AppError::Llm(format!("parse response failed: {}", e)))?;
+            .map_err(|e| AppError::Llm(format!("parse response failed: {e}")))?;
 
         let corrected = chat_response
             .choices
@@ -120,7 +120,7 @@ impl LLMClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| AppError::Llm(format!("connection test failed: {}", e)))?;
+            .map_err(|e| AppError::Llm(format!("connection test failed: {e}")))?;
 
         if response.status().is_success() {
             Ok(())

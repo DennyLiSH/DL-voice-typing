@@ -364,7 +364,7 @@ impl AppConfig {
         cache
             .read()
             .map(|guard| guard.clone())
-            .map_err(|e| AppError::Config(format!("cache read failed: {}", e)))
+            .map_err(|e| AppError::Config(format!("cache read failed: {e}")))
     }
 
     /// Save to disk AND update the in-memory cache.
@@ -654,7 +654,7 @@ mod tests {
             llm_api_key: "sk-super-secret".to_string(),
             ..Default::default()
         };
-        let debug_str = format!("{:?}", config);
+        let debug_str = format!("{config:?}");
         assert!(debug_str.contains("******"));
         assert!(!debug_str.contains("sk-super-secret"));
     }
@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn test_debug_shows_empty_key() {
         let config = AppConfig::default();
-        let debug_str = format!("{:?}", config);
+        let debug_str = format!("{config:?}");
         // Empty key should show as "" not "******"
         assert!(!debug_str.contains("******"));
         assert!(debug_str.contains("llm_api_key"));
