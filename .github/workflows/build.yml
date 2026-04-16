@@ -33,6 +33,12 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.341.1
+          cache: true
+
       - name: Format check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
@@ -41,12 +47,6 @@ jobs:
 
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
-
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.341.1
-          cache: true
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2"
