@@ -29,6 +29,9 @@ jobs:
           toolchain: '1.88.0'
           components: 'rustfmt, clippy'
 
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
