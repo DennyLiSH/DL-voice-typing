@@ -29,9 +29,6 @@ jobs:
           toolchain: '1.88.0'
           components: 'rustfmt, clippy'
 
-      - name: Set up MSVC developer environment
-        uses: ilammy/msvc-dev-cmd@v1
-
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
@@ -43,14 +40,27 @@ jobs:
           version: 1.4.341.1
           cache: true
 
+      - name: Set CMAKE_PREFIX_PATH for Vulkan
+        shell: pwsh
+        run: |
+          echo "CMAKE_PREFIX_PATH=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+          echo "VK_SDK_PATH=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Verify Vulkan SDK
         shell: pwsh
         run: |
           Write-Host "VULKAN_SDK=$env:VULKAN_SDK"
+          Write-Host "VK_SDK_PATH=$env:VK_SDK_PATH"
+          Write-Host "CMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH"
           Write-Host "CMAKE_GENERATOR=$env:CMAKE_GENERATOR"
           if (Test-Path "$env:VULKAN_SDK") {
             Write-Host "SDK dir exists"
+            Get-ChildItem "$env:VULKAN_SDK" -Directory | ForEach-Object { Write-Host "  $_" }
             if (Test-Path "$env:VULKAN_SDK\Lib\vulkan-1.lib") { Write-Host "OK vulkan-1.lib" } else { Write-Host "MISSING vulkan-1.lib" }
+            if (Test-Path "$env:VULKAN_SDK\Include\vulkan\vulkan.h") { Write-Host "OK vulkan.h" } else { Write-Host "MISSING vulkan.h" }
           } else { Write-Host "SDK dir MISSING" }
           ninja --version
 
