@@ -26,8 +26,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
+use time::UtcOffset;
+use time::format_description::well_known::Rfc3339;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::time::OffsetTime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,7 +40,12 @@ pub fn run() {
         .join("dl-voice-typing")
         .join("logs");
 
-    let file_appender = tracing_appender::rolling::daily(log_dir, "dl-voice-typing.log");
+    let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("dl-voice-typing")
+        .filename_suffix("log")
+        .build(&log_dir)
+        .expect("failed to initialize log file appender");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::fmt()
@@ -46,6 +54,10 @@ pub fn run() {
         )
         .with_writer(non_blocking)
         .with_ansi(false)
+        .with_timer(OffsetTime::new(
+            UtcOffset::current_local_offset().expect("failed to get local time offset"),
+            Rfc3339,
+        ))
         .init();
 
     let state_machine = Arc::new(Mutex::new(StateMachine::new()));
