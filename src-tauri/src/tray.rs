@@ -57,6 +57,12 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 .build()
                 {
                     let _ = window.show();
+                    #[cfg(feature = "devtools")]
+                    {
+                        if let Some(w) = app.get_webview_window("settings") {
+                            w.open_devtools();
+                        }
+                    }
                 }
             }
             _ => {}
