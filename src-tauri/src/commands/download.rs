@@ -1,4 +1,6 @@
-use crate::config::{AppConfig, WhisperModel, check_whisper_models, models_dir, scan_custom_models};
+use crate::config::{
+    AppConfig, WhisperModel, check_whisper_models, models_dir, scan_custom_models,
+};
 use crate::error::{AppError, CommandError};
 use futures_util::StreamExt;
 use std::sync::atomic::AtomicBool;
@@ -241,7 +243,9 @@ pub fn delete_custom_model(
         if name == &filename {
             let mut config = config;
             config.whisper_model = WhisperModel::Base;
-            config.save_cached(&config_cache).map_err(CommandError::from)?;
+            config
+                .save_cached(&config_cache)
+                .map_err(CommandError::from)?;
         }
     }
 
@@ -265,7 +269,9 @@ mod tests {
 
     #[test]
     fn test_download_rejects_invalid_size() {
-        let valid = WhisperModel::all_built_in().iter().find(|m| m.size_str() == "huge");
+        let valid = WhisperModel::all_built_in()
+            .iter()
+            .find(|m| m.size_str() == "huge");
         assert!(valid.is_none());
     }
 

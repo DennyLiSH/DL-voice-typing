@@ -78,7 +78,9 @@ impl<'de> Deserialize<'de> for WhisperModel {
             other if other.starts_with("custom:") => {
                 let name = other.strip_prefix("custom:").unwrap();
                 if name.is_empty() {
-                    Err(serde::de::Error::custom("custom model name cannot be empty"))
+                    Err(serde::de::Error::custom(
+                        "custom model name cannot be empty",
+                    ))
                 } else {
                     Ok(Self::Custom(name.to_string()))
                 }
