@@ -40,8 +40,9 @@ tracing-appender = "0.2"
 time = { version = "0.3", features = ["local-offset", "formatting"] }
 
 [features]
-default = ["whisper"]
+default = ["whisper", "devtools"]
 whisper = ["whisper-rs"]
+devtools = ["tauri/devtools"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
