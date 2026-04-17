@@ -42,6 +42,7 @@
         }
 
         body {
+            margin: 0;
             min-width: 560px;
             min-height: 620px;
             font-family: "Segoe UI", system-ui, sans-serif;
@@ -356,13 +357,18 @@
 
         /* Error banner */
         .error-banner {
-            background: rgba(220, 38, 38, 0.1);
-            border: 1px solid rgba(220, 38, 38, 0.3);
             border-radius: 4px;
             padding: 10px 14px;
             margin-bottom: 16px;
             color: var(--error);
             font-size: 13px;
+            display: none;
+        }
+
+        .error-banner.visible {
+            display: block;
+            background: rgba(220, 38, 38, 0.1);
+            border: 1px solid rgba(220, 38, 38, 0.3);
         }
 
         /* Hint text */

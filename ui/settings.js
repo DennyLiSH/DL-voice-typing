@@ -611,11 +611,11 @@ function setSaveStatus(message, type) {
 
 function showError(msg) {
     errorBanner.textContent = msg;
-    errorBanner.style.display = 'block';
+    errorBanner.classList.add('visible');
 }
 
 function hideError() {
-    errorBanner.style.display = 'none';
+    errorBanner.classList.remove('visible');
 }
 
 // --- Window Close ---

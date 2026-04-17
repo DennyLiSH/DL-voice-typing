@@ -43,18 +43,20 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 if let Some(window) = app.get_webview_window("settings") {
                     let _ = window.show();
                     let _ = window.set_focus();
-                } else {
-                    let _ = WebviewWindowBuilder::new(
-                        app,
-                        "settings",
-                        tauri::WebviewUrl::App("settings.html".into()),
-                    )
-                    .title("语文兔语音输入法 - 设置")
-                    .inner_size(560.0, 620.0)
-                    .resizable(true)
-                    .center()
-                    .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
-                    .build();
+                } else if let Ok(window) = WebviewWindowBuilder::new(
+                    app,
+                    "settings",
+                    tauri::WebviewUrl::App("settings.html".into()),
+                )
+                .title("语文兔语音输入法 - 设置")
+                .inner_size(560.0, 620.0)
+                .resizable(true)
+                .center()
+                .visible(false)
+                .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
+                .build()
+                {
+                    let _ = window.show();
                 }
             }
             _ => {}
