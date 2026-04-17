@@ -37,6 +37,7 @@ const pageContents = document.querySelectorAll('.page-content');
 // State
 let loadedConfig = null;
 let modelStatus = {};  // { tiny: true, base: false, ... }
+let customModels = []; // ["my-model.bin", ...]
 let selectedModel = 'base';
 let activeDownload = null;
 let isDirty = false;
@@ -86,12 +87,13 @@ document.querySelector('.sidebar').addEventListener('keydown', (e) => {
 
 async function init() {
     try {
-        const [config, models] = await Promise.all([
+        const [config, modelsData] = await Promise.all([
             invoke('get_config'),
             invoke('get_whisper_models'),
         ]);
         loadedConfig = config;
-        modelStatus = models;
+        modelStatus = modelsData.built_in;
+        customModels = modelsData.custom;
         selectedModel = config.whisper_model;
         populateFields(config);
         populateModelSelect();
@@ -154,40 +156,72 @@ const MODEL_SIZES = [
 
 function populateModelSelect() {
     whisperModelSelect.innerHTML = '';
+
+    // Built-in group
+    const builtInGroup = document.createElement('optgroup');
+    builtInGroup.label = '内置模型';
     for (const m of MODEL_SIZES) {
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = `${m.name} (${m.size})`;
         if (m.id === selectedModel) opt.selected = true;
-        whisperModelSelect.appendChild(opt);
+        builtInGroup.appendChild(opt);
+    }
+    whisperModelSelect.appendChild(builtInGroup);
+
+    // Custom group (only if there are custom models)
+    if (customModels.length > 0) {
+        const customGroup = document.createElement('optgroup');
+        customGroup.label = '自定义模型';
+        for (const name of customModels) {
+            const opt = document.createElement('option');
+            opt.value = 'custom:' + name;
+            opt.textContent = name;
+            if ('custom:' + name === selectedModel) opt.selected = true;
+            customGroup.appendChild(opt);
+        }
+        whisperModelSelect.appendChild(customGroup);
     }
 }
 
 function updateModelAction() {
     const isDownloading = activeDownload !== null;
     const downloadingThis = activeDownload === selectedModel;
+    const isCustom = selectedModel.startsWith('custom:');
 
     // Hide all action elements first
     modelStatusText.style.display = 'none';
     btnDownloadModel.style.display = 'none';
     downloadProgress.style.display = 'none';
+    btnDownloadModel.textContent = '下载';
+    btnDownloadModel.className = 'btn-download-model';
 
-    if (isDownloading && downloadingThis) {
-        // Show progress bar
+    if (isCustom && !isDownloading) {
+        // Custom model — show delete button
+        btnDownloadModel.textContent = '删除';
+        btnDownloadModel.className = 'btn-download-model btn-delete-model';
+        btnDownloadModel.style.display = 'inline-block';
+        btnDownloadModel.disabled = false;
+        whisperModelSelect.disabled = false;
+    } else if (isDownloading && downloadingThis) {
         downloadProgress.style.display = 'block';
         whisperModelSelect.disabled = true;
         btnDownloadModel.disabled = true;
     } else if (isDownloading) {
-        // Another model is downloading — show download button but disabled
+        btnDownloadModel.style.display = 'inline-block';
+        btnDownloadModel.disabled = true;
+        whisperModelSelect.disabled = true;
+    } else if (isCustom) {
+        // Custom model during download of another model
+        btnDownloadModel.textContent = '删除';
+        btnDownloadModel.className = 'btn-download-model btn-delete-model';
         btnDownloadModel.style.display = 'inline-block';
         btnDownloadModel.disabled = true;
         whisperModelSelect.disabled = true;
     } else if (modelStatus[selectedModel]) {
-        // Already downloaded
         modelStatusText.style.display = 'inline';
         whisperModelSelect.disabled = false;
     } else {
-        // Not downloaded — show download button
         btnDownloadModel.style.display = 'inline-block';
         btnDownloadModel.disabled = false;
         whisperModelSelect.disabled = false;
@@ -224,8 +258,30 @@ async function loadComputeMode() {
 
 // --- Download ---
 
-btnDownloadModel.addEventListener('click', () => {
-    startDownload(selectedModel);
+btnDownloadModel.addEventListener('click', async () => {
+    const isCustom = selectedModel.startsWith('custom:');
+    if (isCustom) {
+        const filename = selectedModel.replace(/^custom:/, '');
+        if (!confirm(`确认删除模型 ${filename}？`)) return;
+        try {
+            await invoke('delete_custom_model', { filename });
+            // Refresh model list
+            const modelsData = await invoke('get_whisper_models');
+            modelStatus = modelsData.built_in;
+            customModels = modelsData.custom;
+            // If deleted was selected, reset to base
+            if (!customModels.some(n => 'custom:' + n === selectedModel)) {
+                selectedModel = 'base';
+            }
+            populateModelSelect();
+            updateModelAction();
+            updateDirtyState();
+        } catch (e) {
+            showError('删除失败: ' + e);
+        }
+    } else {
+        startDownload(selectedModel);
+    }
 });
 
 btnCancelDownload.addEventListener('click', () => {
@@ -501,8 +557,9 @@ saveBtn.addEventListener('click', async () => {
         return;
     }
 
-    // Validate: selected model must be downloaded
-    if (!modelStatus[config.whisper_model]) {
+    // Validate: selected model must be downloaded (built-in) or exist (custom)
+    const isCustom = config.whisper_model.startsWith('custom:');
+    if (!isCustom && !modelStatus[config.whisper_model]) {
         showError('请先下载所选的 Whisper 模型');
         return;
     }

@@ -40,3 +40,11 @@ button {
   cursor: pointer;
   outline: none;
 }
+
+.btn-delete-model {
+  background: #DC2626;
+  color: white;
+}
+.btn-delete-model:hover:not(:disabled) {
+  background: #B91C1C;
+}
