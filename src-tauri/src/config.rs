@@ -234,6 +234,28 @@ pub fn check_whisper_models() -> HashMap<String, bool> {
         .collect()
 }
 
+/// Scan a directory for custom model files (non-built-in .bin files).
+/// Returns sorted filenames.
+pub fn scan_custom_models_in(dir: &std::path::Path) -> Vec<String> {
+    let built_in = WhisperModel::built_in_filenames();
+    let mut customs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".bin") && !built_in.contains(name.as_str()) {
+                customs.push(name);
+            }
+        }
+    }
+    customs.sort();
+    customs
+}
+
+/// Scan the default models directory for custom model files.
+pub fn scan_custom_models() -> Vec<String> {
+    scan_custom_models_in(&models_dir())
+}
+
 /// Application configuration.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -762,5 +784,22 @@ mod tests {
     fn test_whisper_model_is_custom() {
         assert!(!WhisperModel::Base.is_custom());
         assert!(WhisperModel::Custom("x.bin".to_string()).is_custom());
+    }
+
+    #[test]
+    fn test_scan_custom_models() {
+        let dir = std::env::temp_dir().join("dl-voice-typing-test-models-scan");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        fs::write(dir.join("ggml-base.bin"), b"fake").unwrap();
+        fs::write(dir.join("my-custom.bin"), b"fake").unwrap();
+        fs::write(dir.join("other-model.bin"), b"fake").unwrap();
+        fs::write(dir.join("readme.txt"), b"ignore").unwrap();
+
+        let customs = scan_custom_models_in(&dir);
+        assert_eq!(customs, vec!["my-custom.bin", "other-model.bin"]);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

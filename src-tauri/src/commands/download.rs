@@ -1,4 +1,4 @@
-use crate::config::{AppConfig, WhisperModel, check_whisper_models, models_dir};
+use crate::config::{AppConfig, WhisperModel, check_whisper_models, models_dir, scan_custom_models};
 use crate::error::{AppError, CommandError};
 use futures_util::StreamExt;
 use std::sync::atomic::AtomicBool;
@@ -49,10 +49,20 @@ impl Drop for DownloadGuard {
     }
 }
 
-/// Check which Whisper models are downloaded.
+/// Check which Whisper models are downloaded and scan for custom models.
+#[derive(serde::Serialize)]
+pub struct ModelsResponse {
+    pub built_in: std::collections::HashMap<String, bool>,
+    pub custom: Vec<String>,
+}
+
+/// Check which Whisper models are downloaded and scan for custom models.
 #[tauri::command]
-pub fn get_whisper_models() -> Result<std::collections::HashMap<String, bool>, CommandError> {
-    Ok(check_whisper_models())
+pub fn get_whisper_models() -> Result<ModelsResponse, CommandError> {
+    Ok(ModelsResponse {
+        built_in: check_whisper_models(),
+        custom: scan_custom_models(),
+    })
 }
 
 /// Download a Whisper model with progress events.
@@ -198,6 +208,46 @@ pub fn cancel_download(
     Ok(())
 }
 
+/// Delete a custom model file. Rejects built-in model filenames.
+/// If the deleted model is currently selected, resets config to Base.
+#[tauri::command]
+pub fn delete_custom_model(
+    filename: String,
+    config_cache: tauri::State<'_, crate::config::ConfigCache>,
+) -> Result<(), CommandError> {
+    let built_in = WhisperModel::built_in_filenames();
+    if built_in.contains(filename.as_str()) {
+        return Err(CommandError {
+            code: "VALIDATION".to_string(),
+            message: "cannot delete built-in model".to_string(),
+        });
+    }
+
+    let path = models_dir().join(&filename);
+    if !path.exists() {
+        return Err(CommandError {
+            code: "NOT_FOUND".to_string(),
+            message: format!("model file not found: {filename}"),
+        });
+    }
+
+    std::fs::remove_file(&path).map_err(|e| CommandError {
+        code: "IO".to_string(),
+        message: format!("failed to delete {filename}: {e}"),
+    })?;
+
+    let config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
+    if let WhisperModel::Custom(ref name) = config.whisper_model {
+        if name == &filename {
+            let mut config = config;
+            config.whisper_model = WhisperModel::Base;
+            config.save_cached(&config_cache).map_err(CommandError::from)?;
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +286,11 @@ mod tests {
         assert!(!ds.cancel.load(std::sync::atomic::Ordering::SeqCst));
         ds.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(ds.cancel.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_delete_rejects_builtin_filename() {
+        let built_in = WhisperModel::built_in_filenames();
+        assert!(built_in.contains("ggml-base.bin"));
     }
 }

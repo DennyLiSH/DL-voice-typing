@@ -199,6 +199,7 @@ pub fn run() {
             commands::download::get_whisper_models,
             commands::download::download_whisper_model,
             commands::download::cancel_download,
+            commands::download::delete_custom_model,
             commands::misc_cmd::get_perf_history,
             commands::misc_cmd::get_compute_mode,
             commands::review::confirm_inject,
