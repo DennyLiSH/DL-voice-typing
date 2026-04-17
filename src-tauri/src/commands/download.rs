@@ -64,10 +64,9 @@ pub async fn download_whisper_model(
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
     // Validate size.
-    let model = WhisperModel::all()
+    let model = WhisperModel::all_built_in()
         .iter()
         .find(|m| m.size_str() == size)
-        .copied()
         .ok_or_else(|| CommandError {
             code: "VALIDATION".to_string(),
             message: format!("unknown model size: {size}"),
@@ -106,7 +105,7 @@ pub async fn download_whisper_model(
         format!("{base_url}/{filename}")
     };
     let temp_path = dir.join(format!("{filename}.tmp"));
-    let final_path = dir.join(filename);
+    let final_path = dir.join(filename.as_ref());
 
     // Stream download.
     let response = reqwest::get(&url)
@@ -216,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_download_rejects_invalid_size() {
-        let valid = WhisperModel::all().iter().find(|m| m.size_str() == "huge");
+        let valid = WhisperModel::all_built_in().iter().find(|m| m.size_str() == "huge");
         assert!(valid.is_none());
     }
 

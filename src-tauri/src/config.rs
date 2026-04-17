@@ -45,48 +45,103 @@ pub const DOWNLOAD_MIRRORS: &[(&str, &str, &str)] = &[
 // Typed enums for config fields (serde serializes as lowercase strings)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum WhisperModel {
     Tiny,
     #[default]
     Base,
     Small,
     Medium,
+    Custom(String),
+}
+
+impl Serialize for WhisperModel {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Tiny => serializer.serialize_str("tiny"),
+            Self::Base => serializer.serialize_str("base"),
+            Self::Small => serializer.serialize_str("small"),
+            Self::Medium => serializer.serialize_str("medium"),
+            Self::Custom(name) => serializer.serialize_str(&format!("custom:{name}")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WhisperModel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "tiny" => Ok(Self::Tiny),
+            "base" => Ok(Self::Base),
+            "small" => Ok(Self::Small),
+            "medium" => Ok(Self::Medium),
+            other if other.starts_with("custom:") => {
+                let name = other.strip_prefix("custom:").unwrap();
+                if name.is_empty() {
+                    Err(serde::de::Error::custom("custom model name cannot be empty"))
+                } else {
+                    Ok(Self::Custom(name.to_string()))
+                }
+            }
+            _ => Err(serde::de::Error::custom(format!("unknown model: {s}"))),
+        }
+    }
 }
 
 impl WhisperModel {
-    pub fn filename(self) -> &'static str {
+    pub fn filename(&self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Tiny => "ggml-tiny.bin",
-            Self::Base => "ggml-base.bin",
-            Self::Small => "ggml-small.bin",
-            Self::Medium => "ggml-medium.bin",
+            Self::Tiny => "ggml-tiny.bin".into(),
+            Self::Base => "ggml-base.bin".into(),
+            Self::Small => "ggml-small.bin".into(),
+            Self::Medium => "ggml-medium.bin".into(),
+            Self::Custom(name) => name.clone().into(),
         }
     }
 
-    pub fn display_size(self) -> &'static str {
+    pub fn display_size(&self) -> &'static str {
         match self {
             Self::Tiny => "75MB",
             Self::Base => "142MB",
             Self::Small => "466MB",
             Self::Medium => "1.5GB",
+            Self::Custom(_) => "",
         }
     }
 
-    /// All variants in order.
-    pub fn all() -> &'static [WhisperModel] {
+    /// All built-in variants in order (excludes Custom).
+    pub fn all_built_in() -> &'static [WhisperModel] {
         &[Self::Tiny, Self::Base, Self::Small, Self::Medium]
     }
 
     /// The size identifier string used by the frontend and download API (e.g. "tiny", "base").
-    pub fn size_str(self) -> &'static str {
+    pub fn size_str(&self) -> &'static str {
         match self {
             Self::Tiny => "tiny",
             Self::Base => "base",
             Self::Small => "small",
             Self::Medium => "medium",
+            Self::Custom(_) => "",
         }
+    }
+
+    /// Returns true if this is a custom user-added model.
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom(_))
+    }
+
+    /// Returns the set of built-in model filenames (for scanner exclusion).
+    pub fn built_in_filenames() -> std::collections::HashSet<&'static str> {
+        Self::all_built_in()
+            .iter()
+            .map(|m| match m {
+                Self::Tiny => "ggml-tiny.bin",
+                Self::Base => "ggml-base.bin",
+                Self::Small => "ggml-small.bin",
+                Self::Medium => "ggml-medium.bin",
+                _ => unreachable!(),
+            })
+            .collect()
     }
 }
 
@@ -168,12 +223,12 @@ pub fn models_dir() -> PathBuf {
 
 /// Returns the model file path for a given model.
 pub fn model_path_for_size(model: &WhisperModel) -> PathBuf {
-    models_dir().join(model.filename())
+    models_dir().join(model.filename().as_ref())
 }
 
 /// Check which Whisper models are present on disk.
 pub fn check_whisper_models() -> HashMap<String, bool> {
-    WhisperModel::all()
+    WhisperModel::all_built_in()
         .iter()
         .map(|m| (m.size_str().to_string(), model_path_for_size(m).exists()))
         .collect()
@@ -451,7 +506,7 @@ mod tests {
         assert_eq!(WhisperModel::Small.display_size(), "466MB");
         assert_eq!(WhisperModel::Medium.display_size(), "1.5GB");
 
-        assert_eq!(WhisperModel::all().len(), 4);
+        assert_eq!(WhisperModel::all_built_in().len(), 4);
 
         assert_eq!(WhisperModel::Tiny.size_str(), "tiny");
         assert_eq!(WhisperModel::Base.size_str(), "base");
@@ -667,5 +722,45 @@ mod tests {
         // Empty key should show as "" not "******"
         assert!(!debug_str.contains("******"));
         assert!(debug_str.contains("llm_api_key"));
+    }
+
+    #[test]
+    fn test_whisper_model_custom_serde_roundtrip() {
+        let model = WhisperModel::Custom("my-model.bin".to_string());
+        let json = serde_json::to_string(&model).unwrap();
+        assert_eq!(json, r#""custom:my-model.bin""#);
+        let parsed: WhisperModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, model);
+    }
+
+    #[test]
+    fn test_whisper_model_custom_in_config() {
+        let mut config = AppConfig::default();
+        config.whisper_model = WhisperModel::Custom("my-model.bin".to_string());
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains(r#""whisper_model":"custom:my-model.bin""#));
+        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.whisper_model,
+            WhisperModel::Custom("my-model.bin".to_string())
+        );
+    }
+
+    #[test]
+    fn test_whisper_model_custom_deserialize_invalid() {
+        let result = serde_json::from_str::<WhisperModel>(r#""something-random""#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_whisper_model_custom_deserialize_empty_custom() {
+        let result = serde_json::from_str::<WhisperModel>(r#""custom:""#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_whisper_model_is_custom() {
+        assert!(!WhisperModel::Base.is_custom());
+        assert!(WhisperModel::Custom("x.bin".to_string()).is_custom());
     }
 }
