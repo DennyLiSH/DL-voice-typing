@@ -759,8 +759,10 @@ mod tests {
 
     #[test]
     fn test_whisper_model_custom_in_config() {
-        let mut config = AppConfig::default();
-        config.whisper_model = WhisperModel::Custom("my-model.bin".to_string());
+        let config = AppConfig {
+            whisper_model: WhisperModel::Custom("my-model.bin".to_string()),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains(r#""whisper_model":"custom:my-model.bin""#));
         let parsed: AppConfig = serde_json::from_str(&json).unwrap();
