@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_millis(50);
@@ -23,12 +23,22 @@ impl ClipboardManager {
     }
 
     /// Write text to clipboard and simulate Ctrl+V to paste.
-    /// **Blocking:** contains a 200ms sleep for paste processing.
+    /// **Blocking:** contains a sleep for paste processing.
     /// Must be called via `spawn_blocking` from async contexts.
     pub fn inject_text(&self, text: &str) -> Result<(), AppError> {
         write_clipboard_with_retry(text)?;
         simulate_paste()?;
-        std::thread::sleep(Duration::from_millis(200));
+        // Wait for target application to process the paste.
+        // Initial 80ms covers most apps; then poll every 20ms up to 120ms more.
+        std::thread::sleep(Duration::from_millis(80));
+        let deadline = Instant::now() + Duration::from_millis(120);
+        while Instant::now() < deadline {
+            // If clipboard content changed, target app consumed the paste.
+            if read_clipboard().map_or(true, |c| c != text) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
 
         if let Some(ref saved) = self.saved_content {
             let _ = write_clipboard_with_retry(saved);
