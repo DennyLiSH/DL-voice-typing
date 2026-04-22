@@ -31,6 +31,7 @@ struct ChatRequest {
 }
 
 /// LLM client for post-transcription text correction.
+#[derive(Clone)]
 pub struct LLMClient {
     client: reqwest::Client,
     api_url: String,
@@ -100,6 +101,11 @@ impl LLMClient {
             .unwrap_or_else(|| text.to_string());
 
         Ok(corrected)
+    }
+
+    /// Check if this client's configuration matches the given parameters.
+    pub fn matches_config(&self, api_url: &str, api_key: &str, model: &str) -> bool {
+        self.api_url == api_url && self.api_key == api_key && self.model == model
     }
 
     /// Test the connection by sending a simple request.

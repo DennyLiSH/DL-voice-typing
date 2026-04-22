@@ -64,6 +64,8 @@ pub fn run() {
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
     let clipboard_manager = Arc::new(Mutex::new(clipboard::ClipboardManager::new()));
     let perf_history = Arc::new(PerfHistory::new());
+    let cached_llm: Arc<Mutex<Option<crate::llm::LLMClient>>> =
+        Arc::new(Mutex::new(None));
     let shutting_down = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()
@@ -177,6 +179,7 @@ pub fn run() {
             app.manage(clipboard_manager.clone());
             app.manage(perf_history.clone());
             app.manage(shutting_down.clone());
+            app.manage(cached_llm.clone());
 
             // Register hotkey.
             let hotkey_name = config.hotkey.clone();
@@ -187,7 +190,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let mut hotkey_manager = WindowsHotkeyManager::new();
             let cc = app.state::<ConfigCache>().inner().clone();
-            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, ph, app_handle, cc);
+            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, ph, app_handle, cc, cached_llm);
             if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
                 warn!("failed to register hotkey '{hotkey_name}': {e}");
             }

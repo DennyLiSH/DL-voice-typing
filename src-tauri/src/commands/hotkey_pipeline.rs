@@ -23,6 +23,7 @@ pub fn make_hotkey_callback(
     perf_history: Arc<PerfHistory>,
     app: tauri::AppHandle,
     config_cache: crate::config::ConfigCache,
+    cached_llm: Arc<Mutex<Option<LLMClient>>>,
 ) -> HotkeyCallback {
     // Shared perf state between Pressed and Released invocations of the same cycle.
     // Pressed creates it, Released takes it and moves into the async task.
@@ -161,6 +162,7 @@ pub fn make_hotkey_callback(
                         let cb_clone = clipboard.clone();
                         let app_clone = app.clone();
                         let ph_clone = perf_history.clone();
+                        let cached_llm_clone = cached_llm.clone();
                         let t_press_for_e2e =
                             t_release - Duration::from_millis(perf.audio_duration_ms.unwrap_or(0));
 
@@ -249,11 +251,31 @@ pub fn make_hotkey_callback(
                                 let _ = app_clone.emit("llm-refining", ());
 
                                 let t_llm = Instant::now();
-                                let llm = LLMClient::new(
-                                    config.llm_api_url,
-                                    config.llm_api_key,
-                                    config.llm_model,
-                                );
+                                let llm = {
+                                    let mut cached =
+                                        crate::util::lock_mutex(&cached_llm_clone, "cached_llm")
+                                            .expect("cached_llm lock poisoned");
+                                    let needs_new = cached
+                                        .as_ref()
+                                        .map_or(true, |c| {
+                                            !c.matches_config(
+                                                &config.llm_api_url,
+                                                &config.llm_api_key,
+                                                &config.llm_model,
+                                            )
+                                        });
+                                    if needs_new {
+                                        let new_client = LLMClient::new(
+                                            config.llm_api_url.clone(),
+                                            config.llm_api_key.clone(),
+                                            config.llm_model.clone(),
+                                        );
+                                        *cached = Some(new_client.clone());
+                                        new_client
+                                    } else {
+                                        cached.as_ref().unwrap().clone()
+                                    }
+                                };
                                 let result = match llm.correct(&transcription).await {
                                     Ok(corrected) => {
                                         let _ = app_clone.emit("llm-complete", &corrected);
