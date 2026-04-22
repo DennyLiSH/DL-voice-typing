@@ -10,6 +10,11 @@
 ///                              Injecting → Idle
 /// * → Idle  (error/cancel)
 /// ```
+
+/// Pre-allocated audio buffer capacity: 60 seconds at 48 kHz.
+/// Prevents dynamic reallocation during recording.
+const AUDIO_BUFFER_CAPACITY: usize = 48_000 * 60;
+
 #[derive(Debug)]
 pub enum AppState {
     /// No recording in progress.
@@ -63,7 +68,7 @@ impl StateMachine {
         match &self.state {
             AppState::Idle => {
                 self.state = AppState::Recording {
-                    audio_buffer: Vec::new(),
+                    audio_buffer: Vec::with_capacity(AUDIO_BUFFER_CAPACITY),
                 };
                 Ok(())
             }
