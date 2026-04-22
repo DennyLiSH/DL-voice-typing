@@ -123,40 +123,51 @@ fn f32_to_i16_clamped(samples: &[f32]) -> Vec<i16> {
         .collect()
 }
 
-/// Write a standard 16-bit mono PCM WAV file.
+/// Write a standard 16-bit mono PCM WAV file using streaming I/O.
 fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Result<(), AppError> {
+    use std::io::Write;
+
     let num_channels: u16 = 1;
     let bits_per_sample: u16 = 16;
     let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample / 8) as u32;
     let block_align = num_channels * (bits_per_sample / 8);
     let data_size = pcm_data.len() as u32 * (bits_per_sample / 8) as u32;
-    let file_size = 36 + data_size; // RIFF header size minus 8
+    let file_size = 36 + data_size;
 
-    let mut buf = Vec::with_capacity(44 + pcm_data.len() * 2);
+    let file = std::fs::File::create(path)?;
+    let mut w = std::io::BufWriter::new(file);
 
     // RIFF header
-    buf.extend_from_slice(b"RIFF");
-    buf.extend_from_slice(&file_size.to_le_bytes());
-    buf.extend_from_slice(b"WAVE");
+    w.write_all(b"RIFF")?;
+    w.write_all(&file_size.to_le_bytes())?;
+    w.write_all(b"WAVE")?;
 
     // fmt sub-chunk
-    buf.extend_from_slice(b"fmt ");
-    buf.extend_from_slice(&16u32.to_le_bytes()); // sub-chunk size
-    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM format
-    buf.extend_from_slice(&num_channels.to_le_bytes());
-    buf.extend_from_slice(&sample_rate.to_le_bytes());
-    buf.extend_from_slice(&byte_rate.to_le_bytes());
-    buf.extend_from_slice(&block_align.to_le_bytes());
-    buf.extend_from_slice(&bits_per_sample.to_le_bytes());
+    w.write_all(b"fmt ")?;
+    w.write_all(&16u32.to_le_bytes())?;
+    w.write_all(&1u16.to_le_bytes())?;
+    w.write_all(&num_channels.to_le_bytes())?;
+    w.write_all(&sample_rate.to_le_bytes())?;
+    w.write_all(&byte_rate.to_le_bytes())?;
+    w.write_all(&block_align.to_le_bytes())?;
+    w.write_all(&bits_per_sample.to_le_bytes())?;
 
-    // data sub-chunk
-    buf.extend_from_slice(b"data");
-    buf.extend_from_slice(&data_size.to_le_bytes());
-    for &sample in pcm_data {
-        buf.extend_from_slice(&sample.to_le_bytes());
+    // data sub-chunk header
+    w.write_all(b"data")?;
+    w.write_all(&data_size.to_le_bytes())?;
+
+    // Stream PCM samples in 8KB chunks.
+    const CHUNK_SAMPLES: usize = 4096;
+    for chunk in pcm_data.chunks(CHUNK_SAMPLES) {
+        let mut buf = [0u8; CHUNK_SAMPLES * 2];
+        for (i, &sample) in chunk.iter().enumerate() {
+            let le = sample.to_le_bytes();
+            buf[i * 2] = le[0];
+            buf[i * 2 + 1] = le[1];
+        }
+        w.write_all(&buf[..chunk.len() * 2])?;
     }
 
-    fs::write(path, buf)?;
     Ok(())
 }
 
