@@ -134,20 +134,6 @@ pub fn make_hotkey_callback(
                             return;
                         }
 
-                        // Save training data if enabled (audio first, text later).
-                        let cc = config_cache.clone();
-                        let save_result = if let (Some(sr), Ok(config)) =
-                            (sample_rate, AppConfig::read_cached(&cc))
-                        {
-                            if config.data_saving_enabled && !config.data_saving_path.is_empty() {
-                                crate::data_saving::save_audio(&audio_data, sr, &config).ok()
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
                         // Resample to 16kHz for Whisper.
                         let native_rate = sample_rate.unwrap_or(48000);
                         let resampled = crate::data_saving::resample(
@@ -156,6 +142,10 @@ pub fn make_hotkey_callback(
                             crate::data_saving::TARGET_SAMPLE_RATE,
                         );
 
+                        // Capture state for async task.
+                        let sr_for_save = native_rate;
+                        let audio_for_save = audio_data; // Move ownership into async task
+
                         // Clone references for the async task.
                         let engine_clone = engine.clone();
                         let sm_clone = sm.clone();
@@ -163,63 +153,84 @@ pub fn make_hotkey_callback(
                         let app_clone = app.clone();
                         let ph_clone = perf_history.clone();
                         let cached_llm_clone = cached_llm.clone();
+                        let cc_clone = config_cache.clone();
                         let t_press_for_e2e =
                             t_release - Duration::from_millis(perf.audio_duration_ms.unwrap_or(0));
 
                         tauri::async_runtime::spawn(async move {
-                            // -- Transcription (offloaded to blocking thread) --
-                            let t_transcribe = Instant::now();
+                            // Read config once for all subsequent operations.
+                            let config = AppConfig::read_cached(&cc_clone).unwrap_or_default();
+
+                            // -- Save audio and transcribe in parallel --
+                            let save_config = config.clone();
+                            let save_handle = tokio::task::spawn_blocking(move || {
+                                if save_config.data_saving_enabled
+                                    && !save_config.data_saving_path.is_empty()
+                                {
+                                    crate::data_saving::save_audio(
+                                        &audio_for_save,
+                                        sr_for_save,
+                                        &save_config,
+                                    )
+                                    .ok()
+                                } else {
+                                    None
+                                }
+                            });
+
                             let engine_ref = engine_clone.clone();
-                            let samples_owned = resampled.clone();
-                            let transcription =
-                                match tauri::async_runtime::spawn_blocking(move || {
+                            let transcribe_handle =
+                                tokio::task::spawn_blocking(move || {
                                     match crate::util::lock_mutex(&engine_ref, "engine") {
-                                        Some(e) => e.transcribe_sync(&samples_owned),
+                                        Some(e) => e.transcribe_sync(&resampled),
                                         None => Err(crate::error::AppError::Speech(
                                             "engine lock poisoned".to_string(),
                                         )),
                                     }
-                                })
-                                .await
-                                {
-                                    Ok(Ok(text)) => {
-                                        let _ = app_clone.emit("transcription-complete", &text);
-                                        {
-                                            if let Some(mut s) =
-                                                crate::util::lock_mutex(&sm_clone, "state_machine")
-                                            {
-                                                let _ = s.add_partial_result(text.clone());
-                                            }
-                                        }
-                                        text
-                                    }
-                                    Ok(Err(e)) => {
-                                        let _ = app_clone.emit("speech-error", e.to_string());
+                                });
+
+                            let t_transcribe = Instant::now();
+                            let (save_result, transcription_result) =
+                                tokio::join!(save_handle, transcribe_handle);
+                            let save_result = save_result.unwrap_or(None);
+
+                            let transcription = match transcription_result {
+                                Ok(Ok(text)) => {
+                                    let _ = app_clone.emit("transcription-complete", &text);
+                                    {
                                         if let Some(mut s) =
                                             crate::util::lock_mutex(&sm_clone, "state_machine")
                                         {
-                                            s.reset();
+                                            let _ = s.add_partial_result(text.clone());
                                         }
-                                        if let Some(win) = app_clone.get_webview_window("floating")
-                                        {
-                                            let _ = win.hide();
-                                        }
-                                        return;
                                     }
-                                    Err(e) => {
-                                        let _ = app_clone.emit("speech-error", e.to_string());
-                                        if let Some(mut s) =
-                                            crate::util::lock_mutex(&sm_clone, "state_machine")
-                                        {
-                                            s.reset();
-                                        }
-                                        if let Some(win) = app_clone.get_webview_window("floating")
-                                        {
-                                            let _ = win.hide();
-                                        }
-                                        return;
+                                    text
+                                }
+                                Ok(Err(e)) => {
+                                    let _ = app_clone.emit("speech-error", e.to_string());
+                                    if let Some(mut s) =
+                                        crate::util::lock_mutex(&sm_clone, "state_machine")
+                                    {
+                                        s.reset();
                                     }
-                                };
+                                    if let Some(win) = app_clone.get_webview_window("floating") {
+                                        let _ = win.hide();
+                                    }
+                                    return;
+                                }
+                                Err(e) => {
+                                    let _ = app_clone.emit("speech-error", e.to_string());
+                                    if let Some(mut s) =
+                                        crate::util::lock_mutex(&sm_clone, "state_machine")
+                                    {
+                                        s.reset();
+                                    }
+                                    if let Some(win) = app_clone.get_webview_window("floating") {
+                                        let _ = win.hide();
+                                    }
+                                    return;
+                                }
+                            };
                             perf.transcription_ms = Some(t_transcribe.elapsed().as_millis() as u64);
 
                             // Skip LLM + injection if transcription is empty (all segments
@@ -240,7 +251,6 @@ pub fn make_hotkey_callback(
                             }
 
                             // -- LLM Correction (optional) --
-                            let config = AppConfig::read_cached(&cc).unwrap_or_default();
                             perf.llm_enabled = config.llm_enabled;
                             let final_text = if config.llm_enabled {
                                 if let Some(mut s) =
