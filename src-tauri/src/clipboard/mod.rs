@@ -65,7 +65,7 @@ impl Default for ClipboardManager {
 /// Read text from the Windows clipboard using raw Win32 API.
 fn read_clipboard() -> Result<String, AppError> {
     use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
-    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 
     unsafe {
         OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
@@ -75,18 +75,27 @@ fn read_clipboard() -> Result<String, AppError> {
             let handle = GetClipboardData(13u32)
                 .map_err(|e| AppError::Clipboard(format!("get data failed: {e}")))?;
 
-            // GlobalLock accepts Param<HGLOBAL>, but GetClipboardData returns HANDLE.
-            // We need to use the raw handle value.
             let ptr = GlobalLock(windows::Win32::Foundation::HGLOBAL(handle.0));
             if ptr.is_null() {
                 return Err(AppError::Clipboard("lock failed: null pointer".to_string()));
             }
 
-            let mut len = 0usize;
+            // Use GlobalSize for O(1) string length instead of O(n) null scan.
+            let block_size =
+                GlobalSize(windows::Win32::Foundation::HGLOBAL(handle.0));
+            let len = if block_size > 0 {
+                (block_size / 2).saturating_sub(1) as usize
+            } else {
+                // Fallback: scan for null terminator.
+                let u16_ptr = ptr as *const u16;
+                let mut l = 0usize;
+                while *u16_ptr.add(l) != 0 {
+                    l += 1;
+                }
+                l
+            };
+
             let u16_ptr = ptr as *const u16;
-            while *u16_ptr.add(len) != 0 {
-                len += 1;
-            }
             let slice = std::slice::from_raw_parts(u16_ptr, len);
             let text = String::from_utf16(slice)
                 .map_err(|e| AppError::Clipboard(format!("utf16 decode failed: {e}")))?;
