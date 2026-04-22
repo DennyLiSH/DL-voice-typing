@@ -11,10 +11,6 @@
 /// * → Idle  (error/cancel)
 /// ```
 
-/// Pre-allocated audio buffer capacity: 60 seconds at 48 kHz.
-/// Prevents dynamic reallocation during recording.
-const AUDIO_BUFFER_CAPACITY: usize = 48_000 * 60;
-
 #[derive(Debug)]
 pub enum AppState {
     /// No recording in progress.
@@ -51,6 +47,10 @@ pub struct TransitionError {
 pub struct StateMachine {
     state: AppState,
 }
+
+// Pre-allocated audio buffer capacity: 60 seconds at 48 kHz.
+// Prevents dynamic reallocation during recording.
+const AUDIO_BUFFER_CAPACITY: usize = 48_000 * 60;
 
 impl StateMachine {
     pub fn new() -> Self {

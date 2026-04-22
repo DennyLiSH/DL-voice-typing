@@ -64,8 +64,7 @@ pub fn run() {
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
     let clipboard_manager = Arc::new(Mutex::new(clipboard::ClipboardManager::new()));
     let perf_history = Arc::new(PerfHistory::new());
-    let cached_llm: Arc<Mutex<Option<crate::llm::LLMClient>>> =
-        Arc::new(Mutex::new(None));
+    let cached_llm: Arc<Mutex<Option<crate::llm::LLMClient>>> = Arc::new(Mutex::new(None));
     let shutting_down = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()

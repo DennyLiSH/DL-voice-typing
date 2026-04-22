@@ -98,8 +98,16 @@ pub fn save_settings(
                 .state::<Arc<Mutex<Option<crate::llm::LLMClient>>>>()
                 .inner()
                 .clone();
-            let callback =
-                make_hotkey_callback(sm, ac, engine, cb, ph_clone, app_clone.clone(), cc, cached_llm);
+            let callback = make_hotkey_callback(
+                sm,
+                ac,
+                engine,
+                cb,
+                ph_clone,
+                app_clone.clone(),
+                cc,
+                cached_llm,
+            );
 
             // Try registering the new key.
             match hm.register(&new_key, callback) {
@@ -130,8 +138,16 @@ pub fn save_settings(
                         .state::<Arc<Mutex<Option<crate::llm::LLMClient>>>>()
                         .inner()
                         .clone();
-                    let fallback_callback =
-                        make_hotkey_callback(sm2, ac2, engine2, cb2, ph2, app_clone.clone(), cc2, cached_llm2);
+                    let fallback_callback = make_hotkey_callback(
+                        sm2,
+                        ac2,
+                        engine2,
+                        cb2,
+                        ph2,
+                        app_clone.clone(),
+                        cc2,
+                        cached_llm2,
+                    );
                     let _ = hm.register(&old_key, fallback_callback);
                     let _ = tx.send(Err(format!(
                         "新热键注册失败({e})，已回退到旧热键: {old_key}"

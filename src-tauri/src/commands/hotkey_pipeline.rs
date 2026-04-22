@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 use super::review::{PendingReview, ReviewData};
 
 /// Build the hotkey callback that starts/stops recording and runs the full pipeline.
+#[allow(clippy::too_many_arguments)]
 pub fn make_hotkey_callback(
     sm: Arc<Mutex<StateMachine>>,
     ac: Arc<Mutex<AudioCapture>>,
@@ -180,13 +181,14 @@ pub fn make_hotkey_callback(
 
                             let engine_ref = engine_clone.clone();
                             let transcribe_handle =
-                                tokio::task::spawn_blocking(move || {
-                                    match crate::util::lock_mutex(&engine_ref, "engine") {
-                                        Some(e) => e.transcribe_sync(&resampled),
-                                        None => Err(crate::error::AppError::Speech(
-                                            "engine lock poisoned".to_string(),
-                                        )),
-                                    }
+                                tokio::task::spawn_blocking(move || match crate::util::lock_mutex(
+                                    &engine_ref,
+                                    "engine",
+                                ) {
+                                    Some(e) => e.transcribe_sync(&resampled),
+                                    None => Err(crate::error::AppError::Speech(
+                                        "engine lock poisoned".to_string(),
+                                    )),
                                 });
 
                             let t_transcribe = Instant::now();
@@ -265,15 +267,13 @@ pub fn make_hotkey_callback(
                                     let mut cached =
                                         crate::util::lock_mutex(&cached_llm_clone, "cached_llm")
                                             .expect("cached_llm lock poisoned");
-                                    let needs_new = cached
-                                        .as_ref()
-                                        .map_or(true, |c| {
-                                            !c.matches_config(
-                                                &config.llm_api_url,
-                                                &config.llm_api_key,
-                                                &config.llm_model,
-                                            )
-                                        });
+                                    let needs_new = cached.as_ref().is_none_or(|c| {
+                                        !c.matches_config(
+                                            &config.llm_api_url,
+                                            &config.llm_api_key,
+                                            &config.llm_model,
+                                        )
+                                    });
                                     if needs_new {
                                         let new_client = LLMClient::new(
                                             config.llm_api_url.clone(),

@@ -81,8 +81,7 @@ fn read_clipboard() -> Result<String, AppError> {
             }
 
             // Use GlobalSize for O(1) string length instead of O(n) null scan.
-            let block_size =
-                GlobalSize(windows::Win32::Foundation::HGLOBAL(handle.0));
+            let block_size = GlobalSize(windows::Win32::Foundation::HGLOBAL(handle.0));
             let len = if block_size > 0 {
                 (block_size / 2).saturating_sub(1) as usize
             } else {
