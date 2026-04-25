@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "dl-voice-typing"
-version = "26.4.18"
+version = "26.4.19"
 dependencies = [
  "base64 0.22.1",
  "cmake",
