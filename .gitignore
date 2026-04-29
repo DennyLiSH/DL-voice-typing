@@ -26,3 +26,4 @@ _*
 .gstack/
 
 node_modules/
+pgo-data/
