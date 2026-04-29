@@ -148,10 +148,14 @@ function populateFields(config) {
 // --- Model Select ---
 
 const MODEL_SIZES = [
-    { id: 'tiny', name: 'tiny', size: '75MB' },
-    { id: 'base', name: 'base', size: '142MB' },
-    { id: 'small', name: 'small', size: '466MB' },
-    { id: 'medium', name: 'medium', size: '1.5GB' },
+    { id: 'tiny', name: 'Tiny', size: '75MB' },
+    { id: 'tiny-q8_0', name: 'Tiny Q8_0', size: '~40MB', tag: '量化' },
+    { id: 'base', name: 'Base', size: '142MB' },
+    { id: 'base-q8_0', name: 'Base Q8_0', size: '~75MB', tag: '量化' },
+    { id: 'small', name: 'Small', size: '466MB' },
+    { id: 'small-q8_0', name: 'Small Q8_0', size: '~250MB', tag: '量化' },
+    { id: 'medium', name: 'Medium', size: '1.5GB' },
+    { id: 'medium-q8_0', name: 'Medium Q8_0', size: '~800MB', tag: '量化' },
 ];
 
 function populateModelSelect() {
@@ -163,7 +167,9 @@ function populateModelSelect() {
     for (const m of MODEL_SIZES) {
         const opt = document.createElement('option');
         opt.value = m.id;
-        opt.textContent = `${m.name} (${m.size})`;
+        opt.textContent = m.tag
+            ? `${m.name} (${m.size}) [${m.tag}]`
+            : `${m.name} (${m.size})`;
         if (m.id === selectedModel) opt.selected = true;
         builtInGroup.appendChild(opt);
     }

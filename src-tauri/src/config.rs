@@ -22,9 +22,13 @@ pub const LANGUAGES: &[(&str, &str)] = &[
 /// Available Whisper models: (size, filename, display size).
 pub const WHISPER_MODELS: &[(&str, &str, &str)] = &[
     ("tiny", "ggml-tiny.bin", "75MB"),
+    ("tiny-q8_0", "ggml-tiny-q8_0.bin", "~40MB"),
     ("base", "ggml-base.bin", "142MB"),
+    ("base-q8_0", "ggml-base-q8_0.bin", "~75MB"),
     ("small", "ggml-small.bin", "466MB"),
+    ("small-q8_0", "ggml-small-q8_0.bin", "~250MB"),
     ("medium", "ggml-medium.bin", "1.5GB"),
+    ("medium-q8_0", "ggml-medium-q8_0.bin", "~800MB"),
 ];
 
 /// Download mirror options: (id, display name, base URL).
@@ -41,6 +45,10 @@ pub const DOWNLOAD_MIRRORS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Base URL for downloading Q8_0 quantized Whisper models.
+pub const Q8_MODELS_BASE_URL: &str =
+    "https://huggingface.co/denny-lg/whisper-quantized/resolve/main";
+
 // ---------------------------------------------------------------------------
 // Typed enums for config fields (serde serializes as lowercase strings)
 // ---------------------------------------------------------------------------
@@ -48,10 +56,14 @@ pub const DOWNLOAD_MIRRORS: &[(&str, &str, &str)] = &[
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum WhisperModel {
     Tiny,
+    TinyQ8,
     #[default]
     Base,
+    BaseQ8,
     Small,
+    SmallQ8,
     Medium,
+    MediumQ8,
     Custom(String),
 }
 
@@ -59,9 +71,13 @@ impl Serialize for WhisperModel {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Self::Tiny => serializer.serialize_str("tiny"),
+            Self::TinyQ8 => serializer.serialize_str("tiny-q8_0"),
             Self::Base => serializer.serialize_str("base"),
+            Self::BaseQ8 => serializer.serialize_str("base-q8_0"),
             Self::Small => serializer.serialize_str("small"),
+            Self::SmallQ8 => serializer.serialize_str("small-q8_0"),
             Self::Medium => serializer.serialize_str("medium"),
+            Self::MediumQ8 => serializer.serialize_str("medium-q8_0"),
             Self::Custom(name) => serializer.serialize_str(&format!("custom:{name}")),
         }
     }
@@ -72,9 +88,13 @@ impl<'de> Deserialize<'de> for WhisperModel {
         let s = String::deserialize(deserializer)?;
         match s.as_str() {
             "tiny" => Ok(Self::Tiny),
+            "tiny-q8_0" => Ok(Self::TinyQ8),
             "base" => Ok(Self::Base),
+            "base-q8_0" => Ok(Self::BaseQ8),
             "small" => Ok(Self::Small),
+            "small-q8_0" => Ok(Self::SmallQ8),
             "medium" => Ok(Self::Medium),
+            "medium-q8_0" => Ok(Self::MediumQ8),
             other if other.starts_with("custom:") => {
                 let name = other.strip_prefix("custom:").unwrap();
                 if name.is_empty() {
@@ -94,9 +114,13 @@ impl WhisperModel {
     pub fn filename(&self) -> std::borrow::Cow<'static, str> {
         match self {
             Self::Tiny => "ggml-tiny.bin".into(),
+            Self::TinyQ8 => "ggml-tiny-q8_0.bin".into(),
             Self::Base => "ggml-base.bin".into(),
+            Self::BaseQ8 => "ggml-base-q8_0.bin".into(),
             Self::Small => "ggml-small.bin".into(),
+            Self::SmallQ8 => "ggml-small-q8_0.bin".into(),
             Self::Medium => "ggml-medium.bin".into(),
+            Self::MediumQ8 => "ggml-medium-q8_0.bin".into(),
             Self::Custom(name) => name.clone().into(),
         }
     }
@@ -104,25 +128,42 @@ impl WhisperModel {
     pub fn display_size(&self) -> &'static str {
         match self {
             Self::Tiny => "75MB",
+            Self::TinyQ8 => "~40MB",
             Self::Base => "142MB",
+            Self::BaseQ8 => "~75MB",
             Self::Small => "466MB",
+            Self::SmallQ8 => "~250MB",
             Self::Medium => "1.5GB",
+            Self::MediumQ8 => "~800MB",
             Self::Custom(_) => "",
         }
     }
 
     /// All built-in variants in order (excludes Custom).
     pub fn all_built_in() -> &'static [WhisperModel] {
-        &[Self::Tiny, Self::Base, Self::Small, Self::Medium]
+        &[
+            Self::Tiny,
+            Self::TinyQ8,
+            Self::Base,
+            Self::BaseQ8,
+            Self::Small,
+            Self::SmallQ8,
+            Self::Medium,
+            Self::MediumQ8,
+        ]
     }
 
     /// The size identifier string used by the frontend and download API (e.g. "tiny", "base").
     pub fn size_str(&self) -> &'static str {
         match self {
             Self::Tiny => "tiny",
+            Self::TinyQ8 => "tiny-q8_0",
             Self::Base => "base",
+            Self::BaseQ8 => "base-q8_0",
             Self::Small => "small",
+            Self::SmallQ8 => "small-q8_0",
             Self::Medium => "medium",
+            Self::MediumQ8 => "medium-q8_0",
             Self::Custom(_) => "",
         }
     }
@@ -132,15 +173,27 @@ impl WhisperModel {
         matches!(self, Self::Custom(_))
     }
 
+    /// Returns true if this is a Q8_0 quantized model.
+    pub fn is_q8(&self) -> bool {
+        matches!(
+            self,
+            Self::TinyQ8 | Self::BaseQ8 | Self::SmallQ8 | Self::MediumQ8
+        )
+    }
+
     /// Returns the set of built-in model filenames (for scanner exclusion).
     pub fn built_in_filenames() -> std::collections::HashSet<&'static str> {
         Self::all_built_in()
             .iter()
             .map(|m| match m {
                 Self::Tiny => "ggml-tiny.bin",
+                Self::TinyQ8 => "ggml-tiny-q8_0.bin",
                 Self::Base => "ggml-base.bin",
+                Self::BaseQ8 => "ggml-base-q8_0.bin",
                 Self::Small => "ggml-small.bin",
+                Self::SmallQ8 => "ggml-small-q8_0.bin",
                 Self::Medium => "ggml-medium.bin",
+                Self::MediumQ8 => "ggml-medium-q8_0.bin",
                 _ => unreachable!(),
             })
             .collect()
@@ -530,7 +583,7 @@ mod tests {
         assert_eq!(WhisperModel::Small.display_size(), "466MB");
         assert_eq!(WhisperModel::Medium.display_size(), "1.5GB");
 
-        assert_eq!(WhisperModel::all_built_in().len(), 4);
+        assert_eq!(WhisperModel::all_built_in().len(), 8);
 
         assert_eq!(WhisperModel::Tiny.size_str(), "tiny");
         assert_eq!(WhisperModel::Base.size_str(), "base");
@@ -583,7 +636,7 @@ mod tests {
     #[test]
     fn test_check_whisper_models() {
         let models = check_whisper_models();
-        assert_eq!(models.len(), 4);
+        assert_eq!(models.len(), 8);
         assert!(models.contains_key("tiny"));
         assert!(models.contains_key("base"));
         assert!(models.contains_key("small"));
@@ -805,5 +858,28 @@ mod tests {
         assert_eq!(customs, vec!["my-custom.bin", "other-model.bin"]);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_whisper_model_q8_serde_roundtrip() {
+        for model in [
+            WhisperModel::TinyQ8,
+            WhisperModel::BaseQ8,
+            WhisperModel::SmallQ8,
+            WhisperModel::MediumQ8,
+        ] {
+            let json = serde_json::to_string(&model).unwrap();
+            let parsed: WhisperModel = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, model);
+        }
+    }
+
+    #[test]
+    fn test_whisper_model_q8_helpers() {
+        assert_eq!(WhisperModel::BaseQ8.filename(), "ggml-base-q8_0.bin");
+        assert_eq!(WhisperModel::BaseQ8.display_size(), "~75MB");
+        assert_eq!(WhisperModel::BaseQ8.size_str(), "base-q8_0");
+        assert!(WhisperModel::BaseQ8.is_q8());
+        assert!(!WhisperModel::Base.is_q8());
     }
 }

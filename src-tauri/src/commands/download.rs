@@ -111,7 +111,9 @@ pub async fn download_whisper_model(
     let dir = models_dir();
     std::fs::create_dir_all(&dir).map_err(|e| CommandError::from(AppError::from(e)))?;
 
-    let url = {
+    let url = if model.is_q8() {
+        format!("{}/{filename}", crate::config::Q8_MODELS_BASE_URL)
+    } else {
         let config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
         let base_url = config.download_mirror.base_url();
         format!("{base_url}/{filename}")
@@ -260,7 +262,7 @@ mod tests {
     #[test]
     fn test_check_whisper_models() {
         let models = check_whisper_models();
-        assert_eq!(models.len(), 4);
+        assert_eq!(models.len(), 8);
         assert!(models.contains_key("tiny"));
         assert!(models.contains_key("base"));
         assert!(models.contains_key("small"));
@@ -298,5 +300,15 @@ mod tests {
     fn test_delete_rejects_builtin_filename() {
         let built_in = WhisperModel::built_in_filenames();
         assert!(built_in.contains("ggml-base.bin"));
+    }
+
+    #[test]
+    fn test_download_finds_q8_models() {
+        for id in ["tiny-q8_0", "base-q8_0", "small-q8_0", "medium-q8_0"] {
+            let found = WhisperModel::all_built_in()
+                .iter()
+                .find(|m| m.size_str() == id);
+            assert!(found.is_some(), "Q8 model {id} not found in all_built_in");
+        }
     }
 }
