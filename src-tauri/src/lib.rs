@@ -62,9 +62,11 @@ pub fn run() {
 
     let state_machine = Arc::new(Mutex::new(StateMachine::new()));
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
-    let clipboard_manager = Arc::new(Mutex::new(clipboard::ClipboardManager::new()));
+    let clipboard_manager = Arc::new(Mutex::new(clipboard::AnyClipboard::Windows(
+        clipboard::ClipboardManager::new(),
+    )));
     let perf_history = Arc::new(PerfHistory::new());
-    let cached_llm: Arc<Mutex<Option<crate::llm::LLMClient>>> = Arc::new(Mutex::new(None));
+    let cached_llm: Arc<Mutex<Option<crate::llm::AnyCorrector>>> = Arc::new(Mutex::new(None));
     let shutting_down = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()
@@ -182,14 +184,11 @@ pub fn run() {
 
             // Register hotkey.
             let hotkey_name = config.hotkey.clone();
-            let sm = state_machine.clone();
-            let ac = audio_capture.clone();
-            let cb = clipboard_manager.clone();
-            let ph = perf_history.clone();
             let app_handle = app.handle().clone();
             let mut hotkey_manager = WindowsHotkeyManager::new();
-            let cc = app.state::<ConfigCache>().inner().clone();
-            let callback = commands::make_hotkey_callback(sm, ac, engine, cb, ph, app_handle, cc, cached_llm);
+            let callback = commands::make_hotkey_callback(
+                commands::pipeline_state::PipelineState::from_app(&app_handle),
+            );
             if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
                 warn!("failed to register hotkey '{hotkey_name}': {e}");
             }

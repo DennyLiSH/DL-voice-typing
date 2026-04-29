@@ -1,14 +1,11 @@
 use super::MASKED_MARKER;
 use super::hotkey_pipeline::make_hotkey_callback;
-use crate::audio::AudioCapture;
+use super::pipeline_state::PipelineState;
 use crate::config::AppConfig;
 use crate::error::CommandError;
 use crate::hotkey::HotkeyManager;
 use crate::hotkey::windows::WindowsHotkeyManager;
-use crate::perf::PerfHistory;
-use crate::speech::AnyEngine;
-use crate::state::StateMachine;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
@@ -31,9 +28,6 @@ pub fn save_settings(
     config: AppConfig,
     config_cache: tauri::State<'_, crate::config::ConfigCache>,
     _hotkey_manager: tauri::State<'_, Mutex<WindowsHotkeyManager>>,
-    state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
-    audio_capture: tauri::State<'_, Arc<Mutex<AudioCapture>>>,
-    perf_history: tauri::State<'_, Arc<PerfHistory>>,
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
     // Validate first.
@@ -59,9 +53,6 @@ pub fn save_settings(
     // Re-register hotkey if changed.
     if hotkey_changed {
         let (tx, rx) = mpsc::channel();
-        let sm = state_machine.inner().clone();
-        let ac = audio_capture.inner().clone();
-        let ph = perf_history.inner().clone();
         let old_key = old_config.hotkey;
         let new_key = config.hotkey;
         let app_clone = app.clone();
@@ -84,30 +75,7 @@ pub fn save_settings(
             }
 
             // Build callback with current state references.
-            let engine = app_clone.state::<Arc<Mutex<AnyEngine>>>().inner().clone();
-            let cb = app_clone
-                .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
-                .inner()
-                .clone();
-            let ph_clone = ph.clone();
-            let cc = app_clone
-                .state::<crate::config::ConfigCache>()
-                .inner()
-                .clone();
-            let cached_llm = app_clone
-                .state::<Arc<Mutex<Option<crate::llm::LLMClient>>>>()
-                .inner()
-                .clone();
-            let callback = make_hotkey_callback(
-                sm,
-                ac,
-                engine,
-                cb,
-                ph_clone,
-                app_clone.clone(),
-                cc,
-                cached_llm,
-            );
+            let callback = make_hotkey_callback(PipelineState::from_app(&app_clone));
 
             // Try registering the new key.
             match hm.register(&new_key, callback) {
@@ -116,38 +84,8 @@ pub fn save_settings(
                 }
                 Err(e) => {
                     // Fallback: re-register the old key.
-                    let sm2 = app_clone
-                        .state::<Arc<Mutex<StateMachine>>>()
-                        .inner()
-                        .clone();
-                    let ac2 = app_clone
-                        .state::<Arc<Mutex<AudioCapture>>>()
-                        .inner()
-                        .clone();
-                    let engine2 = app_clone.state::<Arc<Mutex<AnyEngine>>>().inner().clone();
-                    let cb2 = app_clone
-                        .state::<Arc<Mutex<crate::clipboard::ClipboardManager>>>()
-                        .inner()
-                        .clone();
-                    let ph2 = ph.clone();
-                    let cc2 = app_clone
-                        .state::<crate::config::ConfigCache>()
-                        .inner()
-                        .clone();
-                    let cached_llm2 = app_clone
-                        .state::<Arc<Mutex<Option<crate::llm::LLMClient>>>>()
-                        .inner()
-                        .clone();
-                    let fallback_callback = make_hotkey_callback(
-                        sm2,
-                        ac2,
-                        engine2,
-                        cb2,
-                        ph2,
-                        app_clone.clone(),
-                        cc2,
-                        cached_llm2,
-                    );
+                    let fallback_callback =
+                        make_hotkey_callback(PipelineState::from_app(&app_clone));
                     let _ = hm.register(&old_key, fallback_callback);
                     let _ = tx.send(Err(format!(
                         "新热键注册失败({e})，已回退到旧热键: {old_key}"

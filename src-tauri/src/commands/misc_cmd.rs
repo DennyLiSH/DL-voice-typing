@@ -24,7 +24,7 @@ pub async fn test_llm_connection(
         api_key
     };
     let client = LLMClient::new(api_url, api_key, model);
-    client.test_connection().await.map_err(CommandError::from)
+    client.test_connection_sync().map_err(CommandError::from)
 }
 
 /// Return recent performance metrics history.

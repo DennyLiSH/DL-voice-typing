@@ -2,6 +2,7 @@ pub mod config_cmd;
 pub mod download;
 pub mod hotkey_pipeline;
 pub mod misc_cmd;
+pub(crate) mod pipeline_state;
 pub mod review;
 
 /// Sentinel value returned to frontend when an API key exists but should not be exposed.
@@ -13,6 +14,6 @@ pub use download::{
     DownloadState, ModelsResponse, cancel_download, delete_custom_model, download_whisper_model,
     get_whisper_models,
 };
-pub use hotkey_pipeline::make_hotkey_callback;
+pub(crate) use hotkey_pipeline::make_hotkey_callback;
 pub use misc_cmd::{get_compute_mode, get_perf_history, test_llm_connection};
 pub use review::{PendingReview, cancel_review, confirm_inject, get_review_text};
