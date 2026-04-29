@@ -23,7 +23,7 @@ pub enum AppState {
     Transcribing { partial_results: Vec<String> },
 
     /// LLM is refining the transcribed text.
-    LLMRefining { original_text: String },
+    LLMRefining,
 
     /// Transcription done, waiting for user to review/edit text before injection.
     Reviewing { text: String },
@@ -99,10 +99,10 @@ impl StateMachine {
     }
 
     /// Transition from Transcribing to LLMRefining.
-    pub fn start_llm_refining(&mut self, original_text: String) -> Result<(), TransitionError> {
+    pub fn start_llm_refining(&mut self) -> Result<(), TransitionError> {
         match std::mem::replace(&mut self.state, AppState::Idle) {
             AppState::Transcribing { .. } => {
-                self.state = AppState::LLMRefining { original_text };
+                self.state = AppState::LLMRefining;
                 Ok(())
             }
             other => {
@@ -138,7 +138,7 @@ impl StateMachine {
     /// Transition from LLMRefining to Injecting.
     pub fn llm_to_injecting(&mut self, text: String) -> Result<(), TransitionError> {
         match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::LLMRefining { .. } => {
+            AppState::LLMRefining => {
                 self.state = AppState::Injecting {
                     text,
                     saved_clipboard: None,
@@ -175,7 +175,7 @@ impl StateMachine {
     /// Transition from LLMRefining to Reviewing.
     pub fn llm_to_reviewing(&mut self, text: String) -> Result<(), TransitionError> {
         match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::LLMRefining { .. } => {
+            AppState::LLMRefining => {
                 self.state = AppState::Reviewing { text };
                 Ok(())
             }
@@ -275,7 +275,7 @@ impl StateMachine {
             AppState::Idle => "Idle".to_string(),
             AppState::Recording { .. } => "Recording".to_string(),
             AppState::Transcribing { .. } => "Transcribing".to_string(),
-            AppState::LLMRefining { .. } => "LLMRefining".to_string(),
+            AppState::LLMRefining => "LLMRefining".to_string(),
             AppState::Reviewing { .. } => "Reviewing".to_string(),
             AppState::Injecting { .. } => "Injecting".to_string(),
         }
@@ -307,8 +307,8 @@ mod tests {
         assert!(matches!(sm.state(), AppState::Transcribing { .. }));
 
         sm.add_partial_result("hello".to_string()).unwrap();
-        sm.start_llm_refining("hello world".to_string()).unwrap();
-        assert!(matches!(sm.state(), AppState::LLMRefining { .. }));
+        sm.start_llm_refining().unwrap();
+        assert!(matches!(sm.state(), AppState::LLMRefining));
 
         sm.llm_to_injecting("hello world refined".to_string())
             .unwrap();
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_invalid_transitions() {
         let mut sm = StateMachine::new();
-        assert!(sm.start_llm_refining("text".to_string()).is_err());
+        assert!(sm.start_llm_refining().is_err());
         assert!(sm.transcribing_to_injecting("text".to_string()).is_err());
         assert!(sm.llm_to_injecting("text".to_string()).is_err());
         assert!(sm.finish_injecting().is_err());
@@ -395,7 +395,7 @@ mod tests {
         sm.start_recording().unwrap();
         let _ = sm.stop_recording().unwrap();
         sm.add_partial_result("hello".to_string()).unwrap();
-        sm.start_llm_refining("hello world".to_string()).unwrap();
+        sm.start_llm_refining().unwrap();
 
         sm.llm_to_reviewing("hello world refined".to_string())
             .unwrap();

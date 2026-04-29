@@ -72,7 +72,7 @@ fn test_pipeline_with_llm_refining() {
 
     // LLM refining path
     sm.add_partial_result(text.clone()).unwrap();
-    sm.start_llm_refining(text).unwrap();
+    sm.start_llm_refining().unwrap();
 
     // Simulate LLM returning corrected text
     let corrected = "corrected transcription".to_string();
@@ -121,7 +121,7 @@ fn test_pipeline_with_llm_and_review() {
 
     // Transcribing → LLMRefining → Reviewing → Injecting
     sm.add_partial_result(text.clone()).unwrap();
-    sm.start_llm_refining(text).unwrap();
+    sm.start_llm_refining().unwrap();
     sm.llm_to_reviewing("llm corrected".to_string()).unwrap();
     assert!(matches!(sm.state(), AppState::Reviewing { .. }));
 

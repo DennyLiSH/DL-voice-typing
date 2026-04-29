@@ -1,3 +1,4 @@
+use crate::clipboard::AnyClipboard;
 use crate::error::CommandError;
 use crate::state::StateMachine;
 use std::path::PathBuf;
@@ -44,6 +45,20 @@ impl PendingReview {
     pub fn take_foreground(&self) -> Option<isize> {
         crate::util::lock_mutex(&self.foreground_hwnd, "foreground_hwnd").and_then(|mut g| g.take())
     }
+
+    /// Consume the data-saving metadata and update the JSON file with the final text.
+    pub fn consume_and_save(&self, final_text: Option<&str>) {
+        if let Some(mut guard) = crate::util::lock_mutex(&self.data_saving, "pending_data") {
+            if let Some(review_data) = guard.take() {
+                let _ = crate::data_saving::update_json_with_text(
+                    &review_data.json_path,
+                    &review_data.raw_transcription,
+                    review_data.llm_text.as_deref(),
+                    final_text,
+                );
+            }
+        }
+    }
 }
 
 impl Default for PendingReview {
@@ -74,23 +89,39 @@ pub fn get_review_text(
 pub fn confirm_inject(
     text: String,
     state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
-    clipboard: tauri::State<'_, Arc<Mutex<crate::clipboard::ClipboardManager>>>,
+    clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
-    // 1. Transition Reviewing → Injecting
+    // 1. Inject text first (borrows &text, no clone needed)
+    {
+        use crate::clipboard::ClipboardProvider;
+        let cb = clipboard.lock().map_err(|e| CommandError {
+            code: "LOCK".to_string(),
+            message: e.to_string(),
+        })?;
+        if let Err(e) = cb.inject_text(&text) {
+            let _ = app.emit("injection-error", e.to_string());
+        }
+    }
+
+    // 2. Save data before text is consumed (borrows &text)
+    if let Some(pending) = app.try_state::<PendingReview>() {
+        pending.consume_and_save(Some(&text));
+    }
+
+    // 3. Transition Reviewing → Injecting (moves text, no clone)
     {
         let mut sm = state_machine.lock().map_err(|e| CommandError {
             code: "LOCK".to_string(),
             message: e.to_string(),
         })?;
-        sm.reviewing_to_injecting(text.clone())
-            .map_err(|e| CommandError {
-                code: "STATE".to_string(),
-                message: e.to_string(),
-            })?;
+        sm.reviewing_to_injecting(text).map_err(|e| CommandError {
+            code: "STATE".to_string(),
+            message: e.to_string(),
+        })?;
     }
 
-    // 2. Restore focus to target app, then hide review window.
+    // 4. Restore focus to target app, then hide review window.
     let saved_hwnd = app
         .try_state::<PendingReview>()
         .and_then(|p| p.take_foreground());
@@ -101,18 +132,7 @@ pub fn confirm_inject(
         let _ = win.hide();
     }
 
-    // 3. Inject text (clipboard write + Ctrl+V + restore saved clipboard)
-    {
-        let cb = clipboard.lock().map_err(|e| CommandError {
-            code: "LOCK".to_string(),
-            message: e.to_string(),
-        })?;
-        if let Err(e) = cb.inject_text(&text) {
-            let _ = app.emit("injection-error", e.to_string());
-        }
-    }
-
-    // 4. Transition → Idle
+    // 5. Transition → Idle
     {
         let mut sm = state_machine.lock().map_err(|e| CommandError {
             code: "LOCK".to_string(),
@@ -121,24 +141,10 @@ pub fn confirm_inject(
         let _ = sm.finish_injecting();
     }
 
-    // 5. Emit injection-complete + hide floating indicator
+    // 6. Emit injection-complete + hide floating indicator
     let _ = app.emit("injection-complete", ());
     if let Some(win) = app.get_webview_window("floating") {
         let _ = win.hide();
-    }
-
-    // 6. Update data-saving JSON with the final reviewed text.
-    if let Some(pending) = app.try_state::<PendingReview>() {
-        if let Some(mut guard) = crate::util::lock_mutex(&pending.data_saving, "pending_data") {
-            if let Some(review_data) = guard.take() {
-                let _ = crate::data_saving::update_json_with_text(
-                    &review_data.json_path,
-                    &review_data.raw_transcription,
-                    review_data.llm_text.as_deref(),
-                    Some(&text),
-                );
-            }
-        }
     }
 
     Ok(())
@@ -148,7 +154,7 @@ pub fn confirm_inject(
 #[tauri::command]
 pub fn cancel_review(
     state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
-    clipboard: tauri::State<'_, Arc<Mutex<crate::clipboard::ClipboardManager>>>,
+    clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
     // 1. Cancel Reviewing → Idle
@@ -165,6 +171,7 @@ pub fn cancel_review(
 
     // 2. Restore clipboard
     {
+        use crate::clipboard::ClipboardProvider;
         let mut cb = clipboard.lock().map_err(|e| CommandError {
             code: "LOCK".to_string(),
             message: e.to_string(),
@@ -188,16 +195,7 @@ pub fn cancel_review(
 
     // 4. Update data-saving JSON: preserve raw transcription, mark no final text.
     if let Some(pending) = app.try_state::<PendingReview>() {
-        if let Some(mut guard) = crate::util::lock_mutex(&pending.data_saving, "pending_data") {
-            if let Some(review_data) = guard.take() {
-                let _ = crate::data_saving::update_json_with_text(
-                    &review_data.json_path,
-                    &review_data.raw_transcription,
-                    review_data.llm_text.as_deref(),
-                    None,
-                );
-            }
-        }
+        pending.consume_and_save(None);
     }
 
     Ok(())

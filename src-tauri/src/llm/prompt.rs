@@ -2,7 +2,7 @@
 ///
 /// The prompt is conservative: only fixes homophones and typos,
 /// never rewrites or changes meaning.
-pub fn build_correction_prompt() -> String {
+pub fn build_correction_prompt() -> &'static str {
     r#"你是一个语音转文字纠错助手。用户的文字来自语音识别，可能包含同音字错误和拼写错误。
 
 规则：
@@ -20,7 +20,6 @@ pub fn build_correction_prompt() -> String {
 输入: "今天天气不错" → 输出: "今天天气不错"
 输入: "我们用React开发" → 输出: "我们用React开发"
 输入: "这个pickage需要更新" → 输出: "这个package需要更新""#
-        .to_string()
 }
 
 #[cfg(test)]
