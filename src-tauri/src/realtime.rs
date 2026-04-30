@@ -50,29 +50,29 @@ impl RealtimeTranscriber {
         let running_clone = running.clone();
 
         let handle = thread::spawn(move || {
+            let _span = tracing::info_span!("realtime_transcriber").entered();
             while running_clone.load(Ordering::Relaxed) {
-                let audio = match state_machine.lock() {
-                    Ok(sm) => sm.get_audio_buffer().map(|buf| buf.to_vec()),
-                    Err(_) => {
-                        warn!("state machine lock poisoned, exiting realtime loop");
-                        break;
+                // Only clone the last WINDOW_SECS of audio to minimize
+                // lock hold time and memory usage (max ~240K floats vs ~2.88M).
+                let window = {
+                    let samples_needed = (sample_rate * WINDOW_SECS) as usize;
+                    match state_machine.lock() {
+                        Ok(sm) => match sm.get_audio_buffer() {
+                            Some(buf) if !buf.is_empty() => {
+                                let start = buf.len().saturating_sub(samples_needed);
+                                buf[start..].to_vec()
+                            }
+                            Some(_) => {
+                                thread::sleep(Duration::from_millis(STEP_MS));
+                                continue;
+                            }
+                            None => break,
+                        },
+                        Err(_) => {
+                            warn!("state machine lock poisoned, exiting realtime loop");
+                            break;
+                        }
                     }
-                };
-
-                let Some(audio) = audio else {
-                    break;
-                };
-
-                if audio.is_empty() {
-                    thread::sleep(Duration::from_millis(STEP_MS));
-                    continue;
-                }
-
-                let samples_needed = (sample_rate * WINDOW_SECS) as usize;
-                let window = if audio.len() >= samples_needed {
-                    audio[audio.len() - samples_needed..].to_vec()
-                } else {
-                    audio
                 };
 
                 let resampled =
@@ -85,18 +85,26 @@ impl RealtimeTranscriber {
                     continue;
                 }
 
-                let text = match engine.lock() {
-                    Ok(e) => match e.transcribe_sync(&resampled) {
+                let text = {
+                    let t_lock = std::time::Instant::now();
+                    let guard = match engine.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            warn!("engine lock poisoned, exiting realtime loop");
+                            break;
+                        }
+                    };
+                    let wait_ms = t_lock.elapsed().as_millis();
+                    if wait_ms > 100 {
+                        warn!("realtime: engine lock wait {wait_ms}ms");
+                    }
+                    match guard.transcribe_sync(&resampled) {
                         Ok(t) => t,
                         Err(err) => {
                             warn!("realtime transcription error: {err}");
                             thread::sleep(Duration::from_millis(STEP_MS));
                             continue;
                         }
-                    },
-                    Err(_) => {
-                        warn!("engine lock poisoned, exiting realtime loop");
-                        break;
                     }
                 };
 
@@ -116,11 +124,18 @@ impl RealtimeTranscriber {
         }
     }
 
-    /// Signal the background loop to stop and wait for it to finish.
+    /// Signal the background loop to stop and detach the thread.
+    ///
+    /// The thread will exit on its next iteration after seeing `running=false`.
+    /// We detach instead of join to avoid blocking the caller (which may be
+    /// the Windows keyboard hook thread — a blocking join there can cause
+    /// Windows to remove the hook).
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            // Drop without joining — the thread checks `running` each loop
+            // iteration and exits promptly after transcription completes.
+            drop(handle);
         }
     }
 }
@@ -138,25 +153,19 @@ mod tests {
     #[test]
     fn test_extract_last_5s_from_buffer() {
         let samples = vec![1.0f32; 48_000 * 10]; // 10 seconds at 48kHz
-        let expected_len = 48_000 * 5; // last 5 seconds
-        let actual = if samples.len() >= expected_len {
-            samples[samples.len() - expected_len..].to_vec()
-        } else {
-            samples.clone()
-        };
-        assert_eq!(actual.len(), expected_len);
+        let samples_needed = 48_000 * 5;
+        let start = samples.len().saturating_sub(samples_needed);
+        let actual = samples[start..].to_vec();
+        assert_eq!(actual.len(), samples_needed);
         assert!(actual.iter().all(|&v| v == 1.0));
     }
 
     #[test]
     fn test_extract_short_buffer_returns_all() {
         let samples = vec![0.5f32; 1000];
-        let expected_len = 48_000 * 5;
-        let actual = if samples.len() >= expected_len {
-            samples[samples.len() - expected_len..].to_vec()
-        } else {
-            samples.clone()
-        };
+        let samples_needed = 48_000 * 5;
+        let start = samples.len().saturating_sub(samples_needed);
+        let actual = samples[start..].to_vec();
         assert_eq!(actual.len(), 1000);
     }
 
@@ -172,5 +181,40 @@ mod tests {
         let silent = vec![0.0f32; 16000];
         let rms = rms::calculate_rms(&silent);
         assert!(rms < VAD_THRESHOLD, "rms={rms} should be below threshold");
+    }
+
+    #[test]
+    fn test_stop_clears_running_flag() {
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = running.clone();
+        let handle = thread::spawn(move || {
+            while running_clone.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let mut rt = RealtimeTranscriber {
+            running,
+            handle: Some(handle),
+        };
+        rt.stop();
+        assert!(!rt.running.load(Ordering::Relaxed));
+        assert!(rt.handle.is_none());
+    }
+
+    #[test]
+    fn test_drop_signals_stop() {
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = running.clone();
+        let handle = thread::spawn(move || {
+            while running_clone.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let rt = RealtimeTranscriber {
+            running,
+            handle: Some(handle),
+        };
+        drop(rt);
+        // Thread should exit — if this hangs, the drop didn't signal stop.
     }
 }

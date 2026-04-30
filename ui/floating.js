@@ -166,6 +166,8 @@ function hide(delay = 0) {
     document.querySelectorAll('.ripple').forEach(r => r.remove());
     indicator.classList.remove('visible', 'processing');
     indicator.classList.add('exit');
+    transcriptText.textContent = '';
+    transcriptText.classList.remove('visible');
     isSpringActive = false;
     if (rafId) cancelAnimationFrame(rafId);
 }
@@ -175,6 +177,8 @@ function showError() {
     indicator.style.boxShadow = '';
     indicator.classList.remove('processing');
     indicator.classList.add('error', 'visible');
+    transcriptText.textContent = '';
+    transcriptText.classList.remove('visible');
     hide(2000);
 }
 
@@ -190,6 +194,9 @@ function showRecording() {
 }
 
 function showProcessing() {
+    // Clear partial transcript — final transcription is in progress.
+    transcriptText.textContent = '';
+    transcriptText.classList.remove('visible');
     // Let spring settle naturally before switching to CSS animation
     targetScale = 1.0;
     const settleAndTransition = () => {
