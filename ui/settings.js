@@ -29,6 +29,7 @@ const dataSavingPath = document.getElementById('data-saving-path');
 const btnBrowsePath = document.getElementById('btn-browse-path');
 const reviewToggle = document.getElementById('review-toggle');
 const autostartToggle = document.getElementById('autostart-toggle');
+const realtimeToggle = document.getElementById('realtime-transcription-toggle');
 
 // Sidebar elements
 const sidebarItems = document.querySelectorAll('.sidebar-item');
@@ -143,6 +144,8 @@ function populateFields(config) {
     dataSavingPath.value = config.data_saving_path || '';
     reviewToggle.classList.toggle('active', !!config.review_before_paste);
     reviewToggle.setAttribute('aria-checked', String(!!config.review_before_paste));
+    realtimeToggle.classList.toggle('active', !!config.realtime_transcription);
+    realtimeToggle.setAttribute('aria-checked', String(!!config.realtime_transcription));
 }
 
 // --- Model Select ---
@@ -424,6 +427,21 @@ autostartToggle.addEventListener('keydown', (e) => {
     }
 });
 
+// --- Realtime Transcription Toggle ---
+
+realtimeToggle.addEventListener('click', () => {
+    const isActive = realtimeToggle.classList.toggle('active');
+    realtimeToggle.setAttribute('aria-checked', String(isActive));
+    updateDirtyState();
+});
+
+realtimeToggle.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+        e.preventDefault();
+        realtimeToggle.click();
+    }
+});
+
 // --- Folder Browser ---
 
 btnBrowsePath.addEventListener('click', async () => {
@@ -515,7 +533,8 @@ function updateDirtyState() {
         current.data_saving_enabled !== loadedConfig.data_saving_enabled ||
         current.data_saving_path !== loadedConfig.data_saving_path ||
         current.review_before_paste !== loadedConfig.review_before_paste ||
-        current.autostart !== loadedConfig.autostart
+        current.autostart !== loadedConfig.autostart ||
+        current.realtime_transcription !== loadedConfig.realtime_transcription
     );
 
     saveBtn.disabled = !isDirty;
@@ -540,6 +559,7 @@ function getCurrentConfig() {
         data_saving_path: dataSavingPath.value.trim(),
         review_before_paste: reviewToggle.classList.contains('active'),
         autostart: autostartToggle.classList.contains('active'),
+        realtime_transcription: realtimeToggle.classList.contains('active'),
     };
 }
 

@@ -256,6 +256,14 @@ impl StateMachine {
         }
     }
 
+    /// Get a reference to the current audio buffer if recording.
+    pub fn get_audio_buffer(&self) -> Option<&[f32]> {
+        match &self.state {
+            AppState::Recording { audio_buffer } => Some(audio_buffer),
+            _ => None,
+        }
+    }
+
     /// Add a partial transcription result.
     pub fn add_partial_result(&mut self, text: String) -> Result<(), TransitionError> {
         match &mut self.state {

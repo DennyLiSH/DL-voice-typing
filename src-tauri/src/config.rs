@@ -356,6 +356,10 @@ pub struct AppConfig {
     /// Whether to auto-start on system boot.
     #[serde(default)]
     pub autostart: bool,
+
+    /// Whether real-time transcription is enabled.
+    #[serde(default)]
+    pub realtime_transcription: bool,
 }
 
 impl fmt::Debug for AppConfig {
@@ -380,6 +384,7 @@ impl fmt::Debug for AppConfig {
             .field("data_saving_path", &self.data_saving_path)
             .field("review_before_paste", &self.review_before_paste)
             .field("autostart", &self.autostart)
+            .field("realtime_transcription", &self.realtime_transcription)
             .finish()
     }
 }
@@ -399,6 +404,7 @@ impl Default for AppConfig {
             data_saving_path: String::new(),
             review_before_paste: false,
             autostart: false,
+            realtime_transcription: false,
         }
     }
 }

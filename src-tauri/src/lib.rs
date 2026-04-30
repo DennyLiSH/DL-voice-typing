@@ -8,6 +8,7 @@ pub mod error;
 pub mod hotkey;
 pub mod llm;
 pub mod perf;
+pub mod realtime;
 pub mod speech;
 pub mod state;
 pub mod tray;
@@ -181,6 +182,7 @@ pub fn run() {
             app.manage(perf_history.clone());
             app.manage(shutting_down.clone());
             app.manage(cached_llm.clone());
+            app.manage(Arc::new(Mutex::new(None::<realtime::RealtimeTranscriber>)));
 
             // Register hotkey.
             let hotkey_name = config.hotkey.clone();

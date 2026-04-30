@@ -3,6 +3,7 @@ use crate::clipboard::AnyClipboard;
 use crate::config::ConfigCache;
 use crate::llm::AnyCorrector;
 use crate::perf::PerfHistory;
+use crate::realtime::RealtimeTranscriber;
 use crate::speech::AnyEngine;
 use crate::state::StateMachine;
 use std::sync::{Arc, Mutex};
@@ -20,6 +21,7 @@ pub(crate) struct PipelineState {
     pub app: tauri::AppHandle,
     pub config_cache: ConfigCache,
     pub cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
+    pub realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
 }
 
 impl PipelineState {
@@ -35,6 +37,10 @@ impl PipelineState {
             config_cache: app.state::<ConfigCache>().inner().clone(),
             cached_llm: app
                 .state::<Arc<Mutex<Option<AnyCorrector>>>>()
+                .inner()
+                .clone(),
+            realtime_transcriber: app
+                .state::<Arc<Mutex<Option<RealtimeTranscriber>>>>()
                 .inner()
                 .clone(),
         }

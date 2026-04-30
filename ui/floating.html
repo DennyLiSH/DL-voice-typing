@@ -14,9 +14,11 @@
             user-select: none;
             -webkit-user-select: none;
             display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
             position: relative;
+            gap: 8px;
         }
 
         .indicator {
@@ -76,10 +78,33 @@
             pointer-events: none;
             animation: ripple-out 700ms ease-out forwards;
         }
+
+        #transcript-text {
+            max-width: 160px;
+            padding: 4px 8px;
+            background: rgba(18, 40, 48, 0.82);
+            border-radius: 4px;
+            color: #ffffff;
+            font-size: 12px;
+            line-height: 1.4;
+            text-align: center;
+            word-break: break-all;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+            max-height: 60px;
+            overflow: hidden;
+            margin-top: -4px;
+        }
+
+        #transcript-text.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
     <div class="indicator" id="indicator"></div>
+    <div id="transcript-text"></div>
 
     <script src="floating.js"></script>
 </body>

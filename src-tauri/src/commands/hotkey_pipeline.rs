@@ -410,6 +410,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
 
                     // Start audio capture with RMS-emitting callback (~30 fps).
                     let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
+                    let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
                     if let Some(mut ac_guard) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
                         let sm_for_audio = Arc::clone(&ps.sm);
                         let app_for_rms = ps.app.clone();
@@ -430,6 +431,24 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 }
                             }
                         }));
+
+                        // Start real-time transcription if enabled.
+                        if config.realtime_transcription {
+                            if let Some(sr) = ac_guard.sample_rate() {
+                                let rt = crate::realtime::RealtimeTranscriber::start(
+                                    ps.engine.clone(),
+                                    ps.sm.clone(),
+                                    ps.app.clone(),
+                                    sr,
+                                );
+                                if let Some(mut rt_guard) = crate::util::lock_mutex(
+                                    &ps.realtime_transcriber,
+                                    "realtime_transcriber",
+                                ) {
+                                    *rt_guard = Some(rt);
+                                }
+                            }
+                        }
                     }
 
                     let press_latency = t_press.elapsed().as_millis() as u64;
@@ -453,6 +472,13 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                     crate::util::lock_mutex(&ps.ac, "audio_capture").and_then(|a| a.sample_rate());
                 if let Some(mut ac_guard) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
                     ac_guard.stop();
+                }
+
+                // Stop real-time transcription.
+                if let Some(mut rt_guard) =
+                    crate::util::lock_mutex(&ps.realtime_transcriber, "realtime_transcriber")
+                {
+                    rt_guard.take();
                 }
 
                 if let Some(mut sm_guard) = crate::util::lock_mutex(&ps.sm, "state_machine") {

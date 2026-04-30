@@ -1,6 +1,7 @@
 const { listen } = window.__TAURI__.event;
 
 const indicator = document.getElementById('indicator');
+const transcriptText = document.getElementById('transcript-text');
 
 // Scale range — moderate bouncing
 const MIN_SCALE = 0.7;
@@ -212,10 +213,17 @@ function showProcessing() {
 listen('recording-start', () => {
     show();
     showRecording();
+    transcriptText.textContent = '';
+    transcriptText.classList.remove('visible');
 });
 
 listen('audio-rms', (event) => {
     updatePulse(event.payload);
+});
+
+listen('transcription-partial', (event) => {
+    transcriptText.textContent = event.payload;
+    transcriptText.classList.add('visible');
 });
 
 listen('transcription-complete', () => {
