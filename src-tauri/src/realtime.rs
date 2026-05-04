@@ -173,12 +173,11 @@ fn accumulate(accumulated: &str, prev_partial: &str, new_partial: &str) -> Strin
         result.push_str(new_content);
         result
     } else {
-        // No overlap — new topic or Whisper rephrased. Append as separate segment.
-        let mut result = String::with_capacity(accumulated.len() + 1 + new_partial.len());
-        result.push_str(accumulated);
-        result.push(' ');
-        result.push_str(new_partial);
-        result
+        // No overlap — Whisper re-transcribed the same audio with different characters
+        // (common with Chinese homophones, e.g. 二十多年 vs 24小时).
+        // Don't append to prevent text explosion; just return accumulated as-is.
+        // The next cycle will likely find overlap with the updated prev_partial.
+        accumulated.to_string()
     }
 }
 
@@ -225,8 +224,13 @@ impl RealtimeTranscriber {
                     crate::data_saving::resample(&window, sample_rate, TARGET_SAMPLE_RATE);
                 let rms_val = rms::calculate_rms(&resampled);
 
-                if rms_val < VAD_THRESHOLD || !has_speech_energy(&resampled) {
-                    debug!("realtime VAD: silent (rms={rms_val:.4}), skipping");
+                let speech_energy = has_speech_energy(&resampled);
+                debug!(
+                    "realtime VAD: rms={rms_val:.4} energy={speech_energy} samples={}",
+                    resampled.len()
+                );
+                if rms_val < VAD_THRESHOLD || !speech_energy {
+                    debug!("realtime VAD: silent, skipping");
                     sleep_or_stop(&running_clone, STEP_MS);
                     continue;
                 }
@@ -253,6 +257,8 @@ impl RealtimeTranscriber {
                         }
                     }
                 };
+
+                debug!("realtime transcription: {text:?}");
 
                 if !text.is_empty() {
                     // Accumulate: diff against previous partial to extract new content.
@@ -435,9 +441,10 @@ mod tests {
 
     #[test]
     fn test_accumulate_no_overlap() {
-        // User paused and started a new topic
+        // Whisper re-transcribed same audio differently (homophone variation).
+        // Should NOT append — return accumulated as-is to prevent text explosion.
         let result = accumulate("Hello world", "Hello world", "Nice to meet you");
-        assert_eq!(result, "Hello world Nice to meet you");
+        assert_eq!(result, "Hello world");
     }
 
     #[test]
