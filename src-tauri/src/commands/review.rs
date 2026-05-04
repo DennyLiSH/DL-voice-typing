@@ -4,7 +4,7 @@ use crate::state::StateMachine;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Metadata from the transcription pipeline needed for data-saving JSON update.
 pub(crate) struct ReviewData {
@@ -22,6 +22,9 @@ pub struct PendingReview {
     pub(crate) data_saving: Mutex<Option<ReviewData>>,
     /// Foreground window HWND before review window appeared. Used to restore focus.
     foreground_hwnd: Mutex<Option<isize>>,
+    /// Whether the review window was already shown on hotkey press
+    /// (used when realtime_transcription + review_before_paste are both enabled).
+    pub shown_on_press: Mutex<bool>,
 }
 
 impl PendingReview {
@@ -30,6 +33,7 @@ impl PendingReview {
             text: Arc::new(Mutex::new(None)),
             data_saving: Mutex::new(None),
             foreground_hwnd: Mutex::new(None),
+            shown_on_press: Mutex::new(false),
         }
     }
 
@@ -85,14 +89,39 @@ pub fn get_review_text(
 }
 
 /// Confirm the reviewed text and inject it via clipboard paste.
+///
+/// Runs async on the Tokio runtime to avoid blocking the main thread.
 #[tauri::command]
-pub fn confirm_inject(
+pub async fn confirm_inject(
     text: String,
     state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
     clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
-    // 1. Inject text first (borrows &text, no clone needed)
+    info!("confirm_inject: start ({} chars)", text.len());
+
+    // 1. Save data before text is consumed (borrows &text)
+    if let Some(pending) = app.try_state::<PendingReview>() {
+        pending.consume_and_save(Some(&text));
+    }
+
+    // 2. Restore focus to target app BEFORE paste.
+    //    Uses AttachThreadInput + SetForegroundWindow for reliable focus change.
+    //    Review window is NOT hidden yet — Tauri's hide() is async-dispatched
+    //    and may not take effect before the paste.
+    let saved_hwnd = app
+        .try_state::<PendingReview>()
+        .and_then(|p| p.take_foreground());
+    info!("confirm_inject: saved_hwnd={:?}", saved_hwnd);
+    if let Some(hwnd_val) = saved_hwnd {
+        crate::win32::restore_foreground_hwnd(hwnd_val);
+        // Wait for OS to fully process the focus change before simulating
+        // keyboard input. Without this delay, SendInput (Ctrl+V) may still
+        // be dispatched to the review window.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // 3. Inject text (clipboard + Ctrl+V). Target app now has focus.
     {
         use crate::clipboard::ClipboardProvider;
         let cb = clipboard.lock().map_err(|e| CommandError {
@@ -101,39 +130,67 @@ pub fn confirm_inject(
         })?;
         if let Err(e) = cb.inject_text(&text) {
             let _ = app.emit("injection-error", e.to_string());
+            info!("confirm_inject: inject_text failed: {e}");
+        } else {
+            info!("confirm_inject: inject_text succeeded");
         }
     }
 
-    // 2. Save data before text is consumed (borrows &text)
-    if let Some(pending) = app.try_state::<PendingReview>() {
-        pending.consume_and_save(Some(&text));
-    }
-
-    // 3. Transition Reviewing → Injecting (moves text, no clone)
-    {
+    // 4. State transition — handle both Reviewing (normal) and Recording/Transcribing
+    //    (user confirmed early during realtime+review before pipeline finished).
+    let was_reviewing = {
         let mut sm = state_machine.lock().map_err(|e| CommandError {
             code: "LOCK".to_string(),
             message: e.to_string(),
         })?;
-        sm.reviewing_to_injecting(text).map_err(|e| CommandError {
-            code: "STATE".to_string(),
-            message: e.to_string(),
-        })?;
-    }
+        match sm.state() {
+            crate::state::AppState::Reviewing { .. } => {
+                sm.reviewing_to_injecting(text).map_err(|e| CommandError {
+                    code: "STATE".to_string(),
+                    message: e.to_string(),
+                })?;
+                true
+            }
+            crate::state::AppState::Recording { .. }
+            | crate::state::AppState::Transcribing { .. } => {
+                // Early confirm during recording — stop audio capture and
+                // realtime transcriber, then reset state to Idle.
+                info!("confirm_inject: early confirm during recording/transcribing");
+                if let Some(ac) = app.try_state::<Arc<Mutex<crate::audio::AudioCapture>>>() {
+                    if let Some(mut ac_guard) = crate::util::lock_mutex(&ac, "audio_capture") {
+                        ac_guard.stop();
+                    }
+                }
+                if let Some(rt) =
+                    app.try_state::<Arc<Mutex<Option<crate::realtime::RealtimeTranscriber>>>>()
+                {
+                    if let Some(mut rt_guard) = crate::util::lock_mutex(&rt, "realtime_transcriber")
+                    {
+                        if let Some(mut rt) = rt_guard.take() {
+                            rt.stop_and_wait();
+                        }
+                    }
+                }
+                sm.reset();
+                false
+            }
+            _ => {
+                return Err(CommandError {
+                    code: "STATE".to_string(),
+                    message: "cannot confirm from current state".to_string(),
+                });
+            }
+        }
+    };
 
-    // 4. Restore focus to target app, then hide review window.
-    let saved_hwnd = app
-        .try_state::<PendingReview>()
-        .and_then(|p| p.take_foreground());
-    if let Some(hwnd_val) = saved_hwnd {
-        crate::win32::restore_foreground_hwnd(hwnd_val);
-    }
+    // 5. Hide review window AFTER paste (Tauri's hide is async-dispatched
+    //    to main thread, so doing it after ensures paste wasn't affected).
     if let Some(win) = app.get_webview_window("review") {
         let _ = win.hide();
     }
 
-    // 5. Transition → Idle
-    {
+    // 6. Finish state transition (only needed for Reviewing path)
+    if was_reviewing {
         let mut sm = state_machine.lock().map_err(|e| CommandError {
             code: "LOCK".to_string(),
             message: e.to_string(),
@@ -141,32 +198,78 @@ pub fn confirm_inject(
         let _ = sm.finish_injecting();
     }
 
-    // 6. Emit injection-complete + hide floating indicator
+    // 7. Reset shown_on_press flag
+    if let Some(pending) = app.try_state::<PendingReview>() {
+        if let Some(mut guard) = crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
+        {
+            *guard = false;
+        }
+    }
+
+    // 8. Emit injection-complete + hide floating indicator
     let _ = app.emit("injection-complete", ());
     if let Some(win) = app.get_webview_window("floating") {
         let _ = win.hide();
     }
 
+    info!("confirm_inject: done");
     Ok(())
 }
 
 /// Cancel the review and return to idle.
+///
+/// Works from `Reviewing` (normal path), `Recording`, or `Transcribing`
+/// (user cancelled before pipeline finished in realtime+review mode).
+///
+/// Runs async on the Tokio runtime to avoid blocking the main thread.
 #[tauri::command]
-pub fn cancel_review(
+pub async fn cancel_review(
     state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
     clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
-    // 1. Cancel Reviewing → Idle
+    // 1. Cancel: Reviewing/Recording/Transcribing → Idle
     {
         let mut sm = state_machine.lock().map_err(|e| CommandError {
             code: "LOCK".to_string(),
             message: e.to_string(),
         })?;
-        sm.cancel_reviewing().map_err(|e| CommandError {
-            code: "STATE".to_string(),
-            message: e.to_string(),
-        })?;
+        match sm.state() {
+            crate::state::AppState::Reviewing { .. } => {
+                sm.cancel_reviewing().map_err(|e| CommandError {
+                    code: "STATE".to_string(),
+                    message: e.to_string(),
+                })?;
+            }
+            crate::state::AppState::Recording { .. }
+            | crate::state::AppState::Transcribing { .. } => {
+                // Early cancel during recording — stop audio capture and
+                // realtime transcriber, then reset state to Idle.
+                info!("cancel_review: early cancel during recording/transcribing");
+                if let Some(ac) = app.try_state::<Arc<Mutex<crate::audio::AudioCapture>>>() {
+                    if let Some(mut ac_guard) = crate::util::lock_mutex(&ac, "audio_capture") {
+                        ac_guard.stop();
+                    }
+                }
+                if let Some(rt) =
+                    app.try_state::<Arc<Mutex<Option<crate::realtime::RealtimeTranscriber>>>>()
+                {
+                    if let Some(mut rt_guard) = crate::util::lock_mutex(&rt, "realtime_transcriber")
+                    {
+                        if let Some(mut rt) = rt_guard.take() {
+                            rt.stop_and_wait();
+                        }
+                    }
+                }
+                sm.reset();
+            }
+            _ => {
+                return Err(CommandError {
+                    code: "STATE".to_string(),
+                    message: "cannot cancel from current state".to_string(),
+                });
+            }
+        }
     }
 
     // 2. Restore clipboard
@@ -193,7 +296,15 @@ pub fn cancel_review(
         let _ = win.hide();
     }
 
-    // 4. Update data-saving JSON: preserve raw transcription, mark no final text.
+    // 4. Reset shown_on_press flag
+    if let Some(pending) = app.try_state::<PendingReview>() {
+        if let Some(mut guard) = crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
+        {
+            *guard = false;
+        }
+    }
+
+    // 5. Update data-saving JSON: preserve raw transcription, mark no final text.
     if let Some(pending) = app.try_state::<PendingReview>() {
         pending.consume_and_save(None);
     }

@@ -17,6 +17,10 @@ use super::review::{PendingReview, ReviewData};
 /// Check silence and resample audio to 16kHz for Whisper.
 /// Returns `None` if audio is near-silent (hallucination guard).
 fn preprocess_audio(audio: &[f32], native_rate: u32) -> Option<Vec<f32>> {
+    if audio.is_empty() {
+        warn!("preprocess_audio: empty audio buffer, skipping transcription");
+        return None;
+    }
     let rms_val = rms::calculate_rms(audio);
     if rms_val < 0.01 {
         debug!("Silent audio (rms={rms_val:.4}), skipping transcription");
@@ -39,6 +43,12 @@ async fn run_pipeline(
     t_press_for_e2e: Instant,
 ) {
     let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+    info!(
+        "Pipeline: starting (review={}, llm={}, samples={})",
+        config.review_before_paste,
+        config.llm_enabled,
+        resampled.len()
+    );
 
     // -- Save audio and transcribe in parallel --
     let (save_result, transcription) =
@@ -224,6 +234,82 @@ async fn deliver_review(
         }
     }
 
+    // Check if review window was already shown on press (realtime + review mode).
+    let was_shown_on_press = ps
+        .app
+        .try_state::<PendingReview>()
+        .map(|p| {
+            crate::util::lock_mutex(&p.shown_on_press, "shown_on_press")
+                .map(|g| *g)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if was_shown_on_press {
+        // Review window already visible — update the text.
+        info!(
+            "Review: deliver_review() called, was_shown_on_press=true, final_text={} chars",
+            final_text.len()
+        );
+        // Primary mechanism: eval() directly sets textarea via JS, bypassing event/command IPC.
+        if let Some(win) = ps.app.get_webview_window("review") {
+            let json_text = serde_json::to_string(&final_text).unwrap_or_default();
+            let js = format!(
+                "(function(){{\
+                     var t=document.getElementById('review-text');\
+                     if(t){{t.value={json};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
+                     var p=document.getElementById('preview');\
+                     if(p){{p.textContent='';p.classList.remove('visible');}}\
+                     var b=document.getElementById('btn-confirm');\
+                     if(b){{b.disabled=false;}}\
+                 }})()",
+                json = json_text
+            );
+            match win.eval(&js) {
+                Ok(()) => info!(
+                    "Review: set final text via eval OK ({} chars)",
+                    final_text.len()
+                ),
+                Err(e) => warn!("Review: eval FAILED: {}", e),
+            }
+        } else {
+            warn!("Review: get_webview_window('review') returned None");
+        }
+
+        // Secondary: emit event (diagnostic / frontend polling may consume it).
+        match ps.app.emit("review-final-text", &final_text) {
+            Ok(()) => info!(
+                "Review: emitted review-final-text OK ({} chars)",
+                final_text.len()
+            ),
+            Err(e) => warn!(
+                "Review: emit review-final-text FAILED: {} ({} chars)",
+                e,
+                final_text.len()
+            ),
+        }
+
+        // Store data-saving metadata for confirm/cancel to consume later.
+        if let Some(sr) = save_result.as_ref() {
+            if let Some(pending) = ps.app.try_state::<PendingReview>() {
+                if let Some(mut guard) =
+                    crate::util::lock_mutex(&pending.data_saving, "pending_data")
+                {
+                    *guard = Some(ReviewData {
+                        json_path: sr.json_path.clone(),
+                        raw_transcription: transcription,
+                        llm_text: if config.llm_enabled {
+                            Some(final_text)
+                        } else {
+                            None
+                        },
+                    });
+                }
+            }
+        }
+        return;
+    }
+
     // Show the pre-created review window near caret.
     let (cx, cy) = crate::win32::get_caret_screen_pos();
     let mut x = cx + 10.0;
@@ -366,6 +452,28 @@ fn reset_to_idle(ps: &PipelineState) {
     if let Some(win) = ps.app.get_webview_window("floating") {
         let _ = win.hide();
     }
+    // Hide review window if it was shown on press (realtime+review mode).
+    let shown_on_press = ps
+        .app
+        .try_state::<PendingReview>()
+        .map(|p| {
+            crate::util::lock_mutex(&p.shown_on_press, "shown_on_press")
+                .map(|g| *g)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if shown_on_press {
+        if let Some(win) = ps.app.get_webview_window("review") {
+            let _ = win.hide();
+        }
+        if let Some(pending) = ps.app.try_state::<PendingReview>() {
+            if let Some(mut guard) =
+                crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
+            {
+                *guard = false;
+            }
+        }
+    }
 }
 
 /// Build the hotkey callback that starts/stops recording and runs the full pipeline.
@@ -395,27 +503,36 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                 }
 
                 if can_record {
+                    let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+
                     // Show floating window near text caret.
-                    if let Some(win) = ps.app.get_webview_window("floating") {
-                        let (cx, cy) = crate::win32::get_caret_screen_pos();
-                        let win_half = 90.0;
-                        let offset = 40.0;
-                        let x = cx - offset - win_half;
-                        let y = cy - offset - win_half;
-                        let _ =
-                            win.set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
-                        let _ = win.show();
+                    let show_floating =
+                        !config.realtime_transcription || !config.review_before_paste;
+                    info!(
+                        "hotkey press: realtime={}, review={}, show_floating={}",
+                        config.realtime_transcription, config.review_before_paste, show_floating
+                    );
+                    if show_floating {
+                        if let Some(win) = ps.app.get_webview_window("floating") {
+                            let (cx, cy) = crate::win32::get_caret_screen_pos();
+                            let win_half = 90.0;
+                            let offset = 40.0;
+                            let x = cx - offset - win_half;
+                            let y = cy - offset - win_half;
+                            let _ = win
+                                .set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
+                            let _ = win.show();
+                        }
                     }
                     let _ = ps.app.emit("recording-start", ());
 
                     // Start audio capture with RMS-emitting callback (~30 fps).
                     let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
-                    let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
                     if let Some(mut ac_guard) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
                         let sm_for_audio = Arc::clone(&ps.sm);
                         let app_for_rms = ps.app.clone();
                         let last_rms_for_cb = Arc::clone(&last_rms_emit);
-                        let _ = ac_guard.start(Box::new(move |data: &[f32]| {
+                        let start_result = ac_guard.start(Box::new(move |data: &[f32]| {
                             if let Some(mut s) =
                                 crate::util::lock_mutex(&sm_for_audio, "state_machine")
                             {
@@ -431,6 +548,13 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 }
                             }
                         }));
+
+                        if let Err(e) = start_result {
+                            warn!("audio capture start failed: {e}");
+                            reset_to_idle(&ps);
+                            let _ = ps.app.emit("speech-error", format!("录音启动失败: {e}"));
+                            return;
+                        }
 
                         // Start real-time transcription if enabled.
                         if config.realtime_transcription {
@@ -451,6 +575,36 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         }
                     }
 
+                    // Show review window on press when both realtime and review are enabled.
+                    if config.realtime_transcription && config.review_before_paste {
+                        if let Some(pending) = ps.app.try_state::<PendingReview>() {
+                            pending.save_foreground();
+                            if let Some(mut guard) =
+                                crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
+                            {
+                                *guard = true;
+                            }
+                        }
+                        let (cx, cy) = crate::win32::get_caret_screen_pos();
+                        let mut x = cx + 10.0;
+                        let mut y = cy + 20.0;
+                        let win_w = 420.0_f64;
+                        let win_h = 220.0_f64;
+                        if let Some((left, top, right, bottom)) =
+                            crate::win32::get_monitor_work_area(cx as i32, cy as i32)
+                        {
+                            x = x.min(right as f64 - win_w).max(left as f64);
+                            y = y.min(bottom as f64 - win_h).max(top as f64);
+                        }
+                        if let Some(win) = ps.app.get_webview_window("review") {
+                            let _ = win
+                                .set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
+                            let _ = win.show();
+                            let _ = ps.app.emit("review-show", ());
+                            let _ = win.set_focus();
+                        }
+                    }
+
                     let press_latency = t_press.elapsed().as_millis() as u64;
                     let mut perf = PerfMetrics::new(cycle_id);
                     perf.press_latency_ms = Some(press_latency);
@@ -460,6 +614,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                 }
             }
             HotkeyEvent::Released => {
+                info!("hotkey release: event received");
                 let t_release = Instant::now();
 
                 let mut perf = crate::util::lock_mutex(&perf_slot, "perf")
@@ -474,15 +629,67 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                     ac_guard.stop();
                 }
 
-                // Stop real-time transcription.
-                if let Some(mut rt_guard) =
-                    crate::util::lock_mutex(&ps.realtime_transcriber, "realtime_transcriber")
-                {
-                    rt_guard.take();
+                // Stop real-time transcription thread first, then take accumulated text.
+                // Order matters: if we take before stopping, the thread may re-accumulate
+                // from empty and emit a partial that overwrites the textarea.
+                let realtime_accumulated = {
+                    if let Some(mut rt_guard) =
+                        crate::util::lock_mutex(&ps.realtime_transcriber, "realtime_transcriber")
+                    {
+                        if let Some(ref mut rt) = *rt_guard {
+                            rt.stop(); // Signal stop, detach thread
+                            let text = rt.take_accumulated(); // Now safe to take
+                            rt_guard.take(); // consume the transcriber
+                            info!("hotkey release: realtime accumulated={} chars", text.len());
+                            if !text.is_empty() { Some(text) } else { None }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+                let is_realtime_review =
+                    config.realtime_transcription && config.review_before_paste;
+
+                // Realtime+review fast path: accumulated text is already in textarea
+                // via transcription-partial events. Just transition state and return.
+                if is_realtime_review {
+                    if let Some(accumulated) = realtime_accumulated {
+                        info!(
+                            "hotkey release: realtime+review fast path, {} chars already in textarea",
+                            accumulated.len()
+                        );
+                        // Save clipboard before entering review state.
+                        if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
+                            let _ = cb.save();
+                        }
+                        // Proper state transition: Recording → Transcribing → Reviewing.
+                        if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
+                            let _ = s.stop_recording(); // Recording → Transcribing
+                            let _ = s.transcribing_to_reviewing(accumulated.clone());
+                        }
+                        // Hide floating window (if shown).
+                        if let Some(win) = ps.app.get_webview_window("floating") {
+                            let _ = win.hide();
+                        }
+                        return;
+                    } else {
+                        info!(
+                            "hotkey release: realtime+review but no accumulated text, falling through to full pipeline"
+                        );
+                    }
                 }
 
                 if let Some(mut sm_guard) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-                    if let Ok(audio_data) = sm_guard.stop_recording() {
+                    let record_result = sm_guard.stop_recording();
+                    info!(
+                        "hotkey release: stop_recording result={}",
+                        record_result.is_ok()
+                    );
+                    if let Ok(audio_data) = record_result {
                         perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
                         perf.audio_samples = audio_data.len();
                         perf.audio_sample_rate = sample_rate.unwrap_or(48000);
@@ -491,10 +698,16 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         let resampled = match preprocess_audio(&audio_data, native_rate) {
                             Some(r) => r,
                             None => {
+                                info!(
+                                    "hotkey release: preprocess_audio returned None (silent?), samples={}",
+                                    audio_data.len()
+                                );
                                 sm_guard.reset();
                                 if let Some(win) = ps.app.get_webview_window("floating") {
                                     let _ = win.hide();
                                 }
+                                // Hide review window if it was shown on press.
+                                reset_to_idle(&ps);
                                 return;
                             }
                         };
@@ -511,6 +724,14 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                             perf,
                             t_press_for_e2e,
                         ));
+                    } else {
+                        // stop_recording failed — state was already reset
+                        // (e.g., user confirmed/cancelled during recording in
+                        // realtime+review mode). Just hide floating window.
+                        info!("hotkey release: stop_recording failed (state already reset)");
+                        if let Some(win) = ps.app.get_webview_window("floating") {
+                            let _ = win.hide();
+                        }
                     }
                 }
             }
