@@ -3,7 +3,7 @@ use crate::error::AppError;
 pub mod windows;
 
 /// Callback type for hotkey events.
-pub type HotkeyCallback = Box<dyn Fn(HotkeyEvent) + Send>;
+pub type HotkeyCallback = Box<dyn Fn(HotkeyEvent) + Send + Sync>;
 
 /// Hotkey event types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

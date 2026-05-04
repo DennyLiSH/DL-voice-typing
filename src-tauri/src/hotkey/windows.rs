@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::hotkey::{HotkeyCallback, HotkeyEvent, HotkeyManager};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, KBDLLHOOKSTRUCT_FLAGS, LLKHF_INJECTED,
@@ -11,7 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Global state shared between WindowsHotkeyManager and the hook procedure.
 struct HookState {
     key_code: u32,
-    callback: Option<Box<dyn Fn(HotkeyEvent) + Send>>,
+    callback: Option<Arc<dyn Fn(HotkeyEvent) + Send + Sync>>,
 }
 
 static HOOK_STATE: Mutex<Option<HookState>> = Mutex::new(None);
@@ -65,7 +65,7 @@ impl HotkeyManager for WindowsHotkeyManager {
                 .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
             *state = Some(HookState {
                 key_code: vk_code,
-                callback: Some(callback),
+                callback: Some(Arc::from(callback)),
             });
         }
 
@@ -167,15 +167,20 @@ unsafe extern "system" fn keyboard_hook_proc(
             };
 
             if matched {
-                // Re-lock only to get a reference to the callback.
-                // The callback itself must not call register/unregister.
-                let state = HOOK_STATE.lock();
-                if let Ok(guard) = state {
-                    if let Some(ref hook_state) = *guard {
-                        if let Some(ref callback) = hook_state.callback {
-                            callback(event);
-                        }
+                // Clone the Arc callback out of the lock, then release the lock.
+                // This prevents deadlock if the callback triggers window operations
+                // that re-enter the message loop (e.g., SetFocus, ShowWindow).
+                // The callback still runs on the main thread (required for Win32
+                // window operations and cpal audio capture).
+                let callback = {
+                    let state = HOOK_STATE.lock();
+                    match state {
+                        Ok(guard) => guard.as_ref().and_then(|hs| hs.callback.clone()),
+                        Err(_) => None,
                     }
+                };
+                if let Some(cb) = callback {
+                    cb(event);
                 }
             }
         }

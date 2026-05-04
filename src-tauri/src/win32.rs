@@ -116,10 +116,43 @@ pub fn get_foreground_hwnd() -> isize {
 }
 
 /// Restore focus to a saved window handle.
+///
+/// Uses `AttachThreadInput` to share input state with the foreground window's
+/// thread, then calls `SetForegroundWindow` + `BringWindowToTop`. This is
+/// necessary because `SetForegroundWindow` may fail when called from a
+/// non-UI thread (e.g., Tokio runtime) even if the process is the foreground
+/// process — Windows restricts which threads can change the foreground window.
 pub fn restore_foreground_hwnd(hwnd_val: isize) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, SW_RESTORE,
+        SetForegroundWindow, ShowWindow,
+    };
     unsafe {
-        let _ = SetForegroundWindow(HWND(hwnd_val as *mut _));
+        let hwnd = HWND(hwnd_val as *mut _);
+
+        // Attach our thread's input to the foreground window's thread.
+        // This grants us foreground-lock permission from that thread.
+        let fg_hwnd = GetForegroundWindow();
+        let fg_tid = GetWindowThreadProcessId(fg_hwnd, None);
+        let cur_tid = GetCurrentThreadId();
+        let attached = if fg_tid != cur_tid && fg_tid != 0 {
+            AttachThreadInput(cur_tid, fg_tid, true).as_bool()
+        } else {
+            false
+        };
+
+        // Restore window if minimized.
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        let _ = SetForegroundWindow(hwnd);
+        let _ = BringWindowToTop(hwnd);
+
+        // Detach input processing.
+        if attached {
+            let _ = AttachThreadInput(cur_tid, fg_tid, false);
+        }
     }
 }
