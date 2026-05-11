@@ -6,6 +6,32 @@ use cpal::{SampleFormat, Stream, StreamConfig};
 use std::sync::mpsc;
 use tracing::error;
 
+/// Target sample rate for Whisper (16 kHz).
+pub const TARGET_SAMPLE_RATE: u32 = 16_000;
+
+/// Linear interpolation resampling.
+pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == to_rate || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let ratio = from_rate as f64 / to_rate as f64;
+    let output_len = ((samples.len() as f64) / ratio).round() as usize;
+    let mut output = Vec::with_capacity(output_len);
+    for i in 0..output_len {
+        let src_pos = i as f64 * ratio;
+        let src_idx = src_pos as usize;
+        let frac = src_pos - src_idx as f64;
+        let s0 = samples[src_idx];
+        let s1 = if src_idx + 1 < samples.len() {
+            samples[src_idx + 1]
+        } else {
+            s0
+        };
+        output.push((s0 as f64 + frac * (s1 as f64 - s0 as f64)) as f32);
+    }
+    output
+}
+
 /// Callback type for audio data: receives a slice of f32 samples.
 pub type AudioCallback = Box<dyn Fn(&[f32]) + Send>;
 
@@ -122,5 +148,19 @@ mod tests {
     fn test_audio_capture_is_send_sync_via_mutex() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<std::sync::Mutex<AudioCapture>>();
+    }
+
+    #[test]
+    fn test_resample_48k_to_16k() {
+        let samples: Vec<f32> = (0..48_000).map(|i| i as f32).collect();
+        let resampled = resample(&samples, 48_000, 16_000);
+        assert_eq!(resampled.len(), 16_000);
+    }
+
+    #[test]
+    fn test_resample_identity() {
+        let samples = vec![1.0f32, 2.0, 3.0, 4.0];
+        let resampled = resample(&samples, 16_000, 16_000);
+        assert_eq!(resampled, samples);
     }
 }

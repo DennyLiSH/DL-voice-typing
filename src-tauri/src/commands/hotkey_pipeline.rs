@@ -1,4 +1,4 @@
-use crate::audio::rms;
+use crate::audio::{resample, rms, TARGET_SAMPLE_RATE};
 use crate::clipboard::ClipboardProvider;
 use crate::config::{AppConfig, Language};
 use crate::data_saving::SaveResult;
@@ -26,11 +26,7 @@ fn preprocess_audio(audio: &[f32], native_rate: u32) -> Option<Vec<f32>> {
         debug!("Silent audio (rms={rms_val:.4}), skipping transcription");
         return None;
     }
-    Some(crate::data_saving::resample(
-        audio,
-        native_rate,
-        crate::data_saving::TARGET_SAMPLE_RATE,
-    ))
+    Some(resample(audio, native_rate, TARGET_SAMPLE_RATE))
 }
 
 /// Run the full transcription → LLM → injection pipeline asynchronously.

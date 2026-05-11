@@ -7,7 +7,7 @@
 /// Text accumulation: consecutive sliding windows overlap by ~90%.
 /// Each new transcription is diffed against the previous one to extract
 /// only the new content, which is appended to a running accumulated string.
-use crate::audio::rms;
+use crate::audio::{rms, resample, TARGET_SAMPLE_RATE};
 use crate::speech::{AnyEngine, SpeechEngine};
 use crate::state::StateMachine;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -97,9 +97,6 @@ const WINDOW_SECS: u32 = 5;
 
 /// RMS threshold below which audio is considered silent.
 const VAD_THRESHOLD: f32 = 0.02;
-
-/// Target sample rate for Whisper (16 kHz).
-const TARGET_SAMPLE_RATE: u32 = 16_000;
 
 /// Minimum overlap ratio to consider two consecutive partials as continuous speech.
 /// Below this threshold, we treat the new partial as a fresh segment.
@@ -265,7 +262,7 @@ impl RealtimeTranscriber {
                 };
 
                 let resampled =
-                    crate::data_saving::resample(&window, sample_rate, TARGET_SAMPLE_RATE);
+                    resample(&window, sample_rate, TARGET_SAMPLE_RATE);
                 let rms_val = rms::calculate_rms(&resampled);
 
                 let speech_energy = has_speech_energy(&resampled);
