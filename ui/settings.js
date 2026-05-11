@@ -113,6 +113,7 @@ async function init() {
         try {
             const version = await window.__TAURI__.app.getVersion();
             document.getElementById('version-info').textContent = '语文兔 v' + version;
+            document.getElementById('version-display').textContent = 'v' + version;
         } catch (e) {
             // Version display is non-critical, silently ignore
         }
