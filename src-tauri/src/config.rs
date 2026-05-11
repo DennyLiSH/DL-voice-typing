@@ -67,18 +67,74 @@ pub enum WhisperModel {
     Custom(String),
 }
 
+/// Metadata for each built-in Whisper model variant.
+/// Centralizes the variant-to-data mapping in one place.
+struct ModelMeta {
+    variant: WhisperModel,
+    serde_key: &'static str,
+    filename: &'static str,
+    display_size: &'static str,
+}
+
+const BUILT_IN_MODELS: &[ModelMeta] = &[
+    ModelMeta {
+        variant: WhisperModel::Tiny,
+        serde_key: "tiny",
+        filename: "ggml-tiny.bin",
+        display_size: "75MB",
+    },
+    ModelMeta {
+        variant: WhisperModel::TinyQ8,
+        serde_key: "tiny-q8_0",
+        filename: "ggml-tiny-q8_0.bin",
+        display_size: "~40MB",
+    },
+    ModelMeta {
+        variant: WhisperModel::Base,
+        serde_key: "base",
+        filename: "ggml-base.bin",
+        display_size: "142MB",
+    },
+    ModelMeta {
+        variant: WhisperModel::BaseQ8,
+        serde_key: "base-q8_0",
+        filename: "ggml-base-q8_0.bin",
+        display_size: "~75MB",
+    },
+    ModelMeta {
+        variant: WhisperModel::Small,
+        serde_key: "small",
+        filename: "ggml-small.bin",
+        display_size: "466MB",
+    },
+    ModelMeta {
+        variant: WhisperModel::SmallQ8,
+        serde_key: "small-q8_0",
+        filename: "ggml-small-q8_0.bin",
+        display_size: "~250MB",
+    },
+    ModelMeta {
+        variant: WhisperModel::Medium,
+        serde_key: "medium",
+        filename: "ggml-medium.bin",
+        display_size: "1.5GB",
+    },
+    ModelMeta {
+        variant: WhisperModel::MediumQ8,
+        serde_key: "medium-q8_0",
+        filename: "ggml-medium-q8_0.bin",
+        display_size: "~800MB",
+    },
+];
+
 impl Serialize for WhisperModel {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Tiny => serializer.serialize_str("tiny"),
-            Self::TinyQ8 => serializer.serialize_str("tiny-q8_0"),
-            Self::Base => serializer.serialize_str("base"),
-            Self::BaseQ8 => serializer.serialize_str("base-q8_0"),
-            Self::Small => serializer.serialize_str("small"),
-            Self::SmallQ8 => serializer.serialize_str("small-q8_0"),
-            Self::Medium => serializer.serialize_str("medium"),
-            Self::MediumQ8 => serializer.serialize_str("medium-q8_0"),
-            Self::Custom(name) => serializer.serialize_str(&format!("custom:{name}")),
+        if let Some(meta) = BUILT_IN_MODELS.iter().find(|m| m.variant == *self) {
+            serializer.serialize_str(meta.serde_key)
+        } else if let Self::Custom(name) = self {
+            serializer.serialize_str(&format!("custom:{name}"))
+        } else {
+            unreachable!()
         }
     }
 }
@@ -86,57 +142,39 @@ impl Serialize for WhisperModel {
 impl<'de> Deserialize<'de> for WhisperModel {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "tiny" => Ok(Self::Tiny),
-            "tiny-q8_0" => Ok(Self::TinyQ8),
-            "base" => Ok(Self::Base),
-            "base-q8_0" => Ok(Self::BaseQ8),
-            "small" => Ok(Self::Small),
-            "small-q8_0" => Ok(Self::SmallQ8),
-            "medium" => Ok(Self::Medium),
-            "medium-q8_0" => Ok(Self::MediumQ8),
-            other if other.starts_with("custom:") => {
-                let name = other.strip_prefix("custom:").unwrap();
-                if name.is_empty() {
-                    Err(serde::de::Error::custom(
-                        "custom model name cannot be empty",
-                    ))
-                } else {
-                    Ok(Self::Custom(name.to_string()))
-                }
+        if let Some(meta) = BUILT_IN_MODELS.iter().find(|m| m.serde_key == s) {
+            Ok(meta.variant.clone())
+        } else if let Some(name) = s.strip_prefix("custom:") {
+            if name.is_empty() {
+                Err(serde::de::Error::custom(
+                    "custom model name cannot be empty",
+                ))
+            } else {
+                Ok(Self::Custom(name.to_string()))
             }
-            _ => Err(serde::de::Error::custom(format!("unknown model: {s}"))),
+        } else {
+            Err(serde::de::Error::custom(format!("unknown model: {s}")))
         }
     }
 }
 
 impl WhisperModel {
     pub fn filename(&self) -> std::borrow::Cow<'static, str> {
-        match self {
-            Self::Tiny => "ggml-tiny.bin".into(),
-            Self::TinyQ8 => "ggml-tiny-q8_0.bin".into(),
-            Self::Base => "ggml-base.bin".into(),
-            Self::BaseQ8 => "ggml-base-q8_0.bin".into(),
-            Self::Small => "ggml-small.bin".into(),
-            Self::SmallQ8 => "ggml-small-q8_0.bin".into(),
-            Self::Medium => "ggml-medium.bin".into(),
-            Self::MediumQ8 => "ggml-medium-q8_0.bin".into(),
-            Self::Custom(name) => name.clone().into(),
+        if let Some(meta) = BUILT_IN_MODELS.iter().find(|m| m.variant == *self) {
+            meta.filename.into()
+        } else if let Self::Custom(name) = self {
+            name.clone().into()
+        } else {
+            unreachable!()
         }
     }
 
     pub fn display_size(&self) -> &'static str {
-        match self {
-            Self::Tiny => "75MB",
-            Self::TinyQ8 => "~40MB",
-            Self::Base => "142MB",
-            Self::BaseQ8 => "~75MB",
-            Self::Small => "466MB",
-            Self::SmallQ8 => "~250MB",
-            Self::Medium => "1.5GB",
-            Self::MediumQ8 => "~800MB",
-            Self::Custom(_) => "",
-        }
+        BUILT_IN_MODELS
+            .iter()
+            .find(|m| m.variant == *self)
+            .map(|m| m.display_size)
+            .unwrap_or("")
     }
 
     /// All built-in variants in order (excludes Custom).
@@ -155,17 +193,11 @@ impl WhisperModel {
 
     /// The size identifier string used by the frontend and download API (e.g. "tiny", "base").
     pub fn size_str(&self) -> &'static str {
-        match self {
-            Self::Tiny => "tiny",
-            Self::TinyQ8 => "tiny-q8_0",
-            Self::Base => "base",
-            Self::BaseQ8 => "base-q8_0",
-            Self::Small => "small",
-            Self::SmallQ8 => "small-q8_0",
-            Self::Medium => "medium",
-            Self::MediumQ8 => "medium-q8_0",
-            Self::Custom(_) => "",
-        }
+        BUILT_IN_MODELS
+            .iter()
+            .find(|m| m.variant == *self)
+            .map(|m| m.serde_key)
+            .unwrap_or("")
     }
 
     /// Returns true if this is a custom user-added model.
@@ -183,20 +215,7 @@ impl WhisperModel {
 
     /// Returns the set of built-in model filenames (for scanner exclusion).
     pub fn built_in_filenames() -> std::collections::HashSet<&'static str> {
-        Self::all_built_in()
-            .iter()
-            .map(|m| match m {
-                Self::Tiny => "ggml-tiny.bin",
-                Self::TinyQ8 => "ggml-tiny-q8_0.bin",
-                Self::Base => "ggml-base.bin",
-                Self::BaseQ8 => "ggml-base-q8_0.bin",
-                Self::Small => "ggml-small.bin",
-                Self::SmallQ8 => "ggml-small-q8_0.bin",
-                Self::Medium => "ggml-medium.bin",
-                Self::MediumQ8 => "ggml-medium-q8_0.bin",
-                _ => unreachable!(),
-            })
-            .collect()
+        BUILT_IN_MODELS.iter().map(|m| m.filename).collect()
     }
 }
 
