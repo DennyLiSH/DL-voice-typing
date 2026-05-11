@@ -563,10 +563,18 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         // Start real-time transcription if enabled.
                         if config.realtime_transcription {
                             if let Some(sr) = ac_guard.sample_rate() {
+                                let audio =
+                                    Arc::new(crate::realtime::StateMachineAudioSource::new(
+                                        ps.sm.clone(),
+                                    ));
+                                let emitter =
+                                    Arc::new(crate::realtime::TauriEventEmitter::new(
+                                        ps.app.clone(),
+                                    ));
                                 let rt = crate::realtime::RealtimeTranscriber::start(
+                                    audio,
                                     ps.engine.clone(),
-                                    ps.sm.clone(),
-                                    ps.app.clone(),
+                                    emitter,
                                     sr,
                                 );
                                 if let Some(mut rt_guard) = crate::util::lock_mutex(

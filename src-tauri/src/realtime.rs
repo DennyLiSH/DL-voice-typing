@@ -17,6 +17,61 @@ use std::time::Duration;
 use tauri::Emitter;
 use tracing::{debug, warn};
 
+/// Abstract source of audio samples for real-time transcription.
+/// Decouples the transcriber from the concrete state machine.
+pub trait AudioSource: Send + Sync {
+    /// Returns the most recent `max_samples` audio samples, or `None` if
+    /// the source is unavailable (e.g. not recording).
+    fn get_recent_samples(&self, max_samples: usize) -> Option<Vec<f32>>;
+}
+
+/// Adapter: exposes `StateMachine` audio buffer as an `AudioSource`.
+pub struct StateMachineAudioSource {
+    sm: Arc<Mutex<StateMachine>>,
+}
+
+impl StateMachineAudioSource {
+    pub fn new(sm: Arc<Mutex<StateMachine>>) -> Self {
+        Self { sm }
+    }
+}
+
+impl AudioSource for StateMachineAudioSource {
+    fn get_recent_samples(&self, max_samples: usize) -> Option<Vec<f32>> {
+        let sm = self.sm.lock().ok()?;
+        let buf = sm.get_audio_buffer()?;
+        if buf.is_empty() {
+            return Some(Vec::new());
+        }
+        let start = buf.len().saturating_sub(max_samples);
+        Some(buf[start..].to_vec())
+    }
+}
+
+/// Abstract emitter for partial transcription events.
+/// Decouples the transcriber from Tauri's event system.
+pub trait EventEmitter: Send + Sync {
+    /// Emit accumulated partial text to the frontend.
+    fn emit_partial(&self, text: &str);
+}
+
+/// Adapter: forwards partial events via Tauri's `AppHandle`.
+pub struct TauriEventEmitter {
+    app: tauri::AppHandle,
+}
+
+impl TauriEventEmitter {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl EventEmitter for TauriEventEmitter {
+    fn emit_partial(&self, text: &str) {
+        let _ = self.app.emit("transcription-partial", text);
+    }
+}
+
 /// Sleep for `total_ms`, but wake early if `running` becomes false.
 fn sleep_or_stop(running: &AtomicBool, total_ms: u64) {
     let steps = total_ms.div_ceil(STOP_POLL_MS);
@@ -184,9 +239,9 @@ fn accumulate(accumulated: &str, prev_partial: &str, new_partial: &str) -> Strin
 impl RealtimeTranscriber {
     /// Start the background transcription loop.
     pub fn start(
+        audio: Arc<dyn AudioSource + Send + Sync>,
         engine: Arc<Mutex<AnyEngine>>,
-        state_machine: Arc<Mutex<StateMachine>>,
-        app: tauri::AppHandle,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
         sample_rate: u32,
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
@@ -199,25 +254,14 @@ impl RealtimeTranscriber {
             let mut prev_partial = String::new();
 
             while running_clone.load(Ordering::Relaxed) {
-                let window = {
-                    let samples_needed = (sample_rate * WINDOW_SECS) as usize;
-                    match state_machine.lock() {
-                        Ok(sm) => match sm.get_audio_buffer() {
-                            Some(buf) if !buf.is_empty() => {
-                                let start = buf.len().saturating_sub(samples_needed);
-                                buf[start..].to_vec()
-                            }
-                            Some(_) => {
-                                thread::sleep(Duration::from_millis(SHORT_STEP_MS));
-                                continue;
-                            }
-                            None => break,
-                        },
-                        Err(_) => {
-                            warn!("state machine lock poisoned, exiting realtime loop");
-                            break;
-                        }
+                let samples_needed = (sample_rate * WINDOW_SECS) as usize;
+                let window = match audio.get_recent_samples(samples_needed) {
+                    Some(buf) if !buf.is_empty() => buf,
+                    Some(_) => {
+                        thread::sleep(Duration::from_millis(SHORT_STEP_MS));
+                        continue;
                     }
+                    None => break,
                 };
 
                 let resampled =
@@ -275,7 +319,7 @@ impl RealtimeTranscriber {
 
                     // Only emit if still running — avoid late events after stop signal.
                     if running_clone.load(Ordering::Relaxed) {
-                        let _ = app.emit("transcription-partial", &new_accumulated);
+                        emitter.emit_partial(&new_accumulated);
                     }
                 }
 
@@ -513,5 +557,103 @@ mod tests {
         };
         assert_eq!(rt.take_accumulated(), "test text");
         assert_eq!(rt.take_accumulated(), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // Mock implementations for testing the realtime thread loop
+    // -----------------------------------------------------------------------
+
+    struct MockAudioSource {
+        samples: Vec<f32>,
+    }
+
+    impl MockAudioSource {
+        fn new(samples: Vec<f32>) -> Self {
+            Self { samples }
+        }
+    }
+
+    impl AudioSource for MockAudioSource {
+        fn get_recent_samples(&self, _max_samples: usize) -> Option<Vec<f32>> {
+            Some(self.samples.clone())
+        }
+    }
+
+    struct MockEventEmitter {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockEventEmitter {
+        fn new() -> Self {
+            Self {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl EventEmitter for MockEventEmitter {
+        fn emit_partial(&self, text: &str) {
+            self.events.lock().unwrap().push(text.to_string());
+        }
+    }
+
+    /// Build loud audio (5s @ 16kHz) that passes both RMS and frame-based VAD.
+    fn loud_audio_5s() -> Vec<f32> {
+        vec![0.3f32; 16_000 * 5]
+    }
+
+    #[test]
+    fn test_realtime_loop_emits_partial_events() {
+        let audio = Arc::new(MockAudioSource::new(loud_audio_5s()));
+        let engine = Arc::new(Mutex::new(AnyEngine::new_mock("Hello world")));
+        let emitter = Arc::new(MockEventEmitter::new());
+
+        let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
+
+        // Wait long enough for one transcription cycle (STEP_MS=500 + processing).
+        thread::sleep(Duration::from_millis(800));
+        rt.stop_and_wait();
+
+        let events = emitter.events.lock().unwrap();
+        assert!(!events.is_empty(), "expected at least one partial event");
+        assert_eq!(events.last().unwrap(), "Hello world");
+    }
+
+    #[test]
+    fn test_realtime_loop_silent_audio_no_events() {
+        // All zeros → RMS = 0, below VAD_THRESHOLD → no transcription
+        let audio = Arc::new(MockAudioSource::new(vec![0.0f32; 16_000 * 5]));
+        let engine = Arc::new(Mutex::new(AnyEngine::new_mock("should not emit")));
+        let emitter = Arc::new(MockEventEmitter::new());
+
+        let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
+
+        thread::sleep(Duration::from_millis(800));
+        rt.stop_and_wait();
+
+        let events = emitter.events.lock().unwrap();
+        assert!(events.is_empty(), "silent audio should not produce events");
+    }
+
+    #[test]
+    fn test_realtime_loop_accumulates_multiple_partials() {
+        // Engine returns incrementally longer text on each call.
+        // We simulate this by using a single response; the accumulate logic
+        // deduplicates identical consecutive partials, so we only see one event.
+        let audio = Arc::new(MockAudioSource::new(loud_audio_5s()));
+        let engine = Arc::new(Mutex::new(AnyEngine::new_mock("First")));
+        let emitter = Arc::new(MockEventEmitter::new());
+
+        let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
+
+        // Two cycles → same text emitted twice (accumulate dedups identical).
+        thread::sleep(Duration::from_millis(1_200));
+        rt.stop_and_wait();
+
+        let events = emitter.events.lock().unwrap();
+        // First cycle emits "First", second cycle sees overlap and emits "First" again
+        // because the engine always returns the same text.
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| e == "First"));
     }
 }
