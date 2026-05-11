@@ -1,5 +1,6 @@
 use crate::audio::AudioCapture;
 use crate::clipboard::AnyClipboard;
+use crate::commands::window_controller::window_controller_from_app;
 use crate::config::ConfigCache;
 use crate::llm::AnyCorrector;
 use crate::perf::PerfHistory;
@@ -22,6 +23,7 @@ pub(crate) struct PipelineState {
     pub config_cache: ConfigCache,
     pub cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
     pub realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
+    pub window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
 }
 
 impl PipelineState {
@@ -43,6 +45,7 @@ impl PipelineState {
                 .state::<Arc<Mutex<Option<RealtimeTranscriber>>>>()
                 .inner()
                 .clone(),
+            window_controller: window_controller_from_app(app),
         }
     }
 }

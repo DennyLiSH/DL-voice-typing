@@ -4,6 +4,7 @@ pub mod hotkey_pipeline;
 pub mod misc_cmd;
 pub(crate) mod pipeline_state;
 pub mod review;
+pub mod window_controller;
 
 /// Sentinel value returned to frontend when an API key exists but should not be exposed.
 pub const MASKED_MARKER: &str = "__MASKED__";

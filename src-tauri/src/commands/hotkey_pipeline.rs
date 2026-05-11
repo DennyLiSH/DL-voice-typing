@@ -8,7 +8,7 @@ use crate::perf::PerfMetrics;
 use crate::speech::SpeechEngine;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, Manager, Position};
+use tauri::{Emitter, Manager};
 use tracing::{debug, error, info, warn};
 
 use super::pipeline_state::PipelineState;
@@ -248,42 +248,33 @@ async fn deliver_review(
             final_text.len()
         );
         // Primary mechanism: eval() directly sets textarea via JS, bypassing event/command IPC.
-        if let Some(win) = ps.app.get_webview_window("review") {
-            let json_text = serde_json::to_string(&final_text).unwrap_or_default();
-            let js = format!(
-                "(function(){{\
-                     var t=document.getElementById('review-text');\
-                     if(t){{t.value={json};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
-                     var p=document.getElementById('preview');\
-                     if(p){{p.textContent='';p.classList.remove('visible');}}\
-                     var b=document.getElementById('btn-confirm');\
-                     if(b){{b.disabled=false;}}\
-                 }})()",
-                json = json_text
+        let json_text = serde_json::to_string(&final_text).unwrap_or_default();
+        let js = format!(
+            "(function(){{\
+                 var t=document.getElementById('review-text');\
+                 if(t){{t.value={json};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
+                 var p=document.getElementById('preview');\
+                 if(p){{p.textContent='';p.classList.remove('visible');}}\
+                 var b=document.getElementById('btn-confirm');\
+                 if(b){{b.disabled=false;}}\
+             }})()",
+            json = json_text
+        );
+        if ps.window_controller.eval_review_js(&js) {
+            info!(
+                "Review: set final text via eval OK ({} chars)",
+                final_text.len()
             );
-            match win.eval(&js) {
-                Ok(()) => info!(
-                    "Review: set final text via eval OK ({} chars)",
-                    final_text.len()
-                ),
-                Err(e) => warn!("Review: eval FAILED: {}", e),
-            }
         } else {
             warn!("Review: get_webview_window('review') returned None");
         }
 
         // Secondary: emit event (diagnostic / frontend polling may consume it).
-        match ps.app.emit("review-final-text", &final_text) {
-            Ok(()) => info!(
-                "Review: emitted review-final-text OK ({} chars)",
-                final_text.len()
-            ),
-            Err(e) => warn!(
-                "Review: emit review-final-text FAILED: {} ({} chars)",
-                e,
-                final_text.len()
-            ),
-        }
+        ps.window_controller.emit_review_final_text(&final_text);
+        info!(
+            "Review: emitted review-final-text OK ({} chars)",
+            final_text.len()
+        );
 
         // Store data-saving metadata for confirm/cancel to consume later.
         if let Some(sr) = save_result.as_ref() {
@@ -306,27 +297,10 @@ async fn deliver_review(
         return;
     }
 
-    // Show the pre-created review window near caret.
-    let (cx, cy) = crate::win32::get_caret_screen_pos();
-    let mut x = cx + 10.0;
-    let mut y = cy + 20.0;
-    let win_w = 420.0_f64;
-    let win_h = 220.0_f64;
-    if let Some((left, top, right, bottom)) =
-        crate::win32::get_monitor_work_area(cx as i32, cy as i32)
-    {
-        x = x.min(right as f64 - win_w).max(left as f64);
-        y = y.min(bottom as f64 - win_h).max(top as f64);
+    if let Some(pending) = ps.app.try_state::<PendingReview>() {
+        pending.save_foreground();
     }
-
-    if let Some(win) = ps.app.get_webview_window("review") {
-        if let Some(pending) = ps.app.try_state::<PendingReview>() {
-            pending.save_foreground();
-        }
-        let _ = win.set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
-        let _ = win.show();
-        let _ = ps.app.emit("review-show", ());
-        let _ = win.set_focus();
+    if ps.window_controller.show_review_near_caret() {
         debug!("Review: window shown, review-show emitted");
 
         // Store data-saving metadata for confirm/cancel to consume later.
@@ -363,9 +337,7 @@ async fn deliver_review(
             let _ = s.finish_injecting();
         }
         let _ = ps.app.emit("injection-complete", ());
-        if let Some(win) = ps.app.get_webview_window("floating") {
-            let _ = win.hide();
-        }
+        ps.window_controller.hide_floating();
     }
 }
 
@@ -420,9 +392,7 @@ async fn deliver_direct(
     }
     let _ = ps.app.emit("injection-complete", ());
 
-    if let Some(win) = ps.app.get_webview_window("floating") {
-        let _ = win.hide();
-    }
+    ps.window_controller.hide_floating();
 
     // Update data_saving JSON with transcription.
     if let Some(sr) = save_result {
@@ -449,9 +419,7 @@ fn reset_to_idle(ps: &PipelineState) {
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         s.reset();
     }
-    if let Some(win) = ps.app.get_webview_window("floating") {
-        let _ = win.hide();
-    }
+    ps.window_controller.hide_floating();
     // Hide review window if it was shown on press (realtime+review mode).
     let shown_on_press = ps
         .app
@@ -463,9 +431,7 @@ fn reset_to_idle(ps: &PipelineState) {
         })
         .unwrap_or(false);
     if shown_on_press {
-        if let Some(win) = ps.app.get_webview_window("review") {
-            let _ = win.hide();
-        }
+        ps.window_controller.hide_review();
         if let Some(pending) = ps.app.try_state::<PendingReview>() {
             if let Some(mut guard) =
                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
@@ -513,16 +479,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         config.realtime_transcription, config.review_before_paste, show_floating
                     );
                     if show_floating {
-                        if let Some(win) = ps.app.get_webview_window("floating") {
-                            let (cx, cy) = crate::win32::get_caret_screen_pos();
-                            let win_half = 90.0;
-                            let offset = 40.0;
-                            let x = cx - offset - win_half;
-                            let y = cy - offset - win_half;
-                            let _ = win
-                                .set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
-                            let _ = win.show();
-                        }
+                        ps.window_controller.show_floating_near_caret();
                     }
                     let _ = ps.app.emit("recording-start", ());
 
@@ -593,24 +550,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 *guard = true;
                             }
                         }
-                        let (cx, cy) = crate::win32::get_caret_screen_pos();
-                        let mut x = cx + 10.0;
-                        let mut y = cy + 20.0;
-                        let win_w = 420.0_f64;
-                        let win_h = 220.0_f64;
-                        if let Some((left, top, right, bottom)) =
-                            crate::win32::get_monitor_work_area(cx as i32, cy as i32)
-                        {
-                            x = x.min(right as f64 - win_w).max(left as f64);
-                            y = y.min(bottom as f64 - win_h).max(top as f64);
-                        }
-                        if let Some(win) = ps.app.get_webview_window("review") {
-                            let _ = win
-                                .set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
-                            let _ = win.show();
-                            let _ = ps.app.emit("review-show", ());
-                            let _ = win.set_focus();
-                        }
+                        ps.window_controller.show_review_near_caret();
                     }
 
                     let press_latency = t_press.elapsed().as_millis() as u64;
@@ -680,9 +620,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                             let _ = s.transcribing_to_reviewing(accumulated.clone());
                         }
                         // Hide floating window (if shown).
-                        if let Some(win) = ps.app.get_webview_window("floating") {
-                            let _ = win.hide();
-                        }
+                        ps.window_controller.hide_floating();
                         return;
                     } else {
                         info!(
@@ -711,9 +649,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                     audio_data.len()
                                 );
                                 sm_guard.reset();
-                                if let Some(win) = ps.app.get_webview_window("floating") {
-                                    let _ = win.hide();
-                                }
+                                ps.window_controller.hide_floating();
                                 // Hide review window if it was shown on press.
                                 reset_to_idle(&ps);
                                 return;
@@ -737,9 +673,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         // (e.g., user confirmed/cancelled during recording in
                         // realtime+review mode). Just hide floating window.
                         info!("hotkey release: stop_recording failed (state already reset)");
-                        if let Some(win) = ps.app.get_webview_window("floating") {
-                            let _ = win.hide();
-                        }
+                        ps.window_controller.hide_floating();
                     }
                 }
             }
