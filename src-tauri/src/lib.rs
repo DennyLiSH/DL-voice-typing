@@ -208,11 +208,13 @@ pub fn run() {
 
             // Start watchdog thread to monitor state machine health.
             let watchdog_sm = Arc::clone(&state_machine);
-            let watchdog_app = app.handle().clone();
+            let watchdog_recovery = Arc::new(crate::watchdog::TauriRecoveryActions::new(
+                app.handle().clone(),
+            ));
             std::thread::spawn(move || {
                 let wd = crate::watchdog::Watchdog::new(
                     watchdog_sm,
-                    watchdog_app,
+                    watchdog_recovery,
                     std::time::Duration::from_secs(10),
                     std::time::Duration::from_secs(30),
                 );

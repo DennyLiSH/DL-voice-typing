@@ -5,11 +5,59 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{error, info, warn};
 
+/// Abstract recovery actions performed when the watchdog forces a reset.
+/// Decouples the watchdog from Tauri-specific window names and tooltip text.
+pub trait RecoveryActions: Send + Sync {
+    /// Hide the floating recording indicator window.
+    fn hide_floating_window(&self);
+    /// Hide the review-before-paste window.
+    fn hide_review_window(&self);
+    /// Emit a reset event so the frontend can update its state.
+    fn emit_watchdog_reset(&self);
+    /// Update the tray tooltip to indicate automatic recovery.
+    fn set_tray_recovered(&self);
+}
+
+/// Tauri-based implementation of recovery actions.
+pub struct TauriRecoveryActions {
+    app: AppHandle,
+}
+
+impl TauriRecoveryActions {
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl RecoveryActions for TauriRecoveryActions {
+    fn hide_floating_window(&self) {
+        if let Some(win) = self.app.get_webview_window("floating") {
+            let _ = win.hide();
+        }
+    }
+
+    fn hide_review_window(&self) {
+        if let Some(win) = self.app.get_webview_window("review") {
+            let _ = win.hide();
+        }
+    }
+
+    fn emit_watchdog_reset(&self) {
+        let _ = self.app.emit("watchdog-reset", ());
+    }
+
+    fn set_tray_recovered(&self) {
+        if let Some(tray) = self.app.tray_by_id("default") {
+            let _ = tray.set_tooltip(Some("语文兔 - 已自动恢复"));
+        }
+    }
+}
+
 /// State machine watchdog: periodically checks if the state machine is stuck
 /// in a non-Idle state and forcibly resets it after a threshold.
 pub struct Watchdog {
     sm: Arc<Mutex<StateMachine>>,
-    app: AppHandle,
+    recovery: Arc<dyn RecoveryActions + Send + Sync>,
     check_interval: Duration,
     stuck_threshold: Duration,
     last_non_idle_at: Option<Instant>,
@@ -18,13 +66,13 @@ pub struct Watchdog {
 impl Watchdog {
     pub fn new(
         sm: Arc<Mutex<StateMachine>>,
-        app: AppHandle,
+        recovery: Arc<dyn RecoveryActions + Send + Sync>,
         check_interval: Duration,
         stuck_threshold: Duration,
     ) -> Self {
         Self {
             sm,
-            app,
+            recovery,
             check_interval,
             stuck_threshold,
             last_non_idle_at: None,
@@ -95,22 +143,9 @@ impl Watchdog {
             error!("Watchdog: failed to acquire state_machine lock for reset");
         }
 
-        // Hide floating window
-        if let Some(win) = self.app.get_webview_window("floating") {
-            let _ = win.hide();
-        }
-
-        // Hide review window
-        if let Some(win) = self.app.get_webview_window("review") {
-            let _ = win.hide();
-        }
-
-        // Emit reset event for frontend
-        let _ = self.app.emit("watchdog-reset", ());
-
-        // Update tray tooltip (if accessible)
-        if let Some(tray) = self.app.tray_by_id("default") {
-            let _ = tray.set_tooltip(Some("语文兔 - 已自动恢复"));
-        }
+        self.recovery.hide_floating_window();
+        self.recovery.hide_review_window();
+        self.recovery.emit_watchdog_reset();
+        self.recovery.set_tray_recovered();
     }
 }
