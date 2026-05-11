@@ -278,7 +278,7 @@ impl StateMachine {
         }
     }
 
-    fn state_name(&self) -> String {
+    pub(crate) fn state_name(&self) -> String {
         match self.state {
             AppState::Idle => "Idle".to_string(),
             AppState::Recording { .. } => "Recording".to_string(),

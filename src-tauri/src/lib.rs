@@ -13,6 +13,7 @@ pub mod speech;
 pub mod state;
 pub mod tray;
 pub mod util;
+pub mod watchdog;
 pub mod win32;
 
 use audio::AudioCapture;
