@@ -1,9 +1,31 @@
 use crate::error::AppError;
+use std::sync::mpsc;
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_millis(50);
+const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Execute a clipboard operation on a dedicated thread with a timeout.
+/// Windows OpenClipboard blocks indefinitely if another process holds the clipboard.
+fn with_clipboard_timeout<T>(
+    operation: impl FnOnce() -> Result<T, AppError> + Send + 'static,
+    timeout: Duration,
+    label: &'static str,
+) -> Result<T, AppError>
+where
+    T: Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = operation();
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(timeout)
+        .map_err(|_| AppError::Clipboard(format!("{label} timed out after {timeout:?}")))?
+}
 
 /// Trait for clipboard operations, enabling test seams.
 pub trait ClipboardProvider: Send + Sync {
@@ -135,46 +157,51 @@ impl ClipboardProvider for MockClipboard {
 }
 
 /// Read text from the Windows clipboard using raw Win32 API.
+/// Times out after CLIPBOARD_TIMEOUT if another process holds the clipboard.
 fn read_clipboard() -> Result<String, AppError> {
     use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
     use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 
-    unsafe {
-        OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
+    with_clipboard_timeout(
+        move || unsafe {
+            OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
 
-        let result = (|| -> Result<String, AppError> {
-            let handle = GetClipboardData(13u32)
-                .map_err(|e| AppError::Clipboard(format!("get data failed: {e}")))?;
+            let result = (|| -> Result<String, AppError> {
+                let handle = GetClipboardData(13u32)
+                    .map_err(|e| AppError::Clipboard(format!("get data failed: {e}")))?;
 
-            let ptr = GlobalLock(windows::Win32::Foundation::HGLOBAL(handle.0));
-            if ptr.is_null() {
-                return Err(AppError::Clipboard("lock failed: null pointer".to_string()));
-            }
-
-            let block_size = GlobalSize(windows::Win32::Foundation::HGLOBAL(handle.0));
-            let len = if block_size > 0 {
-                (block_size / 2).saturating_sub(1) as usize
-            } else {
-                let u16_ptr = ptr as *const u16;
-                let mut l = 0usize;
-                while *u16_ptr.add(l) != 0 {
-                    l += 1;
+                let ptr = GlobalLock(windows::Win32::Foundation::HGLOBAL(handle.0));
+                if ptr.is_null() {
+                    return Err(AppError::Clipboard("lock failed: null pointer".to_string()));
                 }
-                l
-            };
 
-            let u16_ptr = ptr as *const u16;
-            let slice = std::slice::from_raw_parts(u16_ptr, len);
-            let text = String::from_utf16(slice)
-                .map_err(|e| AppError::Clipboard(format!("utf16 decode failed: {e}")))?;
+                let block_size = GlobalSize(windows::Win32::Foundation::HGLOBAL(handle.0));
+                let len = if block_size > 0 {
+                    (block_size / 2).saturating_sub(1) as usize
+                } else {
+                    let u16_ptr = ptr as *const u16;
+                    let mut l = 0usize;
+                    while *u16_ptr.add(l) != 0 {
+                        l += 1;
+                    }
+                    l
+                };
 
-            let _ = GlobalUnlock(windows::Win32::Foundation::HGLOBAL(handle.0));
-            Ok(text)
-        })();
+                let u16_ptr = ptr as *const u16;
+                let slice = std::slice::from_raw_parts(u16_ptr, len);
+                let text = String::from_utf16(slice)
+                    .map_err(|e| AppError::Clipboard(format!("utf16 decode failed: {e}")))?;
 
-        let _ = CloseClipboard();
-        result
-    }
+                let _ = GlobalUnlock(windows::Win32::Foundation::HGLOBAL(handle.0));
+                Ok(text)
+            })();
+
+            let _ = CloseClipboard();
+            result
+        },
+        CLIPBOARD_TIMEOUT,
+        "read_clipboard",
+    )
 }
 
 /// Write text to the clipboard, retrying on failure.
@@ -192,37 +219,43 @@ fn write_clipboard_with_retry(text: &str) -> Result<(), AppError> {
 }
 
 /// Write text to the Windows clipboard using raw Win32 API.
+/// Times out after CLIPBOARD_TIMEOUT if another process holds the clipboard.
 fn write_clipboard(text: &str) -> Result<(), AppError> {
     use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
     use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 
-    unsafe {
-        OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
-        EmptyClipboard().map_err(|e| AppError::Clipboard(format!("empty failed: {e}")))?;
+    let text = text.to_string();
+    with_clipboard_timeout(
+        move || unsafe {
+            OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
+            EmptyClipboard().map_err(|e| AppError::Clipboard(format!("empty failed: {e}")))?;
 
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0u16)).collect();
-        let byte_len = wide.len() * 2;
+            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0u16)).collect();
+            let byte_len = wide.len() * 2;
 
-        let hglobal = GlobalAlloc(GMEM_MOVEABLE, byte_len)
-            .map_err(|e| AppError::Clipboard(format!("alloc failed: {e}")))?;
+            let hglobal = GlobalAlloc(GMEM_MOVEABLE, byte_len)
+                .map_err(|e| AppError::Clipboard(format!("alloc failed: {e}")))?;
 
-        let ptr = GlobalLock(hglobal);
-        if ptr.is_null() {
-            return Err(AppError::Clipboard("lock failed".to_string()));
-        }
+            let ptr = GlobalLock(hglobal);
+            if ptr.is_null() {
+                return Err(AppError::Clipboard("lock failed".to_string()));
+            }
 
-        std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr as *mut u16, wide.len());
-        let _ = GlobalUnlock(hglobal);
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr as *mut u16, wide.len());
+            let _ = GlobalUnlock(hglobal);
 
-        let handle = windows::Win32::Foundation::HANDLE(hglobal.0);
-        SetClipboardData(13u32, handle)
-            .map_err(|e| AppError::Clipboard(format!("set data failed: {e}")))?;
+            let handle = windows::Win32::Foundation::HANDLE(hglobal.0);
+            SetClipboardData(13u32, handle)
+                .map_err(|e| AppError::Clipboard(format!("set data failed: {e}")))?;
 
-        let _ = CloseClipboard();
-        Ok(())
-    }
+            let _ = CloseClipboard();
+            Ok(())
+        },
+        CLIPBOARD_TIMEOUT,
+        "write_clipboard",
+    )
 }
 
 /// Simulate Ctrl+V keypress using Win32 SendInput.
@@ -256,6 +289,28 @@ fn simulate_paste() -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_with_clipboard_timeout_success() {
+        let result = with_clipboard_timeout(|| Ok::<_, AppError>(42), Duration::from_secs(5), "test");
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn test_with_clipboard_timeout_times_out() {
+        let result = with_clipboard_timeout(
+            || {
+                thread::sleep(Duration::from_secs(10));
+                Ok::<_, AppError>(42)
+            },
+            Duration::from_millis(100),
+            "test_op",
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("timed out"), "error should mention timeout: {err}");
+        assert!(err.contains("test_op"), "error should mention operation name: {err}");
+    }
 
     #[test]
     fn test_new_clipboard_manager() {
