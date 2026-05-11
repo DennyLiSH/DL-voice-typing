@@ -9,7 +9,7 @@ use crate::speech::SpeechEngine;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, Position};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::pipeline_state::PipelineState;
 use super::review::{PendingReview, ReviewData};
@@ -402,13 +402,17 @@ async fn deliver_direct(
         })
         .await
         {
+            Ok(Ok(())) => {
+                info!("deliver_direct: injection succeeded");
+            }
             Ok(Err(e)) => {
+                warn!("deliver_direct: injection failed: {e}");
                 let _ = ps.app.emit("injection-error", e);
             }
             Err(e) => {
+                error!("deliver_direct: injection task panicked: {e}");
                 let _ = ps.app.emit("injection-error", e.to_string());
             }
-            _ => {}
         }
     }
     perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
