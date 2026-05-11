@@ -8,6 +8,7 @@
     <style>
         :root {
             --bg: #FAFAF8;
+            --surface: #FFFFFF;
             --text: #1A1B1E;
             --text-secondary: rgba(26, 27, 30, 0.85);
             --border: #E0DDD8;
@@ -27,6 +28,7 @@
         @media (prefers-color-scheme: dark) {
             :root {
                 --bg: #1A1B1E;
+                --surface: #222326;
                 --text: #E8E6E3;
                 --text-secondary: rgba(232, 230, 227, 0.85);
                 --border: #38393C;
@@ -400,51 +402,149 @@
         .mode-badge.unloaded { background: rgba(220, 38, 38, 0.1); color: var(--error); }
 
         /* Help page */
-        .help-group {
-            margin-bottom: 8px;
+
+        /* Quick Start Hero */
+        .help-hero {
+            margin-bottom: 24px;
+        }
+
+        .help-hero-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        .help-steps {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .help-step {
+            display: flex;
+            gap: 12px;
+            padding: 10px 0;
+            position: relative;
+        }
+
+        .help-step:not(:last-child)::before {
+            content: '';
+            position: absolute;
+            left: 15px;
+            top: 42px;
+            bottom: -2px;
+            width: 2px;
+            background: var(--border);
+        }
+
+        .help-step-num {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--focus);
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 700;
+            flex-shrink: 0;
+            z-index: 1;
+        }
+
+        .help-step-body {
+            flex: 1;
+            padding-top: 2px;
+        }
+
+        .help-step-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 2px;
+        }
+
+        .help-step-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        /* Accordion */
+        .help-section {
+            margin-bottom: 12px;
             border-radius: 8px;
             background: var(--surface);
+            border: 1px solid var(--border);
             overflow: hidden;
         }
 
-        .help-group summary {
+        .help-section summary {
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            padding: 12px 16px;
+            gap: 10px;
+            padding: 14px 16px;
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
             color: var(--text);
             cursor: pointer;
             list-style: none;
             user-select: none;
+            transition: background 0.15s ease;
         }
 
-        .help-group summary::-webkit-details-marker {
+        .help-section summary:hover {
+            background: var(--sidebar-active-bg);
+        }
+
+        .help-section summary::-webkit-details-marker {
             display: none;
         }
 
-        .help-group summary::after {
-            content: '';
-            width: 16px;
-            height: 16px;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: center;
-            transition: transform 0.2s ease;
+        .help-section-icon {
+            width: 20px;
+            height: 20px;
+            stroke: var(--focus);
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
             flex-shrink: 0;
         }
 
-        .help-group[open] summary::after {
+        .help-section-chevron {
+            width: 20px;
+            height: 20px;
+            stroke: var(--sidebar-icon);
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            flex-shrink: 0;
+            margin-left: auto;
+            transition: transform 0.2s ease;
+        }
+
+        .help-section[open] .help-section-chevron {
             transform: rotate(180deg);
         }
 
-        .help-group-content {
-            padding: 0 16px 16px;
+        .help-section-body {
+            padding: 4px 16px 16px;
         }
 
         .help-item {
-            margin-bottom: 16px;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            transition: border-color 0.15s ease, background 0.15s ease;
+        }
+
+        .help-item:hover {
+            border-color: rgba(58, 186, 180, 0.4);
+            background: var(--sidebar-active-bg);
         }
 
         .help-item:last-child {
@@ -453,13 +553,13 @@
 
         .help-item-title {
             font-size: 13px;
-            font-weight: 500;
+            font-weight: 600;
             color: var(--text);
             margin-bottom: 4px;
         }
 
         .help-item-body {
-            font-size: 13px;
+            font-size: 12px;
             color: var(--text-secondary);
             line-height: 1.5;
         }
@@ -655,62 +755,107 @@
             <div class="page-content" id="page-help" role="tabpanel">
                 <div class="page-title">帮助</div>
 
-                <details class="help-group" open>
-                    <summary class="help-group-title">使用技巧与常见问题</summary>
-                    <div class="help-group-content">
-                        <div class="help-item">
-                            <div class="help-item-title">如何开始录音</div>
-                            <div class="help-item-body">按住热键（默认 RightCtrl）→ 看到浮动窗口出现 → 说话 → 松开热键</div>
+                <!-- Quick Start -->
+                <div class="help-hero">
+                    <div class="help-hero-title">快速开始</div>
+                    <div class="help-steps">
+                        <div class="help-step">
+                            <div class="help-step-num">1</div>
+                            <div class="help-step-body">
+                                <div class="help-step-title">按住热键</div>
+                                <div class="help-step-desc">默认 RightCtrl，按住不放。浮动窗口出现即表示开始录音。</div>
+                            </div>
                         </div>
+                        <div class="help-step">
+                            <div class="help-step-num">2</div>
+                            <div class="help-step-body">
+                                <div class="help-step-title">对着麦克风说话</div>
+                                <div class="help-step-desc">正常音量即可。开启实时转写后，文字会实时显示在浮动窗口中。</div>
+                            </div>
+                        </div>
+                        <div class="help-step">
+                            <div class="help-step-num">3</div>
+                            <div class="help-step-body">
+                                <div class="help-step-title">松开热键</div>
+                                <div class="help-step-desc">松开即触发完整转写（ Whisper ），如有开启 LLM 纠错会随后自动处理。</div>
+                            </div>
+                        </div>
+                        <div class="help-step">
+                            <div class="help-step-num">4</div>
+                            <div class="help-step-body">
+                                <div class="help-step-title">文字自动粘贴</div>
+                                <div class="help-step-desc">转写结果通过剪贴板 + Ctrl+V 注入当前焦点应用。如开启「粘贴前确认」，会先弹出编辑窗口。</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FAQ Accordion -->
+                <details class="help-section" open>
+                    <summary>
+                        <svg class="help-section-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        使用技巧与常见问题
+                        <svg class="help-section-chevron" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                    </summary>
+                    <div class="help-section-body">
                         <div class="help-item">
                             <div class="help-item-title">切换识别语言</div>
-                            <div class="help-item-body">在「通用」设置中选择语言，重新录音生效</div>
+                            <div class="help-item-body">在「通用」设置页选择语言，更改后立即生效，无需重启。</div>
                         </div>
                         <div class="help-item">
                             <div class="help-item-title">实时转写不显示文字</div>
-                            <div class="help-item-body">检查「通用」设置中是否启用了「实时转写」；首次使用需下载模型</div>
+                            <div class="help-item-body">确认「通用」设置中已开启「实时语音转写」开关；同时确保模型已下载完成。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">模型下载慢</div>
-                            <div class="help-item-body">在「模型」设置中切换下载镜像（hf-mirror / HuggingFace）</div>
+                            <div class="help-item-title">模型下载速度慢</div>
+                            <div class="help-item-body">在「模型」设置页切换下载镜像。国内网络推荐 HF-Mirror，国际网络可用 HuggingFace。</div>
                         </div>
                         <div class="help-item">
                             <div class="help-item-title">LLM 纠错未生效</div>
-                            <div class="help-item-body">检查 LLM 配置中的地址、密钥、模型名是否填写正确；点击「测试连接」验证</div>
+                            <div class="help-item-body">检查「LLM」设置页中的 API 地址、密钥、模型名称是否填写正确；点击「测试连接」验证连通性。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">如何关闭开机启动</div>
-                            <div class="help-item-body">在「通用」设置中关闭「开机自动启动」开关</div>
+                            <div class="help-item-title">关闭开机自动启动</div>
+                            <div class="help-item-body">在「通用」设置页关闭「开机自动启动」开关，保存后生效。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">热键冲突</div>
-                            <div class="help-item-body">在「快捷键」设置中更换为其他按键；注意 Windows Fn 键无法被识别</div>
+                            <div class="help-item-title">热键与其他软件冲突</div>
+                            <div class="help-item-body">在「快捷键」设置页更换为其他按键。注意：Windows 的 Fn 键在固件层处理，无法被本软件识别。</div>
+                        </div>
+                        <div class="help-item">
+                            <div class="help-item-title">如何保存训练数据</div>
+                            <div class="help-item-body">在「数据」设置页开启「保存训练数据」，选择保存目录。每次录音后会自动保存 WAV 音频和 JSON 元数据。</div>
                         </div>
                     </div>
                 </details>
 
-                <details class="help-group">
-                    <summary class="help-group-title">已知问题与限制</summary>
-                    <div class="help-group-content">
+                <!-- Known Issues Accordion -->
+                <details class="help-section">
+                    <summary>
+                        <svg class="help-section-icon" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        已知问题与限制
+                        <svg class="help-section-chevron" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+                    </summary>
+                    <div class="help-section-body">
                         <div class="help-item">
-                            <div class="help-item-title">管理员权限应用无法注入</div>
-                            <div class="help-item-body">如果目标窗口以管理员权限运行（如任务管理器），语音兔无法向其粘贴文字</div>
+                            <div class="help-item-title">管理员权限应用无法注入文字</div>
+                            <div class="help-item-body">如果目标窗口以管理员权限运行（如任务管理器、某些 IDE），本软件无法向其粘贴文字。这是 Windows 安全模型的限制。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">剪贴板被占用时卡住</div>
-                            <div class="help-item-body">某些应用（如截图工具、Office）可能长时间占用剪贴板，导致粘贴延迟最多 2 秒</div>
+                            <div class="help-item-title">剪贴板被占用时可能延迟</div>
+                            <div class="help-item-body">某些应用（如截图工具、Office 套件）可能长时间占用剪贴板。本软件已设置 2 秒超时保护，超时会自动报错恢复。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">实时转写准确性</div>
-                            <div class="help-item-body">实时转写使用短音频片段，准确性略低于完整转写（热键松开后的完整识别）</div>
+                            <div class="help-item-title">实时转写准确性较低</div>
+                            <div class="help-item-body">实时转写基于 5 秒滑动窗口的短音频片段，准确性略低于热键松开后对完整录音的全量识别。最终文本以全量识别为准。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">GPU 模式首次加载慢</div>
-                            <div class="help-item-body">首次启用 GPU 加速时，Vulkan 需要编译着色器缓存，耗时约 10-30 秒</div>
+                            <div class="help-item-title">GPU 模式首次加载耗时</div>
+                            <div class="help-item-body">首次启用 GPU 加速时，Vulkan 驱动需要编译着色器缓存，耗时约 10-30 秒。后续启动会快很多。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">多显示器焦点</div>
-                            <div class="help-item-body">跨显示器使用时，浮动窗口可能出现在错误显示器，此时按托盘「重置状态」恢复</div>
+                            <div class="help-item-title">多显示器下浮动窗口位置异常</div>
+                            <div class="help-item-body">跨显示器使用时，浮动窗口偶尔出现在非预期的显示器上。点击系统托盘菜单中的「重置状态」可立即恢复。</div>
                         </div>
                     </div>
                 </details>
