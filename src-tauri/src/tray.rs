@@ -1,5 +1,9 @@
+use crate::clipboard::ClipboardProvider;
+use std::sync::{Arc, Mutex};
+use tracing::info;
+
 use tauri::{
-    App, Manager, Runtime,
+    App, Emitter, Manager, Runtime,
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -8,12 +12,14 @@ use tauri::{
 
 /// Setup the system tray.
 pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Error>> {
+    let reset = MenuItem::with_id(app, "reset", "重置状态", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置...", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
         &[
+            &reset as &dyn tauri::menu::IsMenuItem<R>,
             &settings as &dyn tauri::menu::IsMenuItem<R>,
             &PredefinedMenuItem::separator(app)?,
             &quit,
@@ -31,6 +37,45 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
         .menu(&menu)
         .tooltip("语文兔 - 就绪")
         .on_menu_event(move |app, event| match event.id().as_ref() {
+            "reset" => {
+                info!("Tray: user triggered manual reset");
+                // Reset state machine
+                if let Some(sm) = app.try_state::<Arc<Mutex<crate::state::StateMachine>>>() {
+                    if let Some(mut guard) = crate::util::lock_mutex(&sm, "state_machine_tray_reset"
+                    ) {
+                        guard.reset();
+                        info!("Tray: state machine reset to Idle");
+                    }
+                }
+                // Stop audio capture if recording
+                if let Some(ac) = app.try_state::<Arc<Mutex<crate::audio::AudioCapture>>>() {
+                    if let Some(mut guard) =
+                        crate::util::lock_mutex(&ac, "audio_capture_tray_reset")
+                    {
+                        guard.stop();
+                    }
+                }
+                // Hide all windows
+                if let Some(win) = app.get_webview_window("floating") {
+                    let _ = win.hide();
+                }
+                if let Some(win) = app.get_webview_window("review") {
+                    let _ = win.hide();
+                }
+                // Restore clipboard if needed
+                if let Some(cb) = app.try_state::<Arc<Mutex<crate::clipboard::AnyClipboard>>>()
+                {
+                    if let Some(mut guard) = crate::util::lock_mutex(&cb, "clipboard_tray_reset") {
+                        let _ = guard.restore();
+                    }
+                }
+                // Emit event
+                let _ = app.emit("tray-reset", ());
+                // Update tooltip
+                if let Some(tray) = app.tray_by_id("default") {
+                    let _ = tray.set_tooltip(Some("语文兔 - 就绪"));
+                }
+            }
             "quit" => {
                 use std::sync::atomic::Ordering;
                 if let Some(flag) = app.try_state::<std::sync::Arc<std::sync::atomic::AtomicBool>>()
