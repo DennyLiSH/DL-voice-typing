@@ -41,8 +41,9 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 info!("Tray: user triggered manual reset");
                 // Reset state machine
                 if let Some(sm) = app.try_state::<Arc<Mutex<crate::state::StateMachine>>>() {
-                    if let Some(mut guard) = crate::util::lock_mutex(&sm, "state_machine_tray_reset"
-                    ) {
+                    if let Some(mut guard) =
+                        crate::util::lock_mutex(&sm, "state_machine_tray_reset")
+                    {
                         guard.reset();
                         info!("Tray: state machine reset to Idle");
                     }
@@ -63,8 +64,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                     let _ = win.hide();
                 }
                 // Restore clipboard if needed
-                if let Some(cb) = app.try_state::<Arc<Mutex<crate::clipboard::AnyClipboard>>>()
-                {
+                if let Some(cb) = app.try_state::<Arc<Mutex<crate::clipboard::AnyClipboard>>>() {
                     if let Some(mut guard) = crate::util::lock_mutex(&cb, "clipboard_tray_reset") {
                         let _ = guard.restore();
                     }

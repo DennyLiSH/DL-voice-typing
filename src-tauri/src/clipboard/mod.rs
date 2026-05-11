@@ -1,6 +1,6 @@
 use crate::error::AppError;
-use std::sync::mpsc;
 use std::sync::Mutex;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -292,7 +292,8 @@ mod tests {
 
     #[test]
     fn test_with_clipboard_timeout_success() {
-        let result = with_clipboard_timeout(|| Ok::<_, AppError>(42), Duration::from_secs(5), "test");
+        let result =
+            with_clipboard_timeout(|| Ok::<_, AppError>(42), Duration::from_secs(5), "test");
         assert_eq!(result.unwrap(), 42);
     }
 
@@ -308,8 +309,14 @@ mod tests {
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("timed out"), "error should mention timeout: {err}");
-        assert!(err.contains("test_op"), "error should mention operation name: {err}");
+        assert!(
+            err.contains("timed out"),
+            "error should mention timeout: {err}"
+        );
+        assert!(
+            err.contains("test_op"),
+            "error should mention operation name: {err}"
+        );
     }
 
     #[test]
