@@ -121,18 +121,41 @@ pub async fn confirm_inject(
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // 3. Inject text (clipboard + Ctrl+V). Target app now has focus.
-    {
+    // 3. Inject text (clipboard + Ctrl+V) in a blocking thread to avoid
+    //    starving the Tokio runtime if clipboard operations hang.
+    let inject_result = {
         use crate::clipboard::ClipboardProvider;
-        let cb = clipboard.lock().map_err(|e| CommandError {
-            code: "LOCK".to_string(),
-            message: e.to_string(),
-        })?;
-        if let Err(e) = cb.inject_text(&text) {
-            let _ = app.emit("injection-error", e.to_string());
-            info!("confirm_inject: inject_text failed: {e}");
-        } else {
-            info!("confirm_inject: inject_text succeeded");
+        let cb_clone = Arc::clone(&*clipboard);
+        let text_clone = text.clone();
+        match tokio::task::spawn_blocking(move || {
+            let cb = cb_clone.lock().map_err(|e| CommandError {
+                code: "LOCK".to_string(),
+                message: e.to_string(),
+            })?;
+            cb.inject_text(&text_clone).map_err(|e| CommandError {
+                code: "CLIPBOARD".to_string(),
+                message: e.to_string(),
+            })
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                let err_msg = format!("inject task panicked: {e}");
+                let _ = app.emit("injection-error", &err_msg);
+                Err(CommandError {
+                    code: "TASK".to_string(),
+                    message: err_msg,
+                })
+            }
+        }
+    };
+
+    match inject_result {
+        Ok(()) => info!("confirm_inject: inject_text succeeded"),
+        Err(ref e) => {
+            let _ = app.emit("injection-error", e.message.clone());
+            info!("confirm_inject: inject_text failed: {}", e.message);
         }
     }
 
