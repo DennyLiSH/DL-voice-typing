@@ -206,6 +206,19 @@ pub fn run() {
             // Pending review text for the review window to fetch on load.
             app.manage(commands::PendingReview::new());
 
+            // Start watchdog thread to monitor state machine health.
+            let watchdog_sm = Arc::clone(&state_machine);
+            let watchdog_app = app.handle().clone();
+            std::thread::spawn(move || {
+                let wd = crate::watchdog::Watchdog::new(
+                    watchdog_sm,
+                    watchdog_app,
+                    std::time::Duration::from_secs(10),
+                    std::time::Duration::from_secs(30),
+                );
+                wd.run();
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
