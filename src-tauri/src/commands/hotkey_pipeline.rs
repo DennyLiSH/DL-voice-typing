@@ -252,13 +252,12 @@ async fn deliver_review(
         let js = format!(
             "(function(){{\
                  var t=document.getElementById('review-text');\
-                 if(t){{t.value={json};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
+                 if(t){{t.value={json_text};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
                  var p=document.getElementById('preview');\
                  if(p){{p.textContent='';p.classList.remove('visible');}}\
                  var b=document.getElementById('btn-confirm');\
                  if(b){{b.disabled=false;}}\
-             }})()",
-            json = json_text
+             }})()"
         );
         if ps.window_controller.eval_review_js(&js) {
             info!(
