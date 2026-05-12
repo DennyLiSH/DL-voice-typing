@@ -1,0 +1,184 @@
+/* === Review Window Styles === */
+/* Fixed dark translucent frameless — does not participate in theme system */
+
+:root {
+  --review-bg: rgba(26, 27, 30, 0.78);
+  --review-surface: rgba(255, 255, 255, 0.06);
+  --review-surface-hover: rgba(255, 255, 255, 0.08);
+  --review-border: rgba(255, 255, 255, 0.12);
+  --review-border-hover: rgba(255, 255, 255, 0.18);
+  --review-text: rgba(232, 230, 227, 0.92);
+  --review-text-secondary: rgba(232, 230, 227, 0.55);
+  --review-text-tertiary: rgba(232, 230, 227, 0.35);
+  --review-btn-cancel: rgba(255, 255, 255, 0.5);
+  --review-btn-cancel-hover: rgba(255, 255, 255, 0.7);
+  --review-btn-cancel-border: rgba(255, 255, 255, 0.2);
+  --review-btn-cancel-border-hover: rgba(255, 255, 255, 0.3);
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: var(--review-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  font-family: var(--font-family);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* --------------------------------------------------------------------------
+   Container with entrance animation
+   -------------------------------------------------------------------------- */
+.container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  opacity: 0;
+  transform: translateY(8px) scale(0.98);
+  transition:
+    opacity var(--duration-short) ease-out,
+    transform var(--duration-short) var(--ease-spring);
+}
+
+.container.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* --------------------------------------------------------------------------
+   Textarea
+   -------------------------------------------------------------------------- */
+textarea {
+  flex: 1;
+  min-height: 80px;
+  max-height: calc(100% - 50px);
+  background: var(--review-surface);
+  border: 1px solid var(--review-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  color: var(--review-text);
+  font-size: var(--font-body);
+  font-family: inherit;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  overflow-y: auto;
+  transition:
+    border-color var(--duration-micro) ease,
+    background var(--duration-micro) ease,
+    box-shadow var(--duration-micro) ease;
+}
+
+textarea:hover:not(:disabled) {
+  background: var(--review-surface-hover);
+  border-color: var(--review-border-hover);
+}
+
+textarea:focus {
+  border-color: rgba(var(--accent-rgb), 0.5);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
+}
+
+textarea::placeholder {
+  color: var(--review-text-tertiary);
+}
+
+/* --------------------------------------------------------------------------
+   Live preview area
+   -------------------------------------------------------------------------- */
+.preview {
+  display: block;
+  opacity: 0;
+  color: var(--review-text-secondary);
+  font-size: var(--font-label);
+  line-height: 1.4;
+  padding: 0 2px;
+  margin-bottom: 6px;
+  max-height: 60px;
+  overflow-y: auto;
+  word-break: break-all;
+  transition: opacity var(--duration-short) ease;
+}
+
+.preview.visible {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Button row
+   -------------------------------------------------------------------------- */
+.button-row {
+  margin-top: var(--space-3);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.btn-confirm {
+  background: rgba(var(--accent-rgb), 0.85);
+  color: #fff;
+  padding: 6px 20px;
+  font-weight: 500;
+  transition:
+    background var(--duration-micro) ease,
+    transform var(--duration-micro) ease,
+    box-shadow var(--duration-micro) ease;
+}
+
+.btn-confirm:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.95);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.25);
+}
+
+.btn-confirm:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.btn-confirm:disabled {
+  background: rgba(var(--accent-rgb), 0.25);
+  cursor: not-allowed;
+}
+
+.btn-cancel {
+  background: transparent;
+  color: var(--review-btn-cancel);
+  border: 1px solid var(--review-btn-cancel-border);
+  padding: 6px 16px;
+  font-weight: 500;
+  transition:
+    background var(--duration-micro) ease,
+    color var(--duration-micro) ease,
+    border-color var(--duration-micro) ease,
+    transform var(--duration-micro) ease;
+}
+
+.btn-cancel:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--review-btn-cancel-hover);
+  border-color: var(--review-btn-cancel-border-hover);
+}
+
+.btn-cancel:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.btn-cancel:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* --------------------------------------------------------------------------
+   Error message
+   -------------------------------------------------------------------------- */
+.error-msg {
+  color: rgba(var(--error-rgb), 0.9);
+  font-size: var(--font-hint);
+  margin-top: var(--space-1);
+  min-height: 0;
+}

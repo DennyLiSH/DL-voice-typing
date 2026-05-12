@@ -599,6 +599,7 @@ saveBtn.addEventListener('click', async () => {
 
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中...';
+    saveBtn.classList.add('saving');
 
     try {
         await invoke('save_settings', { config });
@@ -624,6 +625,7 @@ saveBtn.addEventListener('click', async () => {
         showError(e);
     } finally {
         saveBtn.textContent = '保存';
+        saveBtn.classList.remove('saving');
         saveBtn.disabled = !isDirty;
     }
 });

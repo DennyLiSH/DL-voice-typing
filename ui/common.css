@@ -1,13 +1,106 @@
-/* === Shared Styles for DL-Voice-Typing UI === */
+/* === Shared Design Tokens for DL-Voice-Typing UI === */
 
-/* Design system variables */
+/* --------------------------------------------------------------------------
+   Base tokens (theme-agnostic)
+   -------------------------------------------------------------------------- */
 :root {
+  /* Accent — 青玉色 Jade Teal */
   --accent: #3ABAB4;
   --accent-rgb: 58, 186, 180;
-  --font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --accent-hover: #2DA8A3;
+  --accent-light: rgba(58, 186, 180, 0.12);
+
+  /* Semantic */
+  --success: #16A34A;
+  --warning: #D97706;
+  --error: #DC2626;
+  --error-rgb: 220, 38, 38;
+
+  /* Typography */
+  --font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --font-hint: 12px;
+  --font-label: 13px;
+  --font-body: 14px;
+  --font-section: 16px;
+  --font-page: 20px;
+
+  /* Spacing (4px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Border radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-full: 50%;
+
+  /* Motion */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --duration-micro: 100ms;
+  --duration-short: 200ms;
+  --duration-medium: 350ms;
+
+  /* Focus ring */
+  --focus-ring: 2px solid rgba(var(--accent-rgb), 0.8);
+  --focus-ring-offset: 2px;
 }
 
-/* Reset */
+/* --------------------------------------------------------------------------
+   Dark theme (default)
+   -------------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1A1B1E;
+    --surface: #222326;
+    --surface-hover: #2A2B2E;
+    --border: #38393C;
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --text-primary: #E8E6E3;
+    --text-secondary: rgba(232, 230, 227, 0.65);
+    --text-tertiary: rgba(232, 230, 227, 0.4);
+    --btn-secondary-bg: rgba(255, 255, 255, 0.06);
+    --btn-secondary-text: rgba(255, 255, 255, 0.5);
+    --progress-bg: rgba(255, 255, 255, 0.06);
+    --disabled-bg: rgba(255, 255, 255, 0.03);
+    --disabled-text: rgba(255, 255, 255, 0.25);
+    --sidebar-bg: #141517;
+    --sidebar-icon: #777777;
+    --sidebar-active-bg: rgba(58, 186, 180, 0.12);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Light theme
+   -------------------------------------------------------------------------- */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #FAFAF8;
+    --surface: #FFFFFF;
+    --surface-hover: #F5F4F2;
+    --border: #E0DDD8;
+    --border-subtle: rgba(0, 0, 0, 0.04);
+    --text-primary: #1A1B1E;
+    --text-secondary: rgba(26, 27, 30, 0.65);
+    --text-tertiary: rgba(26, 27, 30, 0.4);
+    --btn-secondary-bg: #F0EFED;
+    --btn-secondary-text: rgba(26, 27, 30, 0.5);
+    --progress-bg: #E0DDD8;
+    --disabled-bg: #F5F4F2;
+    --disabled-text: rgba(26, 27, 30, 0.35);
+    --sidebar-bg: #F0EFED;
+    --sidebar-icon: #888888;
+    --sidebar-active-bg: rgba(58, 186, 180, 0.08);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Reset
+   -------------------------------------------------------------------------- */
 *,
 *::before,
 *::after {
@@ -16,35 +109,76 @@
   box-sizing: border-box;
 }
 
-/* Focus ring */
-:focus-visible {
-  outline: 2px solid rgba(var(--accent-rgb), 0.8);
-  outline-offset: 2px;
+body {
+  font-family: var(--font-family);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* High contrast mode */
+/* --------------------------------------------------------------------------
+   Focus ring
+   -------------------------------------------------------------------------- */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* --------------------------------------------------------------------------
+   Button base (shared across all windows)
+   -------------------------------------------------------------------------- */
+button {
+  height: 32px;
+  padding: 0 var(--space-4);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-body);
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background var(--duration-micro) ease,
+    transform var(--duration-micro) ease,
+    box-shadow var(--duration-micro) ease;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* --------------------------------------------------------------------------
+   High contrast mode
+   -------------------------------------------------------------------------- */
 @media (forced-colors: active) {
   button, textarea, select, input {
     border: 1px solid ButtonText;
   }
 }
 
-/* Button base */
-button {
-  height: 32px;
-  padding: 0 16px;
-  border: none;
-  border-radius: 4px;
-  font-size: 14px;
-  font-family: inherit;
-  cursor: pointer;
-  outline: none;
+/* --------------------------------------------------------------------------
+   Utility animations
+   -------------------------------------------------------------------------- */
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
+@keyframes status-pop {
+  0% { opacity: 0; transform: translateY(-4px) scale(0.95); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes banner-slide {
+  0% { opacity: 0; transform: translateY(-8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* --------------------------------------------------------------------------
+   Legacy helpers (keep for backward compatibility)
+   -------------------------------------------------------------------------- */
 .btn-delete-model {
-  background: #DC2626;
+  background: var(--error);
   color: white;
 }
+
 .btn-delete-model:hover:not(:disabled) {
   background: #B91C1C;
 }
