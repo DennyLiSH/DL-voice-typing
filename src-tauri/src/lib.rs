@@ -178,10 +178,7 @@ fn load_and_manage_config(app: &tauri::AppHandle) -> AppConfig {
 }
 
 /// Create the speech engine, manage it in Tauri state, and return it.
-fn init_and_manage_engine(
-    app: &tauri::AppHandle,
-    config: &AppConfig,
-) -> Arc<Mutex<AnyEngine>> {
+fn init_and_manage_engine(app: &tauri::AppHandle, config: &AppConfig) -> Arc<Mutex<AnyEngine>> {
     let engine = {
         #[cfg(feature = "whisper")]
         {
@@ -276,9 +273,8 @@ fn manage_pipeline_state(
 fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyManager {
     let hotkey_name = config.hotkey.clone();
     let mut hotkey_manager = WindowsHotkeyManager::new();
-    let callback = commands::make_hotkey_callback(
-        commands::pipeline_state::PipelineState::from_app(app),
-    );
+    let callback =
+        commands::make_hotkey_callback(commands::pipeline_state::PipelineState::from_app(app));
     if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
         warn!("failed to register hotkey '{hotkey_name}': {e}");
     }
@@ -286,13 +282,8 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
 }
 
 /// Start the background watchdog thread that monitors state machine health.
-fn start_watchdog(
-    app: &tauri::AppHandle,
-    state_machine: Arc<Mutex<StateMachine>>,
-) {
-    let watchdog_recovery = Arc::new(crate::watchdog::TauriRecoveryActions::new(
-        app.clone(),
-    ));
+fn start_watchdog(app: &tauri::AppHandle, state_machine: Arc<Mutex<StateMachine>>) {
+    let watchdog_recovery = Arc::new(crate::watchdog::TauriRecoveryActions::new(app.clone()));
     std::thread::spawn(move || {
         let wd = crate::watchdog::Watchdog::new(
             state_machine,

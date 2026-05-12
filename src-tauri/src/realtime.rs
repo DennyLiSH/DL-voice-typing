@@ -7,7 +7,7 @@
 /// Text accumulation: consecutive sliding windows overlap by ~90%.
 /// Each new transcription is diffed against the previous one to extract
 /// only the new content, which is appended to a running accumulated string.
-use crate::audio::{rms, resample, TARGET_SAMPLE_RATE};
+use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
 use crate::speech::{AnyEngine, SpeechEngine};
 use crate::state::StateMachine;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -261,8 +261,7 @@ impl RealtimeTranscriber {
                     None => break,
                 };
 
-                let resampled =
-                    resample(&window, sample_rate, TARGET_SAMPLE_RATE);
+                let resampled = resample(&window, sample_rate, TARGET_SAMPLE_RATE);
                 let rms_val = rms::calculate_rms(&resampled);
 
                 let speech_energy = has_speech_energy(&resampled);

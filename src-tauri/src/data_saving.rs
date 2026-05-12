@@ -1,4 +1,4 @@
-use crate::audio::{resample, TARGET_SAMPLE_RATE};
+use crate::audio::{TARGET_SAMPLE_RATE, resample};
 use crate::config::AppConfig;
 use crate::error::AppError;
 use std::fs;
@@ -154,7 +154,8 @@ fn generate_timestamp_filename() -> String {
     // Format as "YYYY-MM-DD_HH-MM-SS" for filename safety.
     let format = time::format_description::parse("[year]-[month]-[day]_[hour]-[minute]-[second]")
         .unwrap_or_else(|_| time::format_description::parse("[year]-[month]-[day]").unwrap());
-    now.format(&format).unwrap_or_else(|_| now.format(&Rfc3339).unwrap())
+    now.format(&format)
+        .unwrap_or_else(|_| now.format(&Rfc3339).unwrap())
 }
 
 /// RFC 3339 formatted timestamp using the local timezone offset.

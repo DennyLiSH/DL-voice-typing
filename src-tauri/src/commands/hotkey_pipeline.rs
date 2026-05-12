@@ -1,4 +1,4 @@
-use crate::audio::{resample, rms, TARGET_SAMPLE_RATE};
+use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
 use crate::clipboard::ClipboardProvider;
 use crate::config::{AppConfig, Language};
 use crate::data_saving::SaveResult;
@@ -516,14 +516,12 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         // Start real-time transcription if enabled.
                         if config.realtime_transcription {
                             if let Some(sr) = ac_guard.sample_rate() {
-                                let audio =
-                                    Arc::new(crate::realtime::StateMachineAudioSource::new(
-                                        ps.sm.clone(),
-                                    ));
-                                let emitter =
-                                    Arc::new(crate::realtime::TauriEventEmitter::new(
-                                        ps.app.clone(),
-                                    ));
+                                let audio = Arc::new(
+                                    crate::realtime::StateMachineAudioSource::new(ps.sm.clone()),
+                                );
+                                let emitter = Arc::new(crate::realtime::TauriEventEmitter::new(
+                                    ps.app.clone(),
+                                ));
                                 let rt = crate::realtime::RealtimeTranscriber::start(
                                     audio,
                                     ps.engine.clone(),
