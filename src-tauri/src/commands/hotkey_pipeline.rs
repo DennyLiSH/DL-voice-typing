@@ -647,8 +647,27 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 );
                                 sm_guard.reset();
                                 ps.window_controller.hide_floating();
-                                // Hide review window if it was shown on press.
-                                reset_to_idle(&ps);
+                                // Hide review window if it was shown on press (realtime+review mode).
+                                // NOTE: Do NOT call reset_to_idle(&ps) here — sm_guard already holds
+                                // the state_machine lock, and reset_to_idle would try to re-acquire it,
+                                // causing a deadlock (std::sync::Mutex is not reentrant on Windows).
+                                if let Some(pending) = ps.app.try_state::<PendingReview>() {
+                                    let shown = crate::util::lock_mutex(
+                                        &pending.shown_on_press,
+                                        "shown_on_press",
+                                    )
+                                    .map(|g| *g)
+                                    .unwrap_or(false);
+                                    if shown {
+                                        ps.window_controller.hide_review();
+                                        if let Some(mut guard) = crate::util::lock_mutex(
+                                            &pending.shown_on_press,
+                                            "shown_on_press",
+                                        ) {
+                                            *guard = false;
+                                        }
+                                    }
+                                }
                                 return;
                             }
                         };

@@ -135,14 +135,19 @@ impl Watchdog {
     }
 
     fn force_reset(&self) {
-        // Reset state machine
-        if let Some(mut sm) = util::lock_mutex(&self.sm, "state_machine_watchdog_reset") {
-            sm.reset();
-            info!("Watchdog: state machine forcibly reset to Idle");
-        } else {
-            error!("Watchdog: failed to acquire state_machine lock for reset");
+        // Use try_lock instead of blocking lock_mutex to avoid the watchdog
+        // itself hanging when the state machine lock is deadlocked by another thread.
+        match self.sm.try_lock() {
+            Ok(mut sm) => {
+                sm.reset();
+                info!("Watchdog: state machine forcibly reset to Idle");
+            }
+            Err(e) => {
+                error!("Watchdog: failed to acquire state_machine lock for reset: {e}");
+                error!("Watchdog: state machine lock may be deadlocked!");
+            }
         }
-
+        // Always perform UI recovery even if lock acquisition failed.
         self.recovery.hide_floating_window();
         self.recovery.hide_review_window();
         self.recovery.emit_watchdog_reset();
