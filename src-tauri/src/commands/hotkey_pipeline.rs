@@ -1,14 +1,14 @@
 use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
 use crate::clipboard::ClipboardProvider;
 use crate::config::{AppConfig, Language};
-use crate::data_saving::SaveResult;
+use crate::data_saving::{SaveConfig, SaveResult};
 use crate::hotkey::{HotkeyCallback, HotkeyEvent};
 use crate::llm::{AnyCorrector, LLMClient, TextCorrector};
 use crate::perf::PerfMetrics;
 use crate::speech::SpeechEngine;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tracing::{debug, error, info, warn};
 
 use super::pipeline_state::PipelineState;
@@ -112,10 +112,10 @@ async fn transcribe_and_save(
     resampled: Vec<f32>,
     config: &AppConfig,
 ) -> (Option<SaveResult>, String) {
-    let save_config = config.clone();
+    let save_config = SaveConfig::from_app_config(config);
     let sr_for_save = native_rate;
     let save_handle = tokio::task::spawn_blocking(move || {
-        if save_config.data_saving_enabled && !save_config.data_saving_path.is_empty() {
+        if save_config.enabled && !save_config.path.is_empty() {
             crate::data_saving::save_audio(&audio_for_save, sr_for_save, &save_config).ok()
         } else {
             None
@@ -138,19 +138,19 @@ async fn transcribe_and_save(
 
     let transcription = match transcription_result {
         Ok(Ok(text)) => {
-            let _ = ps.app.emit("transcription-complete", &text);
+            ps.emitter.emit("transcription-complete", serde_json::to_value(&text).unwrap_or_default());
             if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
                 let _ = s.add_partial_result(text.clone());
             }
             text
         }
         Ok(Err(e)) => {
-            let _ = ps.app.emit("speech-error", e.to_string());
+            ps.emitter.emit("speech-error", serde_json::to_value(e.to_string()).unwrap_or_default());
             reset_to_idle(ps);
             return (save_result, String::new());
         }
         Err(e) => {
-            let _ = ps.app.emit("speech-error", e.to_string());
+            ps.emitter.emit("speech-error", serde_json::to_value(e.to_string()).unwrap_or_default());
             reset_to_idle(ps);
             return (save_result, String::new());
         }
@@ -169,7 +169,7 @@ async fn resolve_llm_text(
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         let _ = s.start_llm_refining();
     }
-    let _ = ps.app.emit("llm-refining", ());
+    ps.emitter.emit("llm-refining", serde_json::Value::Null);
 
     let t_llm = Instant::now();
 
@@ -200,11 +200,11 @@ async fn resolve_llm_text(
 
     match result {
         Ok(corrected) => {
-            let _ = ps.app.emit("llm-complete", &corrected);
+            ps.emitter.emit("llm-complete", serde_json::to_value(&corrected).unwrap_or_default());
             corrected
         }
         Err(e) => {
-            let _ = ps.app.emit("llm-error", e.to_string());
+            ps.emitter.emit("llm-error", serde_json::to_value(e.to_string()).unwrap_or_default());
             transcription.to_string()
         }
     }
@@ -241,7 +241,7 @@ async fn deliver_review(
         warn!("deliver_review: state_machine lock returned None (poisoned?)");
     }
     // Store text for the review window to fetch on load.
-    if let Some(pending) = ps.app.try_state::<PendingReview>() {
+    if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
         if let Some(mut guard) = crate::util::lock_mutex(&pending.text, "pending_text") {
             *guard = Some(final_text.clone());
             debug!("Review: stored pending text ({} chars)", final_text.len());
@@ -251,7 +251,8 @@ async fn deliver_review(
     // Check if review window was already shown on press (realtime + review mode).
     let was_shown_on_press = ps
         .app
-        .try_state::<PendingReview>()
+        .as_ref()
+        .and_then(|app| app.try_state::<PendingReview>())
         .map(|p| {
             crate::util::lock_mutex(&p.shown_on_press, "shown_on_press")
                 .map(|g| *g)
@@ -295,7 +296,7 @@ async fn deliver_review(
 
         // Store data-saving metadata for confirm/cancel to consume later.
         if let Some(sr) = save_result.as_ref() {
-            if let Some(pending) = ps.app.try_state::<PendingReview>() {
+            if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
                 if let Some(mut guard) =
                     crate::util::lock_mutex(&pending.data_saving, "pending_data")
                 {
@@ -314,7 +315,7 @@ async fn deliver_review(
         return;
     }
 
-    if let Some(pending) = ps.app.try_state::<PendingReview>() {
+    if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
         pending.save_foreground();
     }
     if ps.window_controller.show_review_near_caret() {
@@ -322,7 +323,7 @@ async fn deliver_review(
 
         // Store data-saving metadata for confirm/cancel to consume later.
         if let Some(sr) = save_result.as_ref() {
-            if let Some(pending) = ps.app.try_state::<PendingReview>() {
+            if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
                 if let Some(mut guard) =
                     crate::util::lock_mutex(&pending.data_saving, "pending_data")
                 {
@@ -353,7 +354,7 @@ async fn deliver_review(
         if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
             let _ = s.finish_injecting();
         }
-        let _ = ps.app.emit("injection-complete", ());
+        ps.emitter.emit("injection-complete", serde_json::Value::Null);
         ps.window_controller.hide_floating();
     }
 }
@@ -392,11 +393,11 @@ async fn deliver_direct(
             }
             Ok(Err(e)) => {
                 warn!("deliver_direct: injection failed: {e}");
-                let _ = ps.app.emit("injection-error", e);
+                ps.emitter.emit("injection-error", serde_json::to_value(e).unwrap_or_default());
             }
             Err(e) => {
                 error!("deliver_direct: injection task panicked: {e}");
-                let _ = ps.app.emit("injection-error", e.to_string());
+                ps.emitter.emit("injection-error", serde_json::to_value(e.to_string()).unwrap_or_default());
             }
         }
     }
@@ -407,7 +408,7 @@ async fn deliver_direct(
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         let _ = s.finish_injecting();
     }
-    let _ = ps.app.emit("injection-complete", ());
+    ps.emitter.emit("injection-complete", serde_json::Value::Null);
 
     ps.window_controller.hide_floating();
 
@@ -427,7 +428,7 @@ async fn deliver_direct(
     }
 
     ps.perf_history.record(perf.clone());
-    let _ = ps.app.emit("perf-metrics", &perf);
+    ps.emitter.emit("perf-metrics", serde_json::to_value(&perf).unwrap_or_default());
     info!("{}", perf.summary());
 }
 
@@ -450,11 +451,11 @@ async fn run_realtime_fast_path(
     );
 
     // Save audio in background for training data.
-    let save_config = config.clone();
+    let save_config = SaveConfig::from_app_config(&config);
     let sr_for_save = native_rate;
     let audio_for_save = audio_data.clone();
     let save_handle = tokio::task::spawn_blocking(move || {
-        if save_config.data_saving_enabled && !save_config.data_saving_path.is_empty() {
+        if save_config.enabled && !save_config.path.is_empty() {
             crate::data_saving::save_audio(&audio_for_save, sr_for_save, &save_config).ok()
         } else {
             None
@@ -506,11 +507,11 @@ async fn run_realtime_fast_path(
             Ok(Ok(())) => info!("RealtimeFastPath: injection succeeded"),
             Ok(Err(e)) => {
                 warn!("RealtimeFastPath: injection failed: {e}");
-                let _ = ps.app.emit("injection-error", e);
+                ps.emitter.emit("injection-error", serde_json::to_value(e).unwrap_or_default());
             }
             Err(e) => {
                 error!("RealtimeFastPath: injection task panicked: {e}");
-                let _ = ps.app.emit("injection-error", e.to_string());
+                ps.emitter.emit("injection-error", serde_json::to_value(e.to_string()).unwrap_or_default());
             }
         }
     }
@@ -523,7 +524,7 @@ async fn run_realtime_fast_path(
         let _ = s.finish_injecting();
     }
 
-    let _ = ps.app.emit("injection-complete", ());
+    ps.emitter.emit("injection-complete", serde_json::Value::Null);
     ps.window_controller.hide_floating();
 
     // Update data-saving JSON.
@@ -543,7 +544,7 @@ async fn run_realtime_fast_path(
     }
 
     ps.perf_history.record(perf.clone());
-    let _ = ps.app.emit("perf-metrics", &perf);
+    ps.emitter.emit("perf-metrics", serde_json::to_value(&perf).unwrap_or_default());
     info!("{}", perf.summary());
 }
 
@@ -556,7 +557,8 @@ fn reset_to_idle(ps: &PipelineState) {
     // Hide review window if it was shown on press (realtime+review mode).
     let shown_on_press = ps
         .app
-        .try_state::<PendingReview>()
+        .as_ref()
+        .and_then(|app| app.try_state::<PendingReview>())
         .map(|p| {
             crate::util::lock_mutex(&p.shown_on_press, "shown_on_press")
                 .map(|g| *g)
@@ -565,7 +567,7 @@ fn reset_to_idle(ps: &PipelineState) {
         .unwrap_or(false);
     if shown_on_press {
         ps.window_controller.hide_review();
-        if let Some(pending) = ps.app.try_state::<PendingReview>() {
+        if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
             if let Some(mut guard) =
                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
             {
@@ -608,7 +610,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         .unwrap_or(false);
                     if !engine_ready {
                         reset_to_idle(&ps);
-                        let _ = ps.app.emit("speech-error", "模型加载中，请稍候...");
+                        ps.emitter.emit("speech-error", serde_json::to_value("模型加载中，请稍候...").unwrap_or_default());
                         return;
                     }
                 }
@@ -628,13 +630,13 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                     if show_floating {
                         ps.window_controller.show_floating_near_caret();
                     }
-                    let _ = ps.app.emit("recording-start", ());
+                    ps.emitter.emit("recording-start", serde_json::Value::Null);
 
                     // Start audio capture with RMS-emitting callback (~30 fps).
                     let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
                     if let Some(mut ac_guard) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
                         let sm_for_audio = Arc::clone(&ps.sm);
-                        let app_for_rms = ps.app.clone();
+                        let emitter_for_rms = ps.emitter.clone();
                         let last_rms_for_cb = Arc::clone(&last_rms_emit);
                         let start_result = ac_guard.start(Box::new(move |data: &[f32]| {
                             if let Some(mut s) =
@@ -648,7 +650,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                             {
                                 if last.elapsed() >= Duration::from_millis(33) {
                                     *last = Instant::now();
-                                    let _ = app_for_rms.emit("audio-rms", rms_val);
+                                    emitter_for_rms.emit("audio-rms", serde_json::to_value(rms_val).unwrap_or_default());
                                 }
                             }
                         }));
@@ -656,7 +658,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         if let Err(e) = start_result {
                             warn!("audio capture start failed: {e}");
                             reset_to_idle(&ps);
-                            let _ = ps.app.emit("speech-error", format!("录音启动失败: {e}"));
+                            ps.emitter.emit("speech-error", serde_json::to_value(format!("录音启动失败: {e}")).unwrap_or_default());
                             return;
                         }
 
@@ -671,7 +673,10 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                     crate::realtime::StateMachineAudioSource::new(ps.sm.clone()),
                                 );
                                 let emitter = Arc::new(crate::realtime::TauriEventEmitter::new(
-                                    ps.app.clone(),
+                                    match ps.app.as_ref() {
+                                        Some(app) => app.clone(),
+                                        None => return,
+                                    },
                                 ));
                                 let rt = crate::realtime::RealtimeTranscriber::start(
                                     audio,
@@ -691,7 +696,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
 
                     // Show review window on press for RealtimeReview mode.
                     if matches!(mode, crate::config::PipelineMode::RealtimeReview) {
-                        if let Some(pending) = ps.app.try_state::<PendingReview>() {
+                        if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
                             pending.save_foreground();
                             if let Some(mut guard) =
                                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
@@ -826,7 +831,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 );
                                 sm_guard.reset();
                                 ps.window_controller.hide_floating();
-                                if let Some(pending) = ps.app.try_state::<PendingReview>() {
+                                if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
                                     let shown = crate::util::lock_mutex(
                                         &pending.shown_on_press,
                                         "shown_on_press",

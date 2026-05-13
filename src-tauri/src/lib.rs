@@ -16,7 +16,7 @@ pub mod util;
 pub mod watchdog;
 pub mod win32;
 
-use audio::AudioCapture;
+use audio::{AudioCapture, AudioCaptureProvider};
 use clipboard::AnyClipboard;
 use commands::DownloadState;
 use config::{AppConfig, ConfigCache};
@@ -40,7 +40,8 @@ pub fn run() {
     let _log_guard = init_logging();
 
     let state_machine = Arc::new(Mutex::new(StateMachine::new()));
-    let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
+    let audio_capture: Arc<Mutex<dyn AudioCaptureProvider>> =
+        Arc::new(Mutex::new(AudioCapture::new()));
     let clipboard_manager = Arc::new(Mutex::new(clipboard::AnyClipboard::Windows(
         clipboard::ClipboardManager::new(),
     )));
@@ -258,7 +259,7 @@ fn create_overlay_windows(app: &mut tauri::App) -> Result<(), tauri::Error> {
 fn manage_pipeline_state(
     app: &tauri::AppHandle,
     state_machine: Arc<Mutex<StateMachine>>,
-    audio_capture: Arc<Mutex<AudioCapture>>,
+    audio_capture: Arc<Mutex<dyn AudioCaptureProvider>>,
     clipboard_manager: Arc<Mutex<AnyClipboard>>,
     perf_history: Arc<PerfHistory>,
     shutting_down: Arc<AtomicBool>,
@@ -301,5 +302,6 @@ fn start_watchdog(app: &tauri::AppHandle, state_machine: Arc<Mutex<StateMachine>
 
 #[cfg(test)]
 mod tests {
+    mod pipeline_integration_test;
     mod pipeline_test;
 }

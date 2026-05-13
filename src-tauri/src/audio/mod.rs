@@ -35,6 +35,14 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 /// Callback type for audio data: receives a slice of f32 samples.
 pub type AudioCallback = Box<dyn Fn(&[f32]) + Send>;
 
+/// Trait for audio capture, enabling test seams.
+pub trait AudioCaptureProvider: Send {
+    fn start(&mut self, on_data: AudioCallback) -> Result<(), AppError>;
+    fn stop(&mut self);
+    fn is_capturing(&self) -> bool;
+    fn sample_rate(&self) -> Option<u32>;
+}
+
 /// Audio capture using cpal.
 pub struct AudioCapture {
     stream: Option<Stream>,
@@ -49,9 +57,19 @@ impl AudioCapture {
         }
     }
 
-    /// Start capturing audio from the default input device.
-    /// Calls `on_data` for each chunk of audio samples.
-    pub fn start(&mut self, on_data: AudioCallback) -> Result<(), AppError> {
+    /// Start capturing with a channel-based callback.
+    /// Returns a receiver that yields audio chunks.
+    pub fn start_channel(&mut self) -> Result<mpsc::Receiver<Vec<f32>>, AppError> {
+        let (tx, rx) = mpsc::channel::<Vec<f32>>();
+        self.start(Box::new(move |data: &[f32]| {
+            let _ = tx.send(data.to_vec());
+        }))?;
+        Ok(rx)
+    }
+}
+
+impl AudioCaptureProvider for AudioCapture {
+    fn start(&mut self, on_data: AudioCallback) -> Result<(), AppError> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -86,29 +104,16 @@ impl AudioCapture {
         Ok(())
     }
 
-    /// Start capturing with a channel-based callback.
-    /// Returns a receiver that yields audio chunks.
-    pub fn start_channel(&mut self) -> Result<mpsc::Receiver<Vec<f32>>, AppError> {
-        let (tx, rx) = mpsc::channel::<Vec<f32>>();
-        self.start(Box::new(move |data: &[f32]| {
-            let _ = tx.send(data.to_vec());
-        }))?;
-        Ok(rx)
-    }
-
-    /// Stop capturing audio.
-    pub fn stop(&mut self) {
+    fn stop(&mut self) {
         self.stream = None;
         self.config = None;
     }
 
-    /// Check if currently capturing.
-    pub fn is_capturing(&self) -> bool {
+    fn is_capturing(&self) -> bool {
         self.stream.is_some()
     }
 
-    /// Get the sample rate if capturing.
-    pub fn sample_rate(&self) -> Option<u32> {
+    fn sample_rate(&self) -> Option<u32> {
         self.config.as_ref().map(|c| c.sample_rate.0)
     }
 }
@@ -125,6 +130,48 @@ impl Default for AudioCapture {
 // within the Mutex guard scope. See lib.rs for the Arc<Mutex<>> wrapper.
 unsafe impl Send for AudioCapture {}
 unsafe impl Sync for AudioCapture {}
+
+/// Mock audio capture for testing.
+pub struct MockAudioCapture {
+    capturing: bool,
+    sample_rate_val: Option<u32>,
+}
+
+impl MockAudioCapture {
+    pub fn new() -> Self {
+        Self {
+            capturing: false,
+            sample_rate_val: None,
+        }
+    }
+}
+
+impl AudioCaptureProvider for MockAudioCapture {
+    fn start(&mut self, _on_data: AudioCallback) -> Result<(), AppError> {
+        self.capturing = true;
+        self.sample_rate_val = Some(48000);
+        Ok(())
+    }
+
+    fn stop(&mut self) {
+        self.capturing = false;
+        self.sample_rate_val = None;
+    }
+
+    fn is_capturing(&self) -> bool {
+        self.capturing
+    }
+
+    fn sample_rate(&self) -> Option<u32> {
+        self.sample_rate_val
+    }
+}
+
+impl Default for MockAudioCapture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -162,5 +209,26 @@ mod tests {
         let samples = vec![1.0f32, 2.0, 3.0, 4.0];
         let resampled = resample(&samples, 16_000, 16_000);
         assert_eq!(resampled, samples);
+    }
+
+    #[test]
+    fn test_mock_capture_lifecycle() {
+        let mut cap = MockAudioCapture::new();
+        assert!(!cap.is_capturing());
+        assert!(cap.sample_rate().is_none());
+
+        cap.start(Box::new(|_| {})).unwrap();
+        assert!(cap.is_capturing());
+        assert_eq!(cap.sample_rate(), Some(48000));
+
+        cap.stop();
+        assert!(!cap.is_capturing());
+        assert!(cap.sample_rate().is_none());
+    }
+
+    #[test]
+    fn test_mock_capture_default() {
+        let cap = MockAudioCapture::default();
+        assert!(!cap.is_capturing());
     }
 }

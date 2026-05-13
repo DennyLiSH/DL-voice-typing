@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing::warn;
 
 /// Lock a Mutex, returning None and logging a warning if poisoned.
-pub fn lock_mutex<'a, T>(m: &'a Mutex<T>, label: &str) -> Option<MutexGuard<'a, T>> {
+pub fn lock_mutex<'a, T: ?Sized>(m: &'a Mutex<T>, label: &str) -> Option<MutexGuard<'a, T>> {
     m.lock()
         .inspect_err(|e| warn!(target: "lock", "{label} poisoned: {e}"))
         .ok()

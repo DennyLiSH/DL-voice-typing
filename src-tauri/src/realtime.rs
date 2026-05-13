@@ -235,6 +235,10 @@ fn accumulate(accumulated: &str, prev_partial: &str, new_partial: &str) -> Strin
 
 impl RealtimeTranscriber {
     /// Start the background transcription loop.
+    ///
+    /// The `engine` parameter uses `AnyEngine` enum dispatch (not a trait object) for
+    /// consistency with the project's enum-dispatch pattern (`AnyClipboard`, `AnyCorrector`).
+    /// Tests use `AnyEngine::new_mock()` — see the 20+ tests in this module.
     pub fn start(
         audio: Arc<dyn AudioSource + Send + Sync>,
         engine: Arc<Mutex<AnyEngine>>,

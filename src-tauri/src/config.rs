@@ -1,6 +1,6 @@
 use crate::crypto;
 use crate::error::AppError;
-use crate::hotkey::windows::WindowsHotkeyManager;
+use crate::hotkey::parse_key_code;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -506,7 +506,7 @@ impl AppConfig {
     /// Validate config fields.
     /// Model, language, and mirror are enforced by the type system (enums).
     pub fn validate(&self) -> Result<(), AppError> {
-        if WindowsHotkeyManager::parse_key_code(&self.hotkey).is_none() {
+        if parse_key_code(&self.hotkey).is_none() {
             let hotkey = &self.hotkey;
             return Err(AppError::Config(format!("invalid hotkey: {hotkey}")));
         }

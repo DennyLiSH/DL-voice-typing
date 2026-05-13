@@ -1,5 +1,5 @@
 use crate::audio::{TARGET_SAMPLE_RATE, resample};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, Language, WhisperModel};
 use crate::error::AppError;
 use std::fs;
 use std::path::PathBuf;
@@ -12,14 +12,34 @@ pub struct SaveResult {
     pub json_path: PathBuf,
 }
 
+/// Minimal config needed for data saving operations.
+#[derive(Clone)]
+pub struct SaveConfig {
+    pub enabled: bool,
+    pub path: String,
+    pub language: Language,
+    pub whisper_model: WhisperModel,
+}
+
+impl SaveConfig {
+    pub fn from_app_config(config: &AppConfig) -> Self {
+        Self {
+            enabled: config.data_saving_enabled,
+            path: config.data_saving_path.clone(),
+            language: config.language,
+            whisper_model: config.whisper_model.clone(),
+        }
+    }
+}
+
 /// Save raw audio samples as a 16kHz mono WAV file with a companion JSON metadata file.
 /// The JSON initially has `transcription: null` — call `update_json_with_text()` after transcription.
 pub fn save_audio(
     samples: &[f32],
     original_sample_rate: u32,
-    config: &AppConfig,
+    config: &SaveConfig,
 ) -> Result<SaveResult, AppError> {
-    let save_dir = PathBuf::from(&config.data_saving_path);
+    let save_dir = PathBuf::from(&config.path);
     fs::create_dir_all(&save_dir)?;
 
     let filename = generate_timestamp_filename();
@@ -171,17 +191,22 @@ fn now_rfc3339() -> String {
 mod tests {
     use super::*;
 
+    fn test_config(path: &str) -> SaveConfig {
+        SaveConfig {
+            enabled: true,
+            path: path.to_string(),
+            language: Language::Zh,
+            whisper_model: WhisperModel::default(),
+        }
+    }
+
     #[test]
     fn test_save_audio_happy_path() {
         let dir = std::env::temp_dir().join("dl-voice-typing-test-save-audio");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
-        let config = AppConfig {
-            data_saving_enabled: true,
-            data_saving_path: dir.to_string_lossy().to_string(),
-            ..Default::default()
-        };
+        let config = test_config(&dir.to_string_lossy());
 
         // Generate 1 second of 16kHz sine wave.
         let samples: Vec<f32> = (0..16000)
@@ -214,11 +239,7 @@ mod tests {
             .join("nested");
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
 
-        let config = AppConfig {
-            data_saving_enabled: true,
-            data_saving_path: dir.to_string_lossy().to_string(),
-            ..Default::default()
-        };
+        let config = test_config(&dir.to_string_lossy());
 
         let samples = vec![0.0f32; 100];
         let result = save_audio(&samples, 16000, &config).unwrap();
@@ -230,11 +251,7 @@ mod tests {
 
     #[test]
     fn test_save_audio_invalid_path() {
-        let config = AppConfig {
-            data_saving_enabled: true,
-            data_saving_path: "/nonexistent/deeply/nested/invalid\0path".to_string(),
-            ..Default::default()
-        };
+        let config = test_config("/nonexistent/deeply/nested/invalid\0path");
 
         let samples = vec![0.0f32; 100];
         // Should return an error, not panic.

@@ -6,6 +6,32 @@ pub(crate) mod pipeline_state;
 pub mod review;
 pub mod window_controller;
 
+use tauri::Emitter as TauriEmitter;
+
+/// Trait for emitting events to the frontend.
+/// Abstracts `tauri::AppHandle.emit()` for testability.
+/// Uses `serde_json::Value` for trait-object safety.
+pub trait EventEmitter: Send + Sync {
+    fn emit(&self, event: &str, payload: serde_json::Value);
+}
+
+/// Tauri-based event emitter for production use.
+pub(crate) struct TauriEventEmitter {
+    app: tauri::AppHandle,
+}
+
+impl TauriEventEmitter {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl EventEmitter for TauriEventEmitter {
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        let _ = TauriEmitter::emit(&self.app, event, payload);
+    }
+}
+
 /// Sentinel value returned to frontend when an API key exists but should not be exposed.
 pub const MASKED_MARKER: &str = "__MASKED__";
 
@@ -18,3 +44,4 @@ pub use download::{
 pub(crate) use hotkey_pipeline::make_hotkey_callback;
 pub use misc_cmd::{get_compute_mode, get_perf_history, test_llm_connection};
 pub use review::{PendingReview, cancel_review, confirm_inject, get_review_text};
+pub use window_controller::WindowController;

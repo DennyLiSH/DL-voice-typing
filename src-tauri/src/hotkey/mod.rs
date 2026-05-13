@@ -2,6 +2,12 @@ use crate::error::AppError;
 
 pub mod windows;
 
+/// Parse a key name string to a virtual key code.
+/// Delegates to the platform implementation.
+pub fn parse_key_code(key: &str) -> Option<u32> {
+    windows::WindowsHotkeyManager::parse_key_code(key)
+}
+
 /// Callback type for hotkey events.
 pub type HotkeyCallback = Box<dyn Fn(HotkeyEvent) + Send + Sync>;
 
