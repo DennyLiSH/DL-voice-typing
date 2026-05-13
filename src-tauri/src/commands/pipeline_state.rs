@@ -9,6 +9,7 @@ use crate::speech::AnyEngine;
 use crate::state::StateMachine;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+use tracing::info;
 
 /// Aggregated shared state for the hotkey pipeline.
 /// Eliminates the need to pass 8 individual `Arc` references to `make_hotkey_callback`.
@@ -46,6 +47,52 @@ impl PipelineState {
                 .inner()
                 .clone(),
             window_controller: window_controller_from_app(app),
+        }
+    }
+
+    /// Stop audio capture and realtime transcriber (non-blocking).
+    /// Returns accumulated realtime text if available.
+    /// Must be called from non-blocking contexts (e.g., Windows hook thread)
+    /// — uses `stop()` (detach) not `stop_and_wait()`.
+    pub fn stop_recording_resources(&self) -> Option<String> {
+        if let Some(mut ac_guard) = crate::util::lock_mutex(&self.ac, "audio_capture") {
+            ac_guard.stop();
+        }
+
+        if let Some(mut rt_guard) =
+            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+        {
+            if let Some(ref mut rt) = *rt_guard {
+                rt.stop();
+                let text = rt.take_accumulated();
+                rt_guard.take();
+                info!(
+                    "stop_recording_resources: realtime accumulated={} chars",
+                    text.len()
+                );
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+        None
+    }
+
+    /// Stop audio capture and realtime transcriber (blocking, graceful).
+    /// For use in async contexts where blocking is acceptable (review commands).
+    /// Uses `stop_and_wait()` for clean thread shutdown.
+    pub fn stop_recording_resources_graceful(&self) {
+        if let Some(mut ac_guard) = crate::util::lock_mutex(&self.ac, "audio_capture") {
+            ac_guard.stop();
+        }
+
+        if let Some(mut rt_guard) =
+            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+        {
+            if let Some(mut rt) = rt_guard.take() {
+                info!("stop_recording_resources_graceful: stopping realtime thread");
+                rt.stop_and_wait();
+            }
         }
     }
 }

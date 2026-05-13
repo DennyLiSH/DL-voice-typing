@@ -2,6 +2,7 @@
 //! state machine using MockEngine, without Tauri/Win32/audio dependencies.
 
 use crate::audio::rms;
+use crate::config::{AppConfig, PipelineMode};
 use crate::speech::SpeechEngine;
 use crate::speech::mock::MockEngine;
 use crate::state::{AppState, StateMachine};
@@ -151,5 +152,94 @@ fn test_pipeline_cancel_review() {
 
     // User cancels instead of confirming
     sm.cancel_reviewing().unwrap();
+    assert!(matches!(sm.state(), AppState::Idle));
+}
+
+// --- PipelineMode tests ---
+
+#[test]
+fn test_pipeline_mode_derivation() {
+    let mut config = AppConfig::default();
+    assert_eq!(config.pipeline_mode(), PipelineMode::ClassicDirect);
+
+    config.review_before_paste = true;
+    assert_eq!(config.pipeline_mode(), PipelineMode::ClassicReview);
+
+    config.review_before_paste = false;
+    config.realtime_transcription = true;
+    assert_eq!(config.pipeline_mode(), PipelineMode::RealtimeDirect);
+
+    config.review_before_paste = true;
+    assert_eq!(config.pipeline_mode(), PipelineMode::RealtimeReview);
+}
+
+// --- RealtimeDirect (Path C) state machine tests ---
+
+#[test]
+fn test_pipeline_realtime_direct_with_accumulated_text() {
+    // Simulate RealtimeDirect: recording → realtime accumulated text → inject
+    // (skip Whisper entirely, just use accumulated text directly)
+    let mut sm = StateMachine::new();
+
+    // Recording phase
+    sm.start_recording().unwrap();
+    sm.append_audio(&[0.5f32; 4800]).unwrap();
+
+    // On release: stop_recording → Transcribing
+    let _audio = sm.stop_recording().unwrap();
+
+    // Simulate using accumulated text directly (no Whisper)
+    let accumulated_text = "realtime transcription result".to_string();
+
+    // Direct inject path (skip Whisper and LLM)
+    sm.transcribing_to_injecting(accumulated_text).unwrap();
+    sm.finish_injecting().unwrap();
+
+    assert!(matches!(sm.state(), AppState::Idle));
+}
+
+#[test]
+fn test_pipeline_realtime_direct_with_llm() {
+    // RealtimeDirect + LLM: accumulated text → LLM → inject
+    let mut sm = StateMachine::new();
+
+    sm.start_recording().unwrap();
+    sm.append_audio(&[0.5f32; 4800]).unwrap();
+    let _audio = sm.stop_recording().unwrap();
+
+    let _accumulated_text = "realtime text with homophones".to_string();
+
+    // LLM refining path
+    sm.start_llm_refining().unwrap();
+    let llm_corrected = "realtime text with corrections".to_string();
+    sm.llm_to_injecting(llm_corrected).unwrap();
+    sm.finish_injecting().unwrap();
+
+    assert!(matches!(sm.state(), AppState::Idle));
+}
+
+#[test]
+fn test_pipeline_realtime_review_early_confirm() {
+    // Simulate RealtimeReview: user confirms during recording (early confirm)
+    let mut sm = StateMachine::new();
+
+    sm.start_recording().unwrap();
+    sm.append_audio(&[0.5f32; 4800]).unwrap();
+
+    // User confirms early — reset state machine
+    sm.reset();
+    assert!(matches!(sm.state(), AppState::Idle));
+}
+
+#[test]
+fn test_pipeline_realtime_review_early_cancel() {
+    // Simulate RealtimeReview: user cancels during recording
+    let mut sm = StateMachine::new();
+
+    sm.start_recording().unwrap();
+    sm.append_audio(&[0.5f32; 4800]).unwrap();
+
+    // User cancels — reset
+    sm.reset();
     assert!(matches!(sm.state(), AppState::Idle));
 }

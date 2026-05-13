@@ -265,6 +265,21 @@ pub enum DownloadMirror {
     HuggingFace,
 }
 
+/// Operational mode of the voice pipeline, derived from realtime_transcription
+/// and review_before_paste config flags. Used for exhaustive dispatch instead of
+/// scattered boolean checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipelineMode {
+    /// RT=off, REVIEW=off: Classic full Whisper, direct inject.
+    ClassicDirect,
+    /// RT=off, REVIEW=on: Classic full Whisper, review window.
+    ClassicReview,
+    /// RT=on, REVIEW=off: Realtime transcription, direct inject (skip Whisper).
+    RealtimeDirect,
+    /// RT=on, REVIEW=on: Realtime transcription, live review window.
+    RealtimeReview,
+}
+
 impl DownloadMirror {
     /// All variants in order.
     pub fn all() -> &'static [DownloadMirror] {
@@ -517,6 +532,16 @@ impl AppConfig {
 pub type ConfigCache = Arc<RwLock<AppConfig>>;
 
 impl AppConfig {
+    /// Derive the pipeline mode from realtime_transcription and review_before_paste.
+    pub fn pipeline_mode(&self) -> PipelineMode {
+        match (self.realtime_transcription, self.review_before_paste) {
+            (false, false) => PipelineMode::ClassicDirect,
+            (false, true) => PipelineMode::ClassicReview,
+            (true, false) => PipelineMode::RealtimeDirect,
+            (true, true) => PipelineMode::RealtimeReview,
+        }
+    }
+
     /// Read from the in-memory cache.
     pub fn read_cached(cache: &ConfigCache) -> Result<Self, AppError> {
         cache

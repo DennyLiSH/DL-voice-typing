@@ -78,12 +78,18 @@ async fn run_pipeline(
 
     // -- Injection --
     if config.review_before_paste {
-        info!("run_pipeline: handing off to deliver_review ({} chars)", final_text.len());
+        info!(
+            "run_pipeline: handing off to deliver_review ({} chars)",
+            final_text.len()
+        );
         deliver_review(&ps, final_text, transcription, save_result, &config).await;
         return;
     }
 
-    info!("run_pipeline: handing off to deliver_direct ({} chars)", final_text.len());
+    info!(
+        "run_pipeline: handing off to deliver_direct ({} chars)",
+        final_text.len()
+    );
     deliver_direct(
         &ps,
         final_text,
@@ -212,7 +218,11 @@ async fn deliver_review(
     save_result: Option<SaveResult>,
     config: &AppConfig,
 ) {
-    info!("deliver_review: ENTER ({} chars, llm={})", final_text.len(), config.llm_enabled);
+    info!(
+        "deliver_review: ENTER ({} chars, llm={})",
+        final_text.len(),
+        config.llm_enabled
+    );
 
     // Save clipboard before entering review state.
     if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
@@ -421,6 +431,122 @@ async fn deliver_direct(
     info!("{}", perf.summary());
 }
 
+/// Fast path for RealtimeDirect mode (RT=on, REVIEW=off).
+/// Uses accumulated realtime text directly, optionally runs LLM, then injects.
+/// Skips Whisper transcription entirely when accumulated text is non-empty.
+async fn run_realtime_fast_path(
+    ps: PipelineState,
+    accumulated: String,
+    audio_data: Vec<f32>,
+    native_rate: u32,
+    mut perf: PerfMetrics,
+    t_press_for_e2e: Instant,
+) {
+    let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+    info!(
+        "RealtimeFastPath: starting (llm={}, accumulated={} chars)",
+        config.llm_enabled,
+        accumulated.len()
+    );
+
+    // Save audio in background for training data.
+    let save_config = config.clone();
+    let sr_for_save = native_rate;
+    let audio_for_save = audio_data.clone();
+    let save_handle = tokio::task::spawn_blocking(move || {
+        if save_config.data_saving_enabled && !save_config.data_saving_path.is_empty() {
+            crate::data_saving::save_audio(&audio_for_save, sr_for_save, &save_config).ok()
+        } else {
+            None
+        }
+    });
+
+    // State: Recording → Transcribing (brief, for state consistency).
+    // Note: stop_recording() was already called in the release handler before
+    // spawning this task, so the state machine should already be in Transcribing.
+    // We only need to proceed from here.
+
+    // Optionally run LLM on the accumulated text.
+    let transcription = accumulated.clone();
+    perf.llm_enabled = config.llm_enabled;
+    let final_text = if config.llm_enabled {
+        resolve_llm_text(&ps, &config, &transcription, &mut perf).await
+    } else {
+        transcription.clone()
+    };
+
+    // Normalize Chinese punctuation.
+    let final_text = if config.language == Language::Zh {
+        normalize_chinese_punctuation(&final_text)
+    } else {
+        final_text
+    };
+
+    // State: Transcribing → Injecting.
+    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
+        if config.llm_enabled {
+            let _ = s.llm_to_injecting(final_text.clone());
+        } else {
+            let _ = s.transcribing_to_injecting(final_text.clone());
+        }
+    }
+
+    // Inject via clipboard.
+    let t_inject = Instant::now();
+    {
+        let cb_for_inject = ps.clipboard.clone();
+        let text_for_inject = final_text.clone();
+        match tauri::async_runtime::spawn_blocking(move || {
+            let mut cb = cb_for_inject.lock().map_err(|e| e.to_string())?;
+            cb.save().map_err(|e| e.to_string())?;
+            cb.inject_text(&text_for_inject).map_err(|e| e.to_string())
+        })
+        .await
+        {
+            Ok(Ok(())) => info!("RealtimeFastPath: injection succeeded"),
+            Ok(Err(e)) => {
+                warn!("RealtimeFastPath: injection failed: {e}");
+                let _ = ps.app.emit("injection-error", e);
+            }
+            Err(e) => {
+                error!("RealtimeFastPath: injection task panicked: {e}");
+                let _ = ps.app.emit("injection-error", e.to_string());
+            }
+        }
+    }
+    perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
+    perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
+    perf.text_length = final_text.len();
+
+    // State: Injecting → Idle.
+    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
+        let _ = s.finish_injecting();
+    }
+
+    let _ = ps.app.emit("injection-complete", ());
+    ps.window_controller.hide_floating();
+
+    // Update data-saving JSON.
+    let save_result = save_handle.await.unwrap_or(None);
+    if let Some(sr) = save_result {
+        let llm_text = if config.llm_enabled {
+            Some(final_text.as_str())
+        } else {
+            None
+        };
+        let _ = crate::data_saving::update_json_with_text(
+            &sr.json_path,
+            &transcription,
+            llm_text,
+            Some(&final_text),
+        );
+    }
+
+    ps.perf_history.record(perf.clone());
+    let _ = ps.app.emit("perf-metrics", &perf);
+    info!("{}", perf.summary());
+}
+
 /// Reset state machine to Idle and hide floating window.
 fn reset_to_idle(ps: &PipelineState) {
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
@@ -464,7 +590,10 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                     .map(|mut s| {
                         let result = s.start_recording();
                         if let Err(ref _e) = result {
-                            warn!("hotkey press: start_recording failed: state={}", s.state_name());
+                            warn!(
+                                "hotkey press: start_recording failed: state={}",
+                                s.state_name()
+                            );
                         }
                         result.is_ok()
                     })
@@ -486,13 +615,15 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
 
                 if can_record {
                     let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+                    let mode = config.pipeline_mode();
 
                     // Show floating window near text caret.
+                    // RealtimeReview mode shows the review window instead.
                     let show_floating =
-                        !config.realtime_transcription || !config.review_before_paste;
+                        !matches!(mode, crate::config::PipelineMode::RealtimeReview);
                     info!(
-                        "hotkey press: realtime={}, review={}, show_floating={}",
-                        config.realtime_transcription, config.review_before_paste, show_floating
+                        "hotkey press: mode={:?}, show_floating={}",
+                        mode, show_floating
                     );
                     if show_floating {
                         ps.window_controller.show_floating_near_caret();
@@ -529,8 +660,12 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                             return;
                         }
 
-                        // Start real-time transcription if enabled.
-                        if config.realtime_transcription {
+                        // Start real-time transcription for realtime modes.
+                        if matches!(
+                            mode,
+                            crate::config::PipelineMode::RealtimeDirect
+                                | crate::config::PipelineMode::RealtimeReview
+                        ) {
                             if let Some(sr) = ac_guard.sample_rate() {
                                 let audio = Arc::new(
                                     crate::realtime::StateMachineAudioSource::new(ps.sm.clone()),
@@ -554,8 +689,8 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         }
                     }
 
-                    // Show review window on press when both realtime and review are enabled.
-                    if config.realtime_transcription && config.review_before_paste {
+                    // Show review window on press for RealtimeReview mode.
+                    if matches!(mode, crate::config::PipelineMode::RealtimeReview) {
                         if let Some(pending) = ps.app.try_state::<PendingReview>() {
                             pending.save_foreground();
                             if let Some(mut guard) =
@@ -587,62 +722,89 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
 
                 let sample_rate =
                     crate::util::lock_mutex(&ps.ac, "audio_capture").and_then(|a| a.sample_rate());
-                if let Some(mut ac_guard) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
-                    ac_guard.stop();
-                }
 
-                // Stop real-time transcription thread first, then take accumulated text.
-                // Order matters: if we take before stopping, the thread may re-accumulate
-                // from empty and emit a partial that overwrites the textarea.
-                let realtime_accumulated = {
-                    if let Some(mut rt_guard) =
-                        crate::util::lock_mutex(&ps.realtime_transcriber, "realtime_transcriber")
-                    {
-                        if let Some(ref mut rt) = *rt_guard {
-                            rt.stop(); // Signal stop, detach thread
-                            let text = rt.take_accumulated(); // Now safe to take
-                            rt_guard.take(); // consume the transcriber
-                            info!("hotkey release: realtime accumulated={} chars", text.len());
-                            if !text.is_empty() { Some(text) } else { None }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                };
+                // Stop audio capture and realtime transcriber, get accumulated text.
+                let realtime_accumulated = ps.stop_recording_resources();
 
                 let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
-                let is_realtime_review =
-                    config.realtime_transcription && config.review_before_paste;
+                let mode = config.pipeline_mode();
 
-                // Realtime+review fast path: accumulated text is already in textarea
-                // via transcription-partial events. Just transition state and return.
-                if is_realtime_review {
-                    if let Some(accumulated) = realtime_accumulated {
-                        info!(
-                            "hotkey release: realtime+review fast path, {} chars already in textarea",
-                            accumulated.len()
-                        );
-                        // Save clipboard before entering review state.
-                        if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
-                            let _ = cb.save();
+                // Mode-specific fast paths using exhaustive match.
+                match mode {
+                    crate::config::PipelineMode::RealtimeReview => {
+                        if let Some(accumulated) = realtime_accumulated {
+                            info!(
+                                "hotkey release: RealtimeReview fast path, {} chars already in textarea",
+                                accumulated.len()
+                            );
+                            if let Some(mut cb) =
+                                crate::util::lock_mutex(&ps.clipboard, "clipboard")
+                            {
+                                let _ = cb.save();
+                            }
+                            if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
+                                let _ = s.stop_recording();
+                                let _ = s.transcribing_to_reviewing(accumulated);
+                            }
+                            ps.window_controller.hide_floating();
+                            return;
                         }
-                        // Proper state transition: Recording → Transcribing → Reviewing.
-                        if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-                            let _ = s.stop_recording(); // Recording → Transcribing
-                            let _ = s.transcribing_to_reviewing(accumulated.clone());
-                        }
-                        // Hide floating window (if shown).
-                        ps.window_controller.hide_floating();
-                        return;
-                    } else {
                         info!(
-                            "hotkey release: realtime+review but no accumulated text, falling through to full pipeline"
+                            "hotkey release: RealtimeReview but no accumulated text, falling through"
                         );
+                    }
+                    crate::config::PipelineMode::RealtimeDirect => {
+                        if let Some(accumulated) = realtime_accumulated {
+                            info!(
+                                "hotkey release: RealtimeDirect fast path, {} chars",
+                                accumulated.len()
+                            );
+                            if let Some(mut sm_guard) =
+                                crate::util::lock_mutex(&ps.sm, "state_machine")
+                            {
+                                match sm_guard.stop_recording() {
+                                    Ok(audio_data) => {
+                                        let native_rate = sample_rate.unwrap_or(48000);
+                                        perf.audio_samples = audio_data.len();
+                                        perf.audio_sample_rate = native_rate;
+                                        perf.release_latency_ms =
+                                            Some(t_release.elapsed().as_millis() as u64);
+                                        let t_press_for_e2e = t_release
+                                            - Duration::from_millis(
+                                                perf.audio_duration_ms.unwrap_or(0),
+                                            );
+                                        tauri::async_runtime::spawn(run_realtime_fast_path(
+                                            ps.clone(),
+                                            accumulated,
+                                            audio_data,
+                                            native_rate,
+                                            perf,
+                                            t_press_for_e2e,
+                                        ));
+                                        return;
+                                    }
+                                    Err(_) => {
+                                        info!(
+                                            "hotkey release: RealtimeDirect stop_recording failed"
+                                        );
+                                        sm_guard.reset();
+                                        ps.window_controller.hide_floating();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        info!(
+                            "hotkey release: RealtimeDirect but no accumulated text, falling through"
+                        );
+                    }
+                    crate::config::PipelineMode::ClassicDirect
+                    | crate::config::PipelineMode::ClassicReview => {
+                        // Fall through to full pipeline below.
                     }
                 }
 
+                // Full pipeline (Classic modes, or realtime modes with no accumulated text).
                 if let Some(mut sm_guard) = crate::util::lock_mutex(&ps.sm, "state_machine") {
                     let record_result = sm_guard.stop_recording();
                     info!(
@@ -664,10 +826,6 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 );
                                 sm_guard.reset();
                                 ps.window_controller.hide_floating();
-                                // Hide review window if it was shown on press (realtime+review mode).
-                                // NOTE: Do NOT call reset_to_idle(&ps) here — sm_guard already holds
-                                // the state_machine lock, and reset_to_idle would try to re-acquire it,
-                                // causing a deadlock (std::sync::Mutex is not reentrant on Windows).
                                 if let Some(pending) = ps.app.try_state::<PendingReview>() {
                                     let shown = crate::util::lock_mutex(
                                         &pending.shown_on_press,
@@ -702,9 +860,6 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                             t_press_for_e2e,
                         ));
                     } else {
-                        // stop_recording failed — state was already reset
-                        // (e.g., user confirmed/cancelled during recording in
-                        // realtime+review mode). Just hide floating window.
                         info!("hotkey release: stop_recording failed (state already reset)");
                         ps.window_controller.hide_floating();
                     }

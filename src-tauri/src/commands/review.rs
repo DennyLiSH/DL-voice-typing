@@ -1,4 +1,5 @@
 use crate::clipboard::AnyClipboard;
+use crate::commands::pipeline_state::PipelineState;
 use crate::error::CommandError;
 use crate::state::StateMachine;
 use std::path::PathBuf;
@@ -179,21 +180,8 @@ pub async fn confirm_inject(
                 // Early confirm during recording — stop audio capture and
                 // realtime transcriber, then reset state to Idle.
                 info!("confirm_inject: early confirm during recording/transcribing");
-                if let Some(ac) = app.try_state::<Arc<Mutex<crate::audio::AudioCapture>>>() {
-                    if let Some(mut ac_guard) = crate::util::lock_mutex(&ac, "audio_capture") {
-                        ac_guard.stop();
-                    }
-                }
-                if let Some(rt) =
-                    app.try_state::<Arc<Mutex<Option<crate::realtime::RealtimeTranscriber>>>>()
-                {
-                    if let Some(mut rt_guard) = crate::util::lock_mutex(&rt, "realtime_transcriber")
-                    {
-                        if let Some(mut rt) = rt_guard.take() {
-                            rt.stop_and_wait();
-                        }
-                    }
-                }
+                let ps = PipelineState::from_app(&app);
+                ps.stop_recording_resources_graceful();
                 sm.reset();
                 false
             }
@@ -269,21 +257,8 @@ pub async fn cancel_review(
                 // Early cancel during recording — stop audio capture and
                 // realtime transcriber, then reset state to Idle.
                 info!("cancel_review: early cancel during recording/transcribing");
-                if let Some(ac) = app.try_state::<Arc<Mutex<crate::audio::AudioCapture>>>() {
-                    if let Some(mut ac_guard) = crate::util::lock_mutex(&ac, "audio_capture") {
-                        ac_guard.stop();
-                    }
-                }
-                if let Some(rt) =
-                    app.try_state::<Arc<Mutex<Option<crate::realtime::RealtimeTranscriber>>>>()
-                {
-                    if let Some(mut rt_guard) = crate::util::lock_mutex(&rt, "realtime_transcriber")
-                    {
-                        if let Some(mut rt) = rt_guard.take() {
-                            rt.stop_and_wait();
-                        }
-                    }
-                }
+                let ps = PipelineState::from_app(&app);
+                ps.stop_recording_resources_graceful();
                 sm.reset();
             }
             _ => {
