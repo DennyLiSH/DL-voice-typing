@@ -53,9 +53,9 @@ cd src-tauri
 cargo build
 
 # 或使用构建脚本（自动配置环境）
-.\_Project\build_vulkan.ps1          # Debug
-.\_Project\build_vulkan.ps1 -Release # Release (生成 NSIS 安装包)
-.\_Project\build_vulkan.ps1 -Dev     # 开发模式
+.\scripts\build_vulkan.ps1          # Debug
+.\scripts\build_vulkan.ps1 -Release # Release (生成 NSIS 安装包)
+.\scripts\build_vulkan.ps1 -Dev     # 开发模式
 ```
 
 ## 🏗️ 技术栈
