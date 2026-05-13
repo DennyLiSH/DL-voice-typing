@@ -1,5 +1,4 @@
 use crate::state::StateMachine;
-use crate::util;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -92,9 +91,9 @@ impl Watchdog {
     }
 
     fn check(&mut self) {
-        let guard = util::lock_mutex(&self.sm, "state_machine_watchdog");
-        let Some(ref sm) = guard else {
-            error!("Watchdog: state_machine lock poisoned, cannot check state");
+        let guard = self.sm.try_lock();
+        let Ok(sm) = guard else {
+            warn!("Watchdog: state_machine lock busy/unavailable, skipping check");
             return;
         };
 
@@ -124,7 +123,7 @@ impl Watchdog {
                 elapsed
             );
             // Force reset: drop the guard to release the lock before calling reset helpers
-            drop(guard);
+            drop(sm);
             self.force_reset();
         } else {
             warn!(

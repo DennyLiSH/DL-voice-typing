@@ -37,7 +37,7 @@ use tracing_subscriber::fmt::time::OffsetTime;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_logging();
+    let _log_guard = init_logging();
 
     let state_machine = Arc::new(Mutex::new(StateMachine::new()));
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
@@ -107,7 +107,9 @@ pub fn run() {
 // ---------------------------------------------------------------------------
 
 /// Initialize structured logging to file (%APPDATA%\dl-voice-typing\logs\).
-fn init_logging() {
+/// Returns the WorkerGuard which MUST be held for the app lifetime — dropping it
+/// kills the background writer thread and silently discards all log output.
+fn init_logging() -> tracing_appender::non_blocking::WorkerGuard {
     let log_dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("dl-voice-typing")
@@ -119,7 +121,7 @@ fn init_logging() {
         .filename_suffix("log")
         .build(&log_dir)
         .expect("failed to initialize log file appender");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -132,6 +134,8 @@ fn init_logging() {
             Rfc3339,
         ))
         .init();
+
+    guard
 }
 
 /// Setup tray icon and register autostart plugin.

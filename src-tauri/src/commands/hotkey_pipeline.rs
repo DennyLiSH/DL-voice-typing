@@ -56,7 +56,7 @@ async fn run_pipeline(
 
     // Skip if transcription is empty (all segments filtered by no_speech probability).
     if transcription.is_empty() {
-        debug!("Empty transcription (all segments filtered), skipping injection");
+        info!("run_pipeline: empty transcription, resetting to idle");
         reset_to_idle(&ps);
         return;
     }
@@ -78,10 +78,12 @@ async fn run_pipeline(
 
     // -- Injection --
     if config.review_before_paste {
+        info!("run_pipeline: handing off to deliver_review ({} chars)", final_text.len());
         deliver_review(&ps, final_text, transcription, save_result, &config).await;
         return;
     }
 
+    info!("run_pipeline: handing off to deliver_direct ({} chars)", final_text.len());
     deliver_direct(
         &ps,
         final_text,
@@ -210,9 +212,13 @@ async fn deliver_review(
     save_result: Option<SaveResult>,
     config: &AppConfig,
 ) {
+    info!("deliver_review: ENTER ({} chars, llm={})", final_text.len(), config.llm_enabled);
+
     // Save clipboard before entering review state.
     if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
         let _ = cb.save();
+    } else {
+        warn!("deliver_review: clipboard lock returned None (poisoned?)");
     }
     // Transition to Reviewing.
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
@@ -221,6 +227,8 @@ async fn deliver_review(
         } else {
             let _ = s.transcribing_to_reviewing(final_text.clone());
         }
+    } else {
+        warn!("deliver_review: state_machine lock returned None (poisoned?)");
     }
     // Store text for the review window to fetch on load.
     if let Some(pending) = ps.app.try_state::<PendingReview>() {
@@ -453,8 +461,17 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                 let cycle_id = ps.perf_history.next_cycle_id();
 
                 let can_record = crate::util::lock_mutex(&ps.sm, "state_machine")
-                    .map(|mut s| s.start_recording().is_ok())
-                    .unwrap_or(false);
+                    .map(|mut s| {
+                        let result = s.start_recording();
+                        if let Err(ref _e) = result {
+                            warn!("hotkey press: start_recording failed: state={}", s.state_name());
+                        }
+                        result.is_ok()
+                    })
+                    .unwrap_or_else(|| {
+                        warn!("hotkey press: state_machine lock returned None (poisoned?)");
+                        false
+                    });
 
                 if can_record {
                     let engine_ready = crate::util::lock_mutex(&ps.engine, "engine")
