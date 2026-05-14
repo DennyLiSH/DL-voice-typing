@@ -4,6 +4,7 @@ pub mod hotkey_pipeline;
 pub mod misc_cmd;
 pub(crate) mod pipeline_state;
 pub mod review;
+pub(crate) mod review_provider;
 pub mod window_controller;
 
 use tauri::Emitter as TauriEmitter;

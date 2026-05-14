@@ -2,6 +2,7 @@ use crate::audio::AudioCaptureProvider;
 use crate::clipboard::AnyClipboard;
 use crate::commands::EventEmitter;
 use crate::commands::TauriEventEmitter;
+use crate::commands::review_provider::{ReviewProvider, TauriReviewProvider};
 use crate::commands::window_controller::window_controller_from_app;
 use crate::config::ConfigCache;
 use crate::llm::AnyCorrector;
@@ -22,12 +23,12 @@ pub(crate) struct PipelineState {
     pub engine: Arc<Mutex<AnyEngine>>,
     pub clipboard: Arc<Mutex<AnyClipboard>>,
     pub perf_history: Arc<PerfHistory>,
-    pub app: Option<tauri::AppHandle>,
     pub config_cache: ConfigCache,
     pub cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
     pub realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
     pub window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
     pub emitter: Arc<dyn EventEmitter>,
+    pub review: Arc<dyn ReviewProvider>,
 }
 
 impl PipelineState {
@@ -44,7 +45,7 @@ impl PipelineState {
         realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
         window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
         emitter: Arc<dyn EventEmitter>,
-        app: Option<tauri::AppHandle>,
+        review: Arc<dyn ReviewProvider>,
     ) -> Self {
         Self {
             sm,
@@ -52,12 +53,12 @@ impl PipelineState {
             engine,
             clipboard,
             perf_history,
-            app,
             config_cache,
             cached_llm,
             realtime_transcriber,
             window_controller,
             emitter,
+            review,
         }
     }
 
@@ -72,7 +73,6 @@ impl PipelineState {
             engine: app.state::<Arc<Mutex<AnyEngine>>>().inner().clone(),
             clipboard: app.state::<Arc<Mutex<AnyClipboard>>>().inner().clone(),
             perf_history: app.state::<Arc<PerfHistory>>().inner().clone(),
-            app: Some(app.clone()),
             config_cache: app.state::<ConfigCache>().inner().clone(),
             cached_llm: app
                 .state::<Arc<Mutex<Option<AnyCorrector>>>>()
@@ -84,6 +84,7 @@ impl PipelineState {
                 .clone(),
             window_controller: window_controller_from_app(app),
             emitter: Arc::new(TauriEventEmitter::new(app.clone())),
+            review: Arc::new(TauriReviewProvider::new(app.clone())),
         }
     }
 

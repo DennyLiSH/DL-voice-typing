@@ -8,11 +8,22 @@ use crate::perf::PerfMetrics;
 use crate::speech::SpeechEngine;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::Manager;
 use tracing::{debug, error, info, warn};
 
 use super::pipeline_state::PipelineState;
-use super::review::{PendingReview, ReviewData};
+use super::review::ReviewData;
+
+/// Adapter: bridges `commands::EventEmitter` → `realtime::EventEmitter`.
+struct RealtimeEmitterAdapter(Arc<dyn crate::commands::EventEmitter>);
+
+impl crate::realtime::EventEmitter for RealtimeEmitterAdapter {
+    fn emit_partial(&self, text: &str) {
+        self.0.emit(
+            "transcription-partial",
+            serde_json::to_value(text).unwrap_or_default(),
+        );
+    }
+}
 
 /// Check silence and resample audio to 16kHz for Whisper.
 /// Returns `None` if audio is near-silent (hallucination guard).
@@ -256,28 +267,11 @@ async fn deliver_review(
         warn!("deliver_review: state_machine lock returned None (poisoned?)");
     }
     // Store text for the review window to fetch on load.
-    if let Some(pending) = ps
-        .app
-        .as_ref()
-        .and_then(|app| app.try_state::<PendingReview>())
-    {
-        if let Some(mut guard) = crate::util::lock_mutex(&pending.text, "pending_text") {
-            *guard = Some(final_text.clone());
-            debug!("Review: stored pending text ({} chars)", final_text.len());
-        }
-    }
+    ps.review.store_text(final_text.clone());
+    debug!("Review: stored pending text ({} chars)", final_text.len());
 
     // Check if review window was already shown on press (realtime + review mode).
-    let was_shown_on_press = ps
-        .app
-        .as_ref()
-        .and_then(|app| app.try_state::<PendingReview>())
-        .map(|p| {
-            crate::util::lock_mutex(&p.shown_on_press, "shown_on_press")
-                .map(|g| *g)
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
+    let was_shown_on_press = ps.review.was_shown_on_press();
 
     if was_shown_on_press {
         // Review window already visible — update the text.
@@ -315,60 +309,34 @@ async fn deliver_review(
 
         // Store data-saving metadata for confirm/cancel to consume later.
         if let Some(sr) = save_result.as_ref() {
-            if let Some(pending) = ps
-                .app
-                .as_ref()
-                .and_then(|app| app.try_state::<PendingReview>())
-            {
-                if let Some(mut guard) =
-                    crate::util::lock_mutex(&pending.data_saving, "pending_data")
-                {
-                    *guard = Some(ReviewData {
-                        json_path: sr.json_path.clone(),
-                        raw_transcription: transcription,
-                        llm_text: if config.llm_enabled {
-                            Some(final_text)
-                        } else {
-                            None
-                        },
-                    });
-                }
-            }
+            ps.review.store_review_data(ReviewData {
+                json_path: sr.json_path.clone(),
+                raw_transcription: transcription,
+                llm_text: if config.llm_enabled {
+                    Some(final_text)
+                } else {
+                    None
+                },
+            });
         }
         return;
     }
 
-    if let Some(pending) = ps
-        .app
-        .as_ref()
-        .and_then(|app| app.try_state::<PendingReview>())
-    {
-        pending.save_foreground();
-    }
+    ps.review.save_foreground();
     if ps.window_controller.show_review_near_caret() {
         debug!("Review: window shown, review-show emitted");
 
         // Store data-saving metadata for confirm/cancel to consume later.
         if let Some(sr) = save_result.as_ref() {
-            if let Some(pending) = ps
-                .app
-                .as_ref()
-                .and_then(|app| app.try_state::<PendingReview>())
-            {
-                if let Some(mut guard) =
-                    crate::util::lock_mutex(&pending.data_saving, "pending_data")
-                {
-                    *guard = Some(ReviewData {
-                        json_path: sr.json_path.clone(),
-                        raw_transcription: transcription,
-                        llm_text: if config.llm_enabled {
-                            Some(final_text)
-                        } else {
-                            None
-                        },
-                    });
-                }
-            }
+            ps.review.store_review_data(ReviewData {
+                json_path: sr.json_path.clone(),
+                raw_transcription: transcription,
+                llm_text: if config.llm_enabled {
+                    Some(final_text)
+                } else {
+                    None
+                },
+            });
         }
     } else {
         warn!("review window not found. Falling back to direct injection.");
@@ -607,29 +575,9 @@ fn reset_to_idle(ps: &PipelineState) {
     }
     ps.window_controller.hide_floating();
     // Hide review window if it was shown on press (realtime+review mode).
-    let shown_on_press = ps
-        .app
-        .as_ref()
-        .and_then(|app| app.try_state::<PendingReview>())
-        .map(|p| {
-            crate::util::lock_mutex(&p.shown_on_press, "shown_on_press")
-                .map(|g| *g)
-                .unwrap_or(false)
-        })
-        .unwrap_or(false);
-    if shown_on_press {
+    if ps.review.was_shown_on_press() {
         ps.window_controller.hide_review();
-        if let Some(pending) = ps
-            .app
-            .as_ref()
-            .and_then(|app| app.try_state::<PendingReview>())
-        {
-            if let Some(mut guard) =
-                crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
-            {
-                *guard = false;
-            }
-        }
+        ps.review.set_shown_on_press(false);
     }
 }
 
@@ -738,11 +686,8 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 let audio = Arc::new(
                                     crate::realtime::StateMachineAudioSource::new(ps.sm.clone()),
                                 );
-                                let emitter = Arc::new(crate::realtime::TauriEventEmitter::new(
-                                    match ps.app.as_ref() {
-                                        Some(app) => app.clone(),
-                                        None => return,
-                                    },
+                                let emitter = Arc::new(RealtimeEmitterAdapter(
+                                    ps.emitter.clone(),
                                 ));
                                 let rt = crate::realtime::RealtimeTranscriber::start(
                                     audio,
@@ -762,18 +707,8 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
 
                     // Show review window on press for RealtimeReview mode.
                     if matches!(mode, crate::config::PipelineMode::RealtimeReview) {
-                        if let Some(pending) = ps
-                            .app
-                            .as_ref()
-                            .and_then(|app| app.try_state::<PendingReview>())
-                        {
-                            pending.save_foreground();
-                            if let Some(mut guard) =
-                                crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
-                            {
-                                *guard = true;
-                            }
-                        }
+                        ps.review.save_foreground();
+                        ps.review.set_shown_on_press(true);
                         ps.window_controller.show_review_near_caret();
                     }
 
@@ -901,26 +836,9 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 );
                                 sm_guard.reset();
                                 ps.window_controller.hide_floating();
-                                if let Some(pending) = ps
-                                    .app
-                                    .as_ref()
-                                    .and_then(|app| app.try_state::<PendingReview>())
-                                {
-                                    let shown = crate::util::lock_mutex(
-                                        &pending.shown_on_press,
-                                        "shown_on_press",
-                                    )
-                                    .map(|g| *g)
-                                    .unwrap_or(false);
-                                    if shown {
-                                        ps.window_controller.hide_review();
-                                        if let Some(mut guard) = crate::util::lock_mutex(
-                                            &pending.shown_on_press,
-                                            "shown_on_press",
-                                        ) {
-                                            *guard = false;
-                                        }
-                                    }
+                                if ps.review.was_shown_on_press() {
+                                    ps.window_controller.hide_review();
+                                    ps.review.set_shown_on_press(false);
                                 }
                                 return;
                             }
