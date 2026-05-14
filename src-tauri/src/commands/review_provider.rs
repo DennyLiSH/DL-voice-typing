@@ -1,4 +1,5 @@
 use crate::commands::review::ReviewData;
+#[cfg(test)]
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 

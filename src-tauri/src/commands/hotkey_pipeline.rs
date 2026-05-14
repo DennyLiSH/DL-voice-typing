@@ -8,7 +8,7 @@ use crate::perf::PerfMetrics;
 use crate::speech::SpeechEngine;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use super::pipeline_state::PipelineState;
 use super::review::ReviewData;
@@ -377,69 +377,15 @@ async fn deliver_direct(
         }
     }
 
-    let t_inject = Instant::now();
-    {
-        let cb_for_inject = ps.clipboard.clone();
-        let text_for_inject = final_text.clone();
-        match tauri::async_runtime::spawn_blocking(move || {
-            let mut cb = cb_for_inject.lock().map_err(|e| e.to_string())?;
-            cb.save().map_err(|e| e.to_string())?;
-            cb.inject_text(&text_for_inject).map_err(|e| e.to_string())
-        })
-        .await
-        {
-            Ok(Ok(())) => {
-                info!("deliver_direct: injection succeeded");
-            }
-            Ok(Err(e)) => {
-                warn!("deliver_direct: injection failed: {e}");
-                ps.emitter.emit(
-                    "injection-error",
-                    serde_json::to_value(e).unwrap_or_default(),
-                );
-            }
-            Err(e) => {
-                error!("deliver_direct: injection task panicked: {e}");
-                ps.emitter.emit(
-                    "injection-error",
-                    serde_json::to_value(e.to_string()).unwrap_or_default(),
-                );
-            }
-        }
-    }
-    perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-    perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
-    perf.text_length = final_text.len();
-
-    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-        let _ = s.finish_injecting();
-    }
-    ps.emitter
-        .emit("injection-complete", serde_json::Value::Null);
-
-    ps.window_controller.hide_floating();
-
-    // Update data_saving JSON with transcription.
-    if let Some(sr) = save_result {
-        let llm_text = if config.llm_enabled {
-            Some(final_text.as_str())
-        } else {
-            None
-        };
-        let _ = crate::data_saving::update_json_with_text(
-            &sr.json_path,
-            &transcription,
-            llm_text,
-            Some(&final_text),
-        );
-    }
-
-    ps.perf_history.record(perf.clone());
-    ps.emitter.emit(
-        "perf-metrics",
-        serde_json::to_value(&perf).unwrap_or_default(),
-    );
-    info!("{}", perf.summary());
+    let mut ctx = super::text_injector::InjectionContext {
+        text: final_text,
+        transcription,
+        save_result,
+        config,
+        perf,
+        t_press_for_e2e,
+    };
+    super::text_injector::inject_text(ps, &mut ctx).await;
 }
 
 /// Fast path for RealtimeDirect mode (RT=on, REVIEW=off).
@@ -502,70 +448,16 @@ async fn run_realtime_fast_path(
         }
     }
 
-    // Inject via clipboard.
-    let t_inject = Instant::now();
-    {
-        let cb_for_inject = ps.clipboard.clone();
-        let text_for_inject = final_text.clone();
-        match tauri::async_runtime::spawn_blocking(move || {
-            let mut cb = cb_for_inject.lock().map_err(|e| e.to_string())?;
-            cb.save().map_err(|e| e.to_string())?;
-            cb.inject_text(&text_for_inject).map_err(|e| e.to_string())
-        })
-        .await
-        {
-            Ok(Ok(())) => info!("RealtimeFastPath: injection succeeded"),
-            Ok(Err(e)) => {
-                warn!("RealtimeFastPath: injection failed: {e}");
-                ps.emitter.emit(
-                    "injection-error",
-                    serde_json::to_value(e).unwrap_or_default(),
-                );
-            }
-            Err(e) => {
-                error!("RealtimeFastPath: injection task panicked: {e}");
-                ps.emitter.emit(
-                    "injection-error",
-                    serde_json::to_value(e.to_string()).unwrap_or_default(),
-                );
-            }
-        }
-    }
-    perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-    perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
-    perf.text_length = final_text.len();
-
-    // State: Injecting → Idle.
-    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-        let _ = s.finish_injecting();
-    }
-
-    ps.emitter
-        .emit("injection-complete", serde_json::Value::Null);
-    ps.window_controller.hide_floating();
-
-    // Update data-saving JSON.
     let save_result = save_handle.await.unwrap_or(None);
-    if let Some(sr) = save_result {
-        let llm_text = if config.llm_enabled {
-            Some(final_text.as_str())
-        } else {
-            None
-        };
-        let _ = crate::data_saving::update_json_with_text(
-            &sr.json_path,
-            &transcription,
-            llm_text,
-            Some(&final_text),
-        );
-    }
-
-    ps.perf_history.record(perf.clone());
-    ps.emitter.emit(
-        "perf-metrics",
-        serde_json::to_value(&perf).unwrap_or_default(),
-    );
-    info!("{}", perf.summary());
+    let mut ctx = super::text_injector::InjectionContext {
+        text: final_text,
+        transcription,
+        save_result,
+        config: &config,
+        perf: &mut perf,
+        t_press_for_e2e,
+    };
+    super::text_injector::inject_text(&ps, &mut ctx).await;
 }
 
 /// Reset state machine to Idle and hide floating window.

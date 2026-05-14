@@ -5,6 +5,7 @@ pub mod misc_cmd;
 pub(crate) mod pipeline_state;
 pub mod review;
 pub(crate) mod review_provider;
+pub(crate) mod text_injector;
 pub mod window_controller;
 
 use tauri::Emitter as TauriEmitter;
@@ -30,6 +31,32 @@ impl TauriEventEmitter {
 impl EventEmitter for TauriEventEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         let _ = TauriEmitter::emit(&self.app, event, payload);
+    }
+}
+
+/// Mock event emitter for testing. Records all emitted events.
+pub struct MockEmitter {
+    events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl MockEmitter {
+    pub fn new() -> Self {
+        Self {
+            events: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn take_events(&self) -> Vec<(String, serde_json::Value)> {
+        self.events.lock().unwrap().drain(..).collect()
+    }
+}
+
+impl EventEmitter for MockEmitter {
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        self.events
+            .lock()
+            .unwrap()
+            .push((event.to_string(), payload));
     }
 }
 
