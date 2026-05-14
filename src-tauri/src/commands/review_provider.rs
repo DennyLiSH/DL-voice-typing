@@ -111,6 +111,7 @@ impl MockReviewProvider {
             .and_then(|g: std::sync::MutexGuard<'_, Option<String>>| g.clone())
     }
 
+    #[allow(dead_code)]
     pub fn get_foreground(&self) -> Option<isize> {
         self.foreground
             .lock()
@@ -134,8 +135,7 @@ impl ReviewProvider for MockReviewProvider {
     }
 
     fn take_foreground(&self) -> Option<isize> {
-        crate::util::lock_mutex(&self.foreground, "mock_foreground")
-            .and_then(|mut g| g.take())
+        crate::util::lock_mutex(&self.foreground, "mock_foreground").and_then(|mut g| g.take())
     }
 
     fn was_shown_on_press(&self) -> bool {

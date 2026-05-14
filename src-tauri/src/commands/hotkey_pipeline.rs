@@ -578,9 +578,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 let audio = Arc::new(
                                     crate::realtime::StateMachineAudioSource::new(ps.sm.clone()),
                                 );
-                                let emitter = Arc::new(RealtimeEmitterAdapter(
-                                    ps.emitter.clone(),
-                                ));
+                                let emitter = Arc::new(RealtimeEmitterAdapter(ps.emitter.clone()));
                                 let rt = crate::realtime::RealtimeTranscriber::start(
                                     audio,
                                     ps.engine.clone(),

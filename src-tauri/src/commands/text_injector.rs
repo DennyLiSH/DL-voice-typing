@@ -93,9 +93,9 @@ mod tests {
     use super::*;
     use crate::audio::MockAudioCapture;
     use crate::clipboard::{AnyClipboard, MockClipboard};
+    use crate::commands::EventEmitter;
     use crate::commands::review_provider::MockReviewProvider;
     use crate::commands::window_controller::NoopWindowController;
-    use crate::commands::EventEmitter;
     use crate::config::AppConfig;
     use crate::llm::{AnyCorrector, MockCorrector};
     use crate::perf::PerfHistory;
@@ -117,7 +117,9 @@ mod tests {
             clipboard,
             Arc::new(PerfHistory::new()),
             Arc::new(RwLock::new(AppConfig::default())),
-            Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new("corrected"))))),
+            Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new(
+                "corrected",
+            ))))),
             Arc::new(Mutex::new(None)),
             Arc::new(NoopWindowController),
             emitter,

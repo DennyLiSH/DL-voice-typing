@@ -39,6 +39,12 @@ pub struct MockEmitter {
     events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
 }
 
+impl Default for MockEmitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockEmitter {
     pub fn new() -> Self {
         Self {

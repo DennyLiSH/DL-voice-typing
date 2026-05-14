@@ -42,6 +42,12 @@ pub struct MockPlatformProvider {
     restore_log: std::sync::Mutex<Vec<isize>>,
 }
 
+impl Default for MockPlatformProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockPlatformProvider {
     pub fn new() -> Self {
         Self {

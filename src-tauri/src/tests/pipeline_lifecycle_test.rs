@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex, RwLock};
 fn build_ps() -> PipelineState {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let engine = Arc::new(Mutex::new(AnyEngine::Mock(MockEngine::new("test transcription"))));
+    let engine = Arc::new(Mutex::new(AnyEngine::Mock(MockEngine::new(
+        "test transcription",
+    ))));
     let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
     let emitter: Arc<dyn EventEmitter> = Arc::new(MockEmitter::new());
 
@@ -49,12 +51,14 @@ fn test_classic_direct_lifecycle() {
 
     // Recording → Transcribing
     sm.append_audio(&[0.5f32; 4800]).unwrap();
-    let audio = sm.stop_recording().unwrap();
+    let _audio = sm.stop_recording().unwrap();
     assert!(matches!(sm.state(), AppState::Transcribing { .. }));
 
     // Transcribing → Injecting
-    sm.add_partial_result("test transcription".to_string()).unwrap();
-    sm.transcribing_to_injecting("test transcription".to_string()).unwrap();
+    sm.add_partial_result("test transcription".to_string())
+        .unwrap();
+    sm.transcribing_to_injecting("test transcription".to_string())
+        .unwrap();
     assert!(matches!(sm.state(), AppState::Injecting { .. }));
 
     // Injecting → Idle
@@ -78,7 +82,8 @@ fn test_classic_review_lifecycle() {
     assert!(matches!(sm.state(), AppState::Reviewing { .. }));
 
     // Reviewing → Injecting
-    sm.reviewing_to_injecting("edited text".to_string()).unwrap();
+    sm.reviewing_to_injecting("edited text".to_string())
+        .unwrap();
     assert!(matches!(sm.state(), AppState::Injecting { .. }));
 
     // Injecting → Idle
@@ -99,7 +104,7 @@ fn test_llm_lifecycle() {
     // Transcribing → LLMRefining
     sm.add_partial_result("raw".to_string()).unwrap();
     sm.start_llm_refining().unwrap();
-    assert!(matches!(sm.state(), AppState::LLMRefining { .. }));
+    assert!(matches!(sm.state(), AppState::LLMRefining));
 
     // LLMRefining → Injecting
     sm.llm_to_injecting("corrected".to_string()).unwrap();
@@ -151,11 +156,13 @@ fn test_realtime_review_lifecycle() {
 
     // Recording → Transcribing → Reviewing (realtime accumulated text)
     sm.stop_recording().unwrap();
-    sm.transcribing_to_reviewing("accumulated text".to_string()).unwrap();
+    sm.transcribing_to_reviewing("accumulated text".to_string())
+        .unwrap();
     assert!(matches!(sm.state(), AppState::Reviewing { .. }));
 
     // Confirm from reviewing
-    sm.reviewing_to_injecting("accumulated text".to_string()).unwrap();
+    sm.reviewing_to_injecting("accumulated text".to_string())
+        .unwrap();
     sm.finish_injecting().unwrap();
     assert!(matches!(sm.state(), AppState::Idle));
 }
