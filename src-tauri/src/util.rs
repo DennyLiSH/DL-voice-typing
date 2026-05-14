@@ -1,4 +1,4 @@
-//! Utility helpers for lock management.
+//! Utility helpers for lock management and state machine transitions.
 
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing::warn;
@@ -24,4 +24,17 @@ pub fn write_rwlock<'a, T>(m: &'a RwLock<T>, label: &str) -> Option<RwLockWriteG
     m.write()
         .inspect_err(|e| warn!(target: "lock", "{label} write poisoned: {e}"))
         .ok()
+}
+
+/// Wrap a state machine transition with tracing on failure.
+/// Usage: `transition!(sm, start_recording)` or `transition!(sm, llm_to_injecting, text)`
+#[macro_export]
+macro_rules! transition {
+    ($sm:expr, $method:ident $(, $arg:expr)*) => {{
+        let result = $sm.$method($($arg),*);
+        if let Err(ref e) = result {
+            tracing::warn!("transition {} failed: {e}", stringify!($method));
+        }
+        result
+    }};
 }

@@ -319,5 +319,6 @@ fn start_watchdog(app: &tauri::AppHandle, state_machine: Arc<Mutex<StateMachine>
 #[cfg(test)]
 mod tests {
     mod pipeline_integration_test;
+    mod pipeline_lifecycle_test;
     mod pipeline_test;
 }
