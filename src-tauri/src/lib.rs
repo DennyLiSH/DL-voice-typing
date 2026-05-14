@@ -8,6 +8,7 @@ pub mod error;
 pub mod hotkey;
 pub mod llm;
 pub mod perf;
+pub mod platform;
 pub mod realtime;
 pub mod speech;
 pub mod state;
