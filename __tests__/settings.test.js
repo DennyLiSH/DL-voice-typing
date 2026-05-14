@@ -72,6 +72,16 @@ describe('isConfigDirty', () => {
         const current = { ...baseConfig, autostart: true };
         expect(isConfigDirty(current, baseConfig)).toBe(true);
     });
+
+    it('returns true when realtime_transcription differs', () => {
+        const current = { ...baseConfig, realtime_transcription: true };
+        expect(isConfigDirty(current, { ...baseConfig, realtime_transcription: false })).toBe(true);
+    });
+
+    it('returns false when realtime_transcription matches', () => {
+        const current = { ...baseConfig, realtime_transcription: true };
+        expect(isConfigDirty(current, { ...baseConfig, realtime_transcription: true })).toBe(false);
+    });
 });
 
 describe('validateSettings', () => {
@@ -124,6 +134,18 @@ describe('validateSettings', () => {
     it('returns valid when data saving disabled (no path needed)', () => {
         const config = { ...baseConfig, data_saving_enabled: false, data_saving_path: '' };
         const result = validateSettings(config, modelStatus);
+        expect(result.valid).toBe(true);
+    });
+
+    it('returns valid for custom model regardless of modelStatus', () => {
+        const config = { ...baseConfig, whisper_model: 'custom:my-model.bin' };
+        const result = validateSettings(config, modelStatus);
+        expect(result.valid).toBe(true);
+    });
+
+    it('returns valid for custom model with empty modelStatus', () => {
+        const config = { ...baseConfig, whisper_model: 'custom:path/to/model.bin' };
+        const result = validateSettings(config, {});
         expect(result.valid).toBe(true);
     });
 });
