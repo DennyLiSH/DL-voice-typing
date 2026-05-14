@@ -8,6 +8,18 @@ use std::sync::{Arc, Mutex};
 
 use super::MASKED_MARKER;
 
+/// Whether autostart is available in the current build.
+/// - Release: always true.
+/// - Debug: only when DL_AUTOSTART=1 env var is set.
+#[tauri::command]
+pub fn is_autostart_available() -> bool {
+    if cfg!(debug_assertions) {
+        std::env::var("DL_AUTOSTART").as_deref() == Ok("1")
+    } else {
+        true
+    }
+}
+
 /// Test the LLM connection with the given settings.
 /// If api_key is the masked marker, uses the saved key from config.
 #[tauri::command]

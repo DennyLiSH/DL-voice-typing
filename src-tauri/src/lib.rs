@@ -83,6 +83,7 @@ pub fn run() {
             commands::download::delete_custom_model,
             commands::misc_cmd::get_perf_history,
             commands::misc_cmd::get_compute_mode,
+            commands::misc_cmd::is_autostart_available,
             commands::review::confirm_inject,
             commands::review::cancel_review,
             commands::review::get_review_text,
@@ -106,6 +107,17 @@ pub fn run() {
 // ---------------------------------------------------------------------------
 // Setup stage functions — each handles one logical concern of app bootstrap.
 // ---------------------------------------------------------------------------
+
+/// Whether autostart registry operations should run.
+/// - Release builds: always true.
+/// - Debug builds: only when DL_AUTOSTART=1 env var is set.
+fn should_manage_autostart() -> bool {
+    if cfg!(debug_assertions) {
+        std::env::var("DL_AUTOSTART").as_deref() == Ok("1")
+    } else {
+        true
+    }
+}
 
 /// Initialize structured logging to file (%APPDATA%\dl-voice-typing\logs\).
 /// Returns the WorkerGuard which MUST be held for the app lifetime — dropping it
@@ -168,14 +180,18 @@ fn load_and_manage_config(app: &tauri::AppHandle) -> AppConfig {
     // Sync autostart registry with config preference.
     #[cfg(desktop)]
     {
-        use tauri_plugin_autostart::ManagerExt;
-        let manager = app.autolaunch();
-        if config.autostart {
-            if let Err(e) = manager.enable() {
-                warn!("failed to enable autostart: {e}");
+        if should_manage_autostart() {
+            use tauri_plugin_autostart::ManagerExt;
+            let manager = app.autolaunch();
+            if config.autostart {
+                if let Err(e) = manager.enable() {
+                    warn!("failed to enable autostart: {e}");
+                }
+            } else if let Err(e) = manager.disable() {
+                warn!("failed to disable autostart: {e}");
             }
-        } else if let Err(e) = manager.disable() {
-            warn!("failed to disable autostart: {e}");
+        } else {
+            info!("autostart management skipped (debug build without DL_AUTOSTART=1)");
         }
     }
 

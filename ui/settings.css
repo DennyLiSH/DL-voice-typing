@@ -316,6 +316,12 @@ select:disabled, input:disabled {
   transform: translateX(18px);
 }
 
+.toggle-switch.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* --------------------------------------------------------------------------
    Conditional fields
    -------------------------------------------------------------------------- */

@@ -42,6 +42,8 @@ pub use download::{
     get_whisper_models,
 };
 pub(crate) use hotkey_pipeline::make_hotkey_callback;
-pub use misc_cmd::{get_compute_mode, get_perf_history, test_llm_connection};
+pub use misc_cmd::{
+    get_compute_mode, get_perf_history, is_autostart_available, test_llm_connection,
+};
 pub use review::{PendingReview, cancel_review, confirm_inject, get_review_text};
 pub use window_controller::WindowController;

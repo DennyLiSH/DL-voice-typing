@@ -107,6 +107,19 @@ async function init() {
         loadedAutostart = !!config.autostart;
         autostartToggle.classList.toggle('active', loadedAutostart);
         autostartToggle.setAttribute('aria-checked', String(loadedAutostart));
+
+        // In dev builds without DL_AUTOSTART=1, gray out the autostart toggle.
+        try {
+            const autostartAvailable = await invoke('is_autostart_available');
+            if (!autostartAvailable) {
+                autostartToggle.classList.add('disabled');
+                autostartToggle.setAttribute('aria-disabled', 'true');
+                autostartToggle.parentElement.classList.add('disabled');
+            }
+        } catch (e) {
+            // Non-critical: just skip gray-out
+        }
+
         updateDirtyState();
 
         // Display version
@@ -416,6 +429,7 @@ reviewToggle.addEventListener('keydown', (e) => {
 // --- Autostart Toggle ---
 
 autostartToggle.addEventListener('click', () => {
+    if (autostartToggle.classList.contains('disabled')) return;
     const isActive = autostartToggle.classList.toggle('active');
     autostartToggle.setAttribute('aria-checked', String(isActive));
     updateDirtyState();
@@ -605,13 +619,16 @@ saveBtn.addEventListener('click', async () => {
         await invoke('save_settings', { config });
         loadedConfig = config;
 
-        // Sync autostart state with OS.
+        // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
         try {
             const wantAutostart = autostartToggle.classList.contains('active');
-            if (wantAutostart) {
-                await window.__TAURI__.autostart.enable();
-            } else {
-                await window.__TAURI__.autostart.disable();
+            const autostartAvailable = await invoke('is_autostart_available');
+            if (autostartAvailable) {
+                if (wantAutostart) {
+                    await window.__TAURI__.autostart.enable();
+                } else {
+                    await window.__TAURI__.autostart.disable();
+                }
             }
             loadedAutostart = wantAutostart;
         } catch (e) {
