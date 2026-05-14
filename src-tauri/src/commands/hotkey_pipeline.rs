@@ -138,19 +138,28 @@ async fn transcribe_and_save(
 
     let transcription = match transcription_result {
         Ok(Ok(text)) => {
-            ps.emitter.emit("transcription-complete", serde_json::to_value(&text).unwrap_or_default());
+            ps.emitter.emit(
+                "transcription-complete",
+                serde_json::to_value(&text).unwrap_or_default(),
+            );
             if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
                 let _ = s.add_partial_result(text.clone());
             }
             text
         }
         Ok(Err(e)) => {
-            ps.emitter.emit("speech-error", serde_json::to_value(e.to_string()).unwrap_or_default());
+            ps.emitter.emit(
+                "speech-error",
+                serde_json::to_value(e.to_string()).unwrap_or_default(),
+            );
             reset_to_idle(ps);
             return (save_result, String::new());
         }
         Err(e) => {
-            ps.emitter.emit("speech-error", serde_json::to_value(e.to_string()).unwrap_or_default());
+            ps.emitter.emit(
+                "speech-error",
+                serde_json::to_value(e.to_string()).unwrap_or_default(),
+            );
             reset_to_idle(ps);
             return (save_result, String::new());
         }
@@ -200,11 +209,17 @@ async fn resolve_llm_text(
 
     match result {
         Ok(corrected) => {
-            ps.emitter.emit("llm-complete", serde_json::to_value(&corrected).unwrap_or_default());
+            ps.emitter.emit(
+                "llm-complete",
+                serde_json::to_value(&corrected).unwrap_or_default(),
+            );
             corrected
         }
         Err(e) => {
-            ps.emitter.emit("llm-error", serde_json::to_value(e.to_string()).unwrap_or_default());
+            ps.emitter.emit(
+                "llm-error",
+                serde_json::to_value(e.to_string()).unwrap_or_default(),
+            );
             transcription.to_string()
         }
     }
@@ -241,7 +256,11 @@ async fn deliver_review(
         warn!("deliver_review: state_machine lock returned None (poisoned?)");
     }
     // Store text for the review window to fetch on load.
-    if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
+    if let Some(pending) = ps
+        .app
+        .as_ref()
+        .and_then(|app| app.try_state::<PendingReview>())
+    {
         if let Some(mut guard) = crate::util::lock_mutex(&pending.text, "pending_text") {
             *guard = Some(final_text.clone());
             debug!("Review: stored pending text ({} chars)", final_text.len());
@@ -296,7 +315,11 @@ async fn deliver_review(
 
         // Store data-saving metadata for confirm/cancel to consume later.
         if let Some(sr) = save_result.as_ref() {
-            if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
+            if let Some(pending) = ps
+                .app
+                .as_ref()
+                .and_then(|app| app.try_state::<PendingReview>())
+            {
                 if let Some(mut guard) =
                     crate::util::lock_mutex(&pending.data_saving, "pending_data")
                 {
@@ -315,7 +338,11 @@ async fn deliver_review(
         return;
     }
 
-    if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
+    if let Some(pending) = ps
+        .app
+        .as_ref()
+        .and_then(|app| app.try_state::<PendingReview>())
+    {
         pending.save_foreground();
     }
     if ps.window_controller.show_review_near_caret() {
@@ -323,7 +350,11 @@ async fn deliver_review(
 
         // Store data-saving metadata for confirm/cancel to consume later.
         if let Some(sr) = save_result.as_ref() {
-            if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
+            if let Some(pending) = ps
+                .app
+                .as_ref()
+                .and_then(|app| app.try_state::<PendingReview>())
+            {
                 if let Some(mut guard) =
                     crate::util::lock_mutex(&pending.data_saving, "pending_data")
                 {
@@ -354,7 +385,8 @@ async fn deliver_review(
         if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
             let _ = s.finish_injecting();
         }
-        ps.emitter.emit("injection-complete", serde_json::Value::Null);
+        ps.emitter
+            .emit("injection-complete", serde_json::Value::Null);
         ps.window_controller.hide_floating();
     }
 }
@@ -393,11 +425,17 @@ async fn deliver_direct(
             }
             Ok(Err(e)) => {
                 warn!("deliver_direct: injection failed: {e}");
-                ps.emitter.emit("injection-error", serde_json::to_value(e).unwrap_or_default());
+                ps.emitter.emit(
+                    "injection-error",
+                    serde_json::to_value(e).unwrap_or_default(),
+                );
             }
             Err(e) => {
                 error!("deliver_direct: injection task panicked: {e}");
-                ps.emitter.emit("injection-error", serde_json::to_value(e.to_string()).unwrap_or_default());
+                ps.emitter.emit(
+                    "injection-error",
+                    serde_json::to_value(e.to_string()).unwrap_or_default(),
+                );
             }
         }
     }
@@ -408,7 +446,8 @@ async fn deliver_direct(
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         let _ = s.finish_injecting();
     }
-    ps.emitter.emit("injection-complete", serde_json::Value::Null);
+    ps.emitter
+        .emit("injection-complete", serde_json::Value::Null);
 
     ps.window_controller.hide_floating();
 
@@ -428,7 +467,10 @@ async fn deliver_direct(
     }
 
     ps.perf_history.record(perf.clone());
-    ps.emitter.emit("perf-metrics", serde_json::to_value(&perf).unwrap_or_default());
+    ps.emitter.emit(
+        "perf-metrics",
+        serde_json::to_value(&perf).unwrap_or_default(),
+    );
     info!("{}", perf.summary());
 }
 
@@ -507,11 +549,17 @@ async fn run_realtime_fast_path(
             Ok(Ok(())) => info!("RealtimeFastPath: injection succeeded"),
             Ok(Err(e)) => {
                 warn!("RealtimeFastPath: injection failed: {e}");
-                ps.emitter.emit("injection-error", serde_json::to_value(e).unwrap_or_default());
+                ps.emitter.emit(
+                    "injection-error",
+                    serde_json::to_value(e).unwrap_or_default(),
+                );
             }
             Err(e) => {
                 error!("RealtimeFastPath: injection task panicked: {e}");
-                ps.emitter.emit("injection-error", serde_json::to_value(e.to_string()).unwrap_or_default());
+                ps.emitter.emit(
+                    "injection-error",
+                    serde_json::to_value(e.to_string()).unwrap_or_default(),
+                );
             }
         }
     }
@@ -524,7 +572,8 @@ async fn run_realtime_fast_path(
         let _ = s.finish_injecting();
     }
 
-    ps.emitter.emit("injection-complete", serde_json::Value::Null);
+    ps.emitter
+        .emit("injection-complete", serde_json::Value::Null);
     ps.window_controller.hide_floating();
 
     // Update data-saving JSON.
@@ -544,7 +593,10 @@ async fn run_realtime_fast_path(
     }
 
     ps.perf_history.record(perf.clone());
-    ps.emitter.emit("perf-metrics", serde_json::to_value(&perf).unwrap_or_default());
+    ps.emitter.emit(
+        "perf-metrics",
+        serde_json::to_value(&perf).unwrap_or_default(),
+    );
     info!("{}", perf.summary());
 }
 
@@ -567,7 +619,11 @@ fn reset_to_idle(ps: &PipelineState) {
         .unwrap_or(false);
     if shown_on_press {
         ps.window_controller.hide_review();
-        if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
+        if let Some(pending) = ps
+            .app
+            .as_ref()
+            .and_then(|app| app.try_state::<PendingReview>())
+        {
             if let Some(mut guard) =
                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
             {
@@ -610,7 +666,10 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         .unwrap_or(false);
                     if !engine_ready {
                         reset_to_idle(&ps);
-                        ps.emitter.emit("speech-error", serde_json::to_value("模型加载中，请稍候...").unwrap_or_default());
+                        ps.emitter.emit(
+                            "speech-error",
+                            serde_json::to_value("模型加载中，请稍候...").unwrap_or_default(),
+                        );
                         return;
                     }
                 }
@@ -650,7 +709,10 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                             {
                                 if last.elapsed() >= Duration::from_millis(33) {
                                     *last = Instant::now();
-                                    emitter_for_rms.emit("audio-rms", serde_json::to_value(rms_val).unwrap_or_default());
+                                    emitter_for_rms.emit(
+                                        "audio-rms",
+                                        serde_json::to_value(rms_val).unwrap_or_default(),
+                                    );
                                 }
                             }
                         }));
@@ -658,7 +720,11 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         if let Err(e) = start_result {
                             warn!("audio capture start failed: {e}");
                             reset_to_idle(&ps);
-                            ps.emitter.emit("speech-error", serde_json::to_value(format!("录音启动失败: {e}")).unwrap_or_default());
+                            ps.emitter.emit(
+                                "speech-error",
+                                serde_json::to_value(format!("录音启动失败: {e}"))
+                                    .unwrap_or_default(),
+                            );
                             return;
                         }
 
@@ -696,7 +762,11 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
 
                     // Show review window on press for RealtimeReview mode.
                     if matches!(mode, crate::config::PipelineMode::RealtimeReview) {
-                        if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
+                        if let Some(pending) = ps
+                            .app
+                            .as_ref()
+                            .and_then(|app| app.try_state::<PendingReview>())
+                        {
                             pending.save_foreground();
                             if let Some(mut guard) =
                                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
@@ -831,7 +901,11 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 );
                                 sm_guard.reset();
                                 ps.window_controller.hide_floating();
-                                if let Some(pending) = ps.app.as_ref().and_then(|app| app.try_state::<PendingReview>()) {
+                                if let Some(pending) = ps
+                                    .app
+                                    .as_ref()
+                                    .and_then(|app| app.try_state::<PendingReview>())
+                                {
                                     let shown = crate::util::lock_mutex(
                                         &pending.shown_on_press,
                                         "shown_on_press",

@@ -1,8 +1,8 @@
 use crate::audio::AudioCaptureProvider;
 use crate::clipboard::AnyClipboard;
-use crate::commands::window_controller::window_controller_from_app;
 use crate::commands::EventEmitter;
 use crate::commands::TauriEventEmitter;
+use crate::commands::window_controller::window_controller_from_app;
 use crate::config::ConfigCache;
 use crate::llm::AnyCorrector;
 use crate::perf::PerfHistory;
@@ -65,7 +65,10 @@ impl PipelineState {
     pub fn from_app(app: &tauri::AppHandle) -> Self {
         Self {
             sm: app.state::<Arc<Mutex<StateMachine>>>().inner().clone(),
-            ac: app.state::<Arc<Mutex<dyn AudioCaptureProvider>>>().inner().clone(),
+            ac: app
+                .state::<Arc<Mutex<dyn AudioCaptureProvider>>>()
+                .inner()
+                .clone(),
             engine: app.state::<Arc<Mutex<AnyEngine>>>().inner().clone(),
             clipboard: app.state::<Arc<Mutex<AnyClipboard>>>().inner().clone(),
             perf_history: app.state::<Arc<PerfHistory>>().inner().clone(),

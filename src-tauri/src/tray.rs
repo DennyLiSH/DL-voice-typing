@@ -49,7 +49,9 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                     }
                 }
                 // Stop audio capture if recording
-                if let Some(ac) = app.try_state::<Arc<Mutex<dyn crate::audio::AudioCaptureProvider>>>() {
+                if let Some(ac) =
+                    app.try_state::<Arc<Mutex<dyn crate::audio::AudioCaptureProvider>>>()
+                {
                     if let Some(mut guard) =
                         crate::util::lock_mutex(&ac, "audio_capture_tray_reset")
                     {
