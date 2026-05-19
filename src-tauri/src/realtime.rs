@@ -48,6 +48,28 @@ impl AudioSource for StateMachineAudioSource {
     }
 }
 
+/// Adapter: exposes `AudioRingBuffer` as an `AudioSource`.
+/// Eliminates StateMachine lock contention on the realtime path.
+pub struct AudioRingBufferSource {
+    buffer: Arc<Mutex<crate::audio::AudioRingBuffer>>,
+}
+
+impl AudioRingBufferSource {
+    pub fn new(buffer: Arc<Mutex<crate::audio::AudioRingBuffer>>) -> Self {
+        Self { buffer }
+    }
+}
+
+impl AudioSource for AudioRingBufferSource {
+    fn get_recent_samples(&self, max_samples: usize) -> Option<Vec<f32>> {
+        let buf = self.buffer.lock().ok()?;
+        if buf.is_empty() {
+            return Some(Vec::new());
+        }
+        Some(buf.snapshot_recent(max_samples))
+    }
+}
+
 /// Abstract emitter for partial transcription events.
 /// Decouples the transcriber from Tauri's event system.
 pub trait EventEmitter: Send + Sync {

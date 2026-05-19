@@ -131,6 +131,83 @@ impl Default for AudioCapture {
 unsafe impl Send for AudioCapture {}
 unsafe impl Sync for AudioCapture {}
 
+/// Ring buffer for audio samples with fixed capacity.
+/// Used to decouple audio data from the state machine, eliminating
+/// lock contention between cpal callback, realtime thread, and hotkey release.
+pub struct AudioRingBuffer {
+    buffer: Vec<f32>,
+    write_pos: usize,
+}
+
+impl AudioRingBuffer {
+    /// Create a new ring buffer with the given capacity (in samples).
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            buffer: vec![0.0; capacity],
+            write_pos: 0,
+        }
+    }
+
+    /// Capacity in samples.
+    pub fn capacity(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// Push samples into the ring buffer. Overwrites oldest data when full.
+    pub fn push(&mut self, samples: &[f32]) {
+        for (i, &sample) in samples.iter().enumerate() {
+            let idx = (self.write_pos + i) % self.buffer.len();
+            self.buffer[idx] = sample;
+        }
+        self.write_pos += samples.len();
+    }
+
+    /// Total samples ever written (may exceed capacity).
+    pub fn total_written(&self) -> usize {
+        self.write_pos
+    }
+
+    /// Current logical length (capped at capacity).
+    pub fn len(&self) -> usize {
+        self.write_pos.min(self.buffer.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.write_pos == 0
+    }
+
+    /// Clear all data.
+    pub fn clear(&mut self) {
+        self.write_pos = 0;
+    }
+
+    /// Copy the most recent `max_samples` into a new Vec.
+    pub fn snapshot_recent(&self, max_samples: usize) -> Vec<f32> {
+        let available = self.len();
+        let to_take = max_samples.min(available);
+        let mut result = Vec::with_capacity(to_take);
+        let start = self.write_pos.saturating_sub(to_take);
+        for i in 0..to_take {
+            let idx = (start + i) % self.buffer.len();
+            result.push(self.buffer[idx]);
+        }
+        result
+    }
+
+    /// Take all samples as a contiguous Vec and clear the buffer.
+    pub fn take_all(&mut self) -> Vec<f32> {
+        let len = self.len();
+        let mut result = Vec::with_capacity(len);
+        let start = self.write_pos.saturating_sub(len);
+        for i in 0..len {
+            let idx = (start + i) % self.buffer.len();
+            result.push(self.buffer[idx]);
+        }
+        self.write_pos = 0;
+        result
+    }
+}
+
 /// Mock audio capture for testing.
 pub struct MockAudioCapture {
     capturing: bool,
@@ -230,5 +307,74 @@ mod tests {
     fn test_mock_capture_default() {
         let cap = MockAudioCapture::default();
         assert!(!cap.is_capturing());
+    }
+
+    // -----------------------------------------------------------------------
+    // AudioRingBuffer tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_ring_buffer_empty() {
+        let mut rb = AudioRingBuffer::new(100);
+        assert!(rb.is_empty());
+        assert_eq!(rb.len(), 0);
+        assert_eq!(rb.snapshot_recent(10), Vec::<f32>::new());
+        assert_eq!(rb.take_all(), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn test_ring_buffer_push_and_take() {
+        let mut rb = AudioRingBuffer::new(100);
+        rb.push(&[1.0, 2.0, 3.0]);
+        assert_eq!(rb.len(), 3);
+        assert_eq!(rb.take_all(), vec![1.0, 2.0, 3.0]);
+        assert!(rb.is_empty());
+    }
+
+    #[test]
+    fn test_ring_buffer_snapshot_recent() {
+        let mut rb = AudioRingBuffer::new(100);
+        rb.push(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(rb.snapshot_recent(3), vec![3.0, 4.0, 5.0]);
+        assert_eq!(rb.snapshot_recent(10), vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+        // Buffer unchanged after snapshot.
+        assert_eq!(rb.len(), 5);
+    }
+
+    #[test]
+    fn test_ring_buffer_wraparound() {
+        let mut rb = AudioRingBuffer::new(4);
+        rb.push(&[1.0, 2.0, 3.0, 4.0]);
+        rb.push(&[5.0, 6.0]); // Overwrites 1.0, 2.0
+        assert_eq!(rb.len(), 4);
+        assert_eq!(rb.take_all(), vec![3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_ring_buffer_wraparound_snapshot() {
+        let mut rb = AudioRingBuffer::new(4);
+        rb.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+        // Buffer now contains [5.0, 6.0, 7.0, 4.0] physically,
+        // but logically [4.0, 5.0, 6.0, 7.0].
+        assert_eq!(rb.snapshot_recent(4), vec![4.0, 5.0, 6.0, 7.0]);
+        assert_eq!(rb.snapshot_recent(2), vec![6.0, 7.0]);
+    }
+
+    #[test]
+    fn test_ring_buffer_clear() {
+        let mut rb = AudioRingBuffer::new(100);
+        rb.push(&[1.0, 2.0, 3.0]);
+        rb.clear();
+        assert!(rb.is_empty());
+        assert_eq!(rb.take_all(), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn test_ring_buffer_capacity_unchanged() {
+        let mut rb = AudioRingBuffer::new(100);
+        rb.push(&[1.0; 50]);
+        assert_eq!(rb.capacity(), 100);
+        rb.take_all();
+        assert_eq!(rb.capacity(), 100);
     }
 }

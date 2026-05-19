@@ -1,4 +1,4 @@
-use crate::audio::AudioCaptureProvider;
+use crate::audio::{AudioCaptureProvider, AudioRingBuffer};
 use crate::clipboard::AnyClipboard;
 use crate::commands::EventEmitter;
 use crate::commands::TauriEventEmitter;
@@ -29,9 +29,16 @@ pub(crate) struct PipelineState {
     pub window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
     pub emitter: Arc<dyn EventEmitter>,
     pub review: Arc<dyn ReviewProvider>,
+    /// Decoupled audio buffer for lock-free realtime reads.
+    /// Capacity: 60 seconds @ 48kHz = 2,880,000 samples.
+    pub audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
 }
 
 impl PipelineState {
+    /// Direct constructor for testing. Each component is injectable.
+    /// Pre-allocated audio buffer capacity: 60 seconds at 48 kHz.
+    const AUDIO_BUFFER_CAPACITY: usize = 48_000 * 60;
+
     /// Direct constructor for testing. Each component is injectable.
     #[allow(dead_code, clippy::too_many_arguments)]
     pub fn new(
@@ -59,6 +66,9 @@ impl PipelineState {
             window_controller,
             emitter,
             review,
+            audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
+                Self::AUDIO_BUFFER_CAPACITY,
+            ))),
         }
     }
 
@@ -85,6 +95,9 @@ impl PipelineState {
             window_controller: window_controller_from_app(app),
             emitter: Arc::new(TauriEventEmitter::new(app.clone())),
             review: Arc::new(TauriReviewProvider::new(app.clone())),
+            audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
+                Self::AUDIO_BUFFER_CAPACITY,
+            ))),
         }
     }
 

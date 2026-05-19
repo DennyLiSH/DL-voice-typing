@@ -531,10 +531,18 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                     }
                     ps.emitter.emit("recording-start", serde_json::Value::Null);
 
+                    // Clear ring buffer for new recording session.
+                    if let Some(mut buf) =
+                        crate::util::lock_mutex(&ps.audio_ring_buffer, "audio_ring_buffer")
+                    {
+                        buf.clear();
+                    }
+
                     // Start audio capture with RMS-emitting callback (~30 fps).
                     let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
                     if let Some(mut ac_guard) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
                         let sm_for_audio = Arc::clone(&ps.sm);
+                        let ring_buf_for_audio = Arc::clone(&ps.audio_ring_buffer);
                         let emitter_for_rms = ps.emitter.clone();
                         let last_rms_for_cb = Arc::clone(&last_rms_emit);
                         let start_result = ac_guard.start(Box::new(move |data: &[f32]| {
@@ -542,6 +550,11 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 crate::util::lock_mutex(&sm_for_audio, "state_machine")
                             {
                                 let _ = s.append_audio(data);
+                            }
+                            if let Some(mut buf) =
+                                crate::util::lock_mutex(&ring_buf_for_audio, "audio_ring_buffer")
+                            {
+                                buf.push(data);
                             }
                             let rms_val = rms::calculate_rms(data);
                             if let Some(mut last) =
@@ -576,7 +589,9 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         ) {
                             if let Some(sr) = ac_guard.sample_rate() {
                                 let audio = Arc::new(
-                                    crate::realtime::StateMachineAudioSource::new(ps.sm.clone()),
+                                    crate::realtime::AudioRingBufferSource::new(
+                                        ps.audio_ring_buffer.clone(),
+                                    ),
                                 );
                                 let emitter = Arc::new(RealtimeEmitterAdapter(ps.emitter.clone()));
                                 let rt = crate::realtime::RealtimeTranscriber::start(
