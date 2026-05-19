@@ -52,7 +52,7 @@ impl AnyEngine {
     }
 
     /// Load the model (only meaningful for Whisper).
-    pub fn load_model(&mut self) -> Result<(), AppError> {
+    pub fn load_model(&self) -> Result<(), AppError> {
         match self {
             #[cfg(feature = "whisper")]
             Self::Whisper(e) => e.load_model(),

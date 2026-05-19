@@ -337,7 +337,7 @@ impl RealtimeTranscriber {
     /// Tests use `AnyEngine::new_mock()` — see the 20+ tests in this module.
     pub fn start(
         audio: Arc<dyn AudioSource + Send + Sync>,
-        engine: Arc<Mutex<AnyEngine>>,
+        engine: Arc<AnyEngine>,
         emitter: Arc<dyn EventEmitter + Send + Sync>,
         sample_rate: u32,
     ) -> Self {
@@ -376,26 +376,12 @@ impl RealtimeTranscriber {
                     continue;
                 }
 
-                let text = {
-                    let guard = match engine.try_lock() {
-                        Ok(g) => g,
-                        Err(std::sync::TryLockError::WouldBlock) => {
-                            debug!("realtime: engine busy, skipping cycle");
-                            sleep_or_stop(&running_clone, STEP_MS);
-                            continue;
-                        }
-                        Err(std::sync::TryLockError::Poisoned(_)) => {
-                            warn!("engine lock poisoned, exiting realtime loop");
-                            break;
-                        }
-                    };
-                    match guard.transcribe_sync(resampled) {
-                        Ok(t) => t,
-                        Err(err) => {
-                            warn!("realtime transcription error: {err}");
-                            sleep_or_stop(&running_clone, STEP_MS);
-                            continue;
-                        }
+                let text = match engine.transcribe_sync(resampled) {
+                    Ok(t) => t,
+                    Err(err) => {
+                        warn!("realtime transcription error: {err}");
+                        sleep_or_stop(&running_clone, STEP_MS);
+                        continue;
                     }
                 };
 
@@ -702,7 +688,7 @@ mod tests {
     #[test]
     fn test_realtime_loop_emits_partial_events() {
         let audio = Arc::new(MockAudioSource::new(loud_audio_5s()));
-        let engine = Arc::new(Mutex::new(AnyEngine::new_mock("Hello world")));
+        let engine = Arc::new(AnyEngine::new_mock("Hello world"));
         let emitter = Arc::new(MockEventEmitter::new());
 
         let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
@@ -720,7 +706,7 @@ mod tests {
     fn test_realtime_loop_silent_audio_no_events() {
         // All zeros → RMS = 0, below VAD_THRESHOLD → no transcription
         let audio = Arc::new(MockAudioSource::new(vec![0.0f32; 16_000 * 5]));
-        let engine = Arc::new(Mutex::new(AnyEngine::new_mock("should not emit")));
+        let engine = Arc::new(AnyEngine::new_mock("should not emit"));
         let emitter = Arc::new(MockEventEmitter::new());
 
         let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
@@ -738,7 +724,7 @@ mod tests {
         // We simulate this by using a single response; the accumulate logic
         // deduplicates identical consecutive partials, so we only see one event.
         let audio = Arc::new(MockAudioSource::new(loud_audio_5s()));
-        let engine = Arc::new(Mutex::new(AnyEngine::new_mock("First")));
+        let engine = Arc::new(AnyEngine::new_mock("First"));
         let emitter = Arc::new(MockEventEmitter::new());
 
         let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);

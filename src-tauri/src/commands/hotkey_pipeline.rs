@@ -135,14 +135,7 @@ async fn transcribe_and_save(
 
     let engine_ref = ps.engine.clone();
     let transcribe_handle =
-        tokio::task::spawn_blocking(
-            move || match crate::util::lock_mutex(&engine_ref, "engine") {
-                Some(e) => e.transcribe_sync(&resampled),
-                None => Err(crate::error::AppError::Speech(
-                    "engine lock poisoned".to_string(),
-                )),
-            },
-        );
+        tokio::task::spawn_blocking(move || engine_ref.transcribe_sync(&resampled));
 
     let (save_result, transcription_result) = tokio::join!(save_handle, transcribe_handle);
     let save_result = save_result.unwrap_or(None);
@@ -500,18 +493,13 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                         false
                     });
 
-                if can_record {
-                    let engine_ready = crate::util::lock_mutex(&ps.engine, "engine")
-                        .map(|e| e.is_ready())
-                        .unwrap_or(false);
-                    if !engine_ready {
-                        reset_to_idle(&ps);
-                        ps.emitter.emit(
-                            "speech-error",
-                            serde_json::to_value("模型加载中，请稍候...").unwrap_or_default(),
-                        );
-                        return;
-                    }
+                if can_record && !ps.engine.is_ready() {
+                    reset_to_idle(&ps);
+                    ps.emitter.emit(
+                        "speech-error",
+                        serde_json::to_value("模型加载中，请稍候...").unwrap_or_default(),
+                    );
+                    return;
                 }
 
                 if can_record {

@@ -2,6 +2,7 @@ use crate::config::Language;
 use crate::error::AppError;
 use crate::speech::SpeechEngine;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -20,28 +21,36 @@ fn initial_prompt_for_lang(lang: Language) -> Option<&'static str> {
     }
 }
 
-/// Whisper.cpp speech engine.
+/// Number of pre-created states in the pool.
+const STATE_POOL_SIZE: usize = 2;
+
+/// Whisper.cpp speech engine with internal state pool.
+///
+/// `WhisperContext` (model weights) is `Arc`-shared so multiple concurrent
+/// transcriptions can run without creating a new state each time.
 pub struct WhisperEngine {
-    ctx: Option<WhisperContext>,
+    ctx: Mutex<Option<Arc<WhisperContext>>>,
+    state_pool: Mutex<Vec<whisper_rs::WhisperState>>,
     model_path: PathBuf,
     language: Language,
-    gpu_mode: bool,
+    gpu_mode: std::sync::atomic::AtomicBool,
 }
 
 impl WhisperEngine {
     /// Create a new WhisperEngine with the given model path and language.
     pub fn new(model_path: PathBuf, language: Language) -> Self {
         Self {
-            ctx: None,
+            ctx: Mutex::new(None),
+            state_pool: Mutex::new(Vec::new()),
             model_path,
             language,
-            gpu_mode: false,
+            gpu_mode: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     /// Load the Whisper model. Must be called before transcribe.
     /// Tries GPU first, falls back to CPU if GPU initialization fails.
-    pub fn load_model(&mut self) -> Result<(), AppError> {
+    pub fn load_model(&self) -> Result<(), AppError> {
         if !self.model_path.exists() {
             let path = self.model_path.display();
             return Err(AppError::Speech(format!("model file not found: {path}")));
@@ -51,29 +60,75 @@ impl WhisperEngine {
 
         // Phase 1: Try GPU (use_gpu defaults to true when vulkan feature is enabled).
         let params = WhisperContextParameters::default();
-        match WhisperContext::new_with_params(&path, params) {
+        let ctx = match WhisperContext::new_with_params(&path, params) {
             Ok(ctx) => {
-                self.gpu_mode = true;
-                self.ctx = Some(ctx);
+                self.gpu_mode
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 info!("Whisper: model loaded on GPU");
-                return Ok(());
+                Arc::new(ctx)
             }
             Err(e) => {
                 warn!("Whisper: GPU init failed ({e}), falling back to CPU...");
+                // Phase 2: CPU fallback.
+                let params = WhisperContextParameters {
+                    use_gpu: false,
+                    ..Default::default()
+                };
+                let ctx = WhisperContext::new_with_params(&path, params).map_err(|e| {
+                    AppError::Speech(format!("failed to load model (GPU and CPU): {e}"))
+                })?;
+                self.gpu_mode
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                info!("Whisper: model loaded on CPU (no GPU acceleration)");
+                Arc::new(ctx)
+            }
+        };
+
+        // Pre-warm the state pool.
+        let mut pool = self.state_pool.lock().unwrap();
+        pool.clear();
+        for _ in 0..STATE_POOL_SIZE {
+            match ctx.create_state() {
+                Ok(state) => pool.push(state),
+                Err(e) => {
+                    warn!("Whisper: failed to pre-create state: {e}");
+                    break;
+                }
             }
         }
+        info!("Whisper: state pool warmed with {} states", pool.len());
 
-        // Phase 2: CPU fallback.
-        let params = WhisperContextParameters {
-            use_gpu: false,
-            ..Default::default()
-        };
-        let ctx = WhisperContext::new_with_params(&path, params)
-            .map_err(|e| AppError::Speech(format!("failed to load model (GPU and CPU): {e}")))?;
-        self.gpu_mode = false;
-        self.ctx = Some(ctx);
-        info!("Whisper: model loaded on CPU (no GPU acceleration)");
+        *self.ctx.lock().unwrap() = Some(ctx);
         Ok(())
+    }
+
+    fn get_ctx(&self) -> Result<Arc<WhisperContext>, AppError> {
+        self.ctx
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| AppError::Speech("model not loaded".to_string()))
+    }
+
+    fn pop_state(&self, ctx: &Arc<WhisperContext>) -> whisper_rs::WhisperState {
+        self.state_pool
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap_or_else(|| {
+                // Pool exhausted: create a new state (slow path).
+                ctx.create_state().unwrap_or_else(|e| {
+                    panic!("Whisper: failed to create state and pool empty: {e}")
+                })
+            })
+    }
+
+    fn push_state(&self, state: whisper_rs::WhisperState) {
+        let mut pool = self.state_pool.lock().unwrap();
+        if pool.len() < STATE_POOL_SIZE {
+            pool.push(state);
+        }
+        // If pool is full, drop the state (it will be cleaned up naturally).
     }
 }
 
@@ -83,10 +138,7 @@ impl SpeechEngine for WhisperEngine {
     }
 
     fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
-        let ctx = self
-            .ctx
-            .as_ref()
-            .ok_or_else(|| AppError::Speech("model not loaded".to_string()))?;
+        let ctx = self.get_ctx()?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some(self.language.code()));
@@ -99,53 +151,56 @@ impl SpeechEngine for WhisperEngine {
             params.set_initial_prompt(prompt);
         }
 
-        let mut state = ctx
-            .create_state()
-            .map_err(|e| AppError::Speech(format!("failed to create state: {e}")))?;
+        let mut state = self.pop_state(&ctx);
 
-        state
+        let result = state
             .full(params, samples)
-            .map_err(|e| AppError::Speech(format!("transcription failed: {e}")))?;
-
-        let num_segments = state.full_n_segments();
-        debug!(
-            "Whisper: {num_segments} segments, {} samples",
-            samples.len()
-        );
-
-        let mut text = String::new();
-        for i in 0..num_segments {
-            let segment = match state.get_segment(i) {
-                Some(s) => s,
-                None => continue,
-            };
-
-            // Skip segments Whisper identifies as no-speech (hallucination guard).
-            if segment.no_speech_probability() > NO_SPEECH_PROB_THRESHOLD {
+            .map_err(|e| AppError::Speech(format!("transcription failed: {e}")))
+            .and_then(|_| {
+                let num_segments = state.full_n_segments();
                 debug!(
-                    "Whisper: skipping segment {i} (no_speech_prob={:.3})",
-                    segment.no_speech_probability()
+                    "Whisper: {num_segments} segments, {} samples",
+                    samples.len()
                 );
-                continue;
-            }
 
-            text.push_str(
-                segment
-                    .to_str()
-                    .map_err(|e| AppError::Speech(format!("segment text failed: {e}")))?,
-            );
-        }
+                let mut text = String::new();
+                for i in 0..num_segments {
+                    let segment = match state.get_segment(i) {
+                        Some(s) => s,
+                        None => continue,
+                    };
 
-        info!("Whisper result: {text:?} ({} chars)", text.len());
-        Ok(text.trim().to_string())
+                    // Skip segments Whisper identifies as no-speech (hallucination guard).
+                    if segment.no_speech_probability() > NO_SPEECH_PROB_THRESHOLD {
+                        debug!(
+                            "Whisper: skipping segment {i} (no_speech_prob={:.3})",
+                            segment.no_speech_probability()
+                        );
+                        continue;
+                    }
+
+                    text.push_str(
+                        segment
+                            .to_str()
+                            .map_err(|e| AppError::Speech(format!("segment text failed: {e}")))?,
+                    );
+                }
+
+                info!("Whisper result: {text:?} ({} chars)", text.len());
+                Ok(text.trim().to_string())
+            });
+
+        self.push_state(state);
+        result
     }
 
     fn is_ready(&self) -> bool {
-        self.ctx.is_some()
+        self.ctx.lock().unwrap().is_some()
     }
 
     fn is_gpu_mode(&self) -> bool {
-        self.gpu_mode && self.ctx.is_some()
+        self.gpu_mode.load(std::sync::atomic::Ordering::Relaxed)
+            && self.ctx.lock().unwrap().is_some()
     }
 
     fn name(&self) -> &str {

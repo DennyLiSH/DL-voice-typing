@@ -200,7 +200,7 @@ fn load_and_manage_config(app: &tauri::AppHandle) -> AppConfig {
 }
 
 /// Create the speech engine, manage it in Tauri state, and return it.
-fn init_and_manage_engine(app: &tauri::AppHandle, config: &AppConfig) -> Arc<Mutex<AnyEngine>> {
+fn init_and_manage_engine(app: &tauri::AppHandle, config: &AppConfig) -> Arc<AnyEngine> {
     let engine = {
         #[cfg(feature = "whisper")]
         {
@@ -212,21 +212,19 @@ fn init_and_manage_engine(app: &tauri::AppHandle, config: &AppConfig) -> Arc<Mut
             AnyEngine::new_mock("[mock transcription]")
         }
     };
-    let engine = Arc::new(Mutex::new(engine));
+    let engine = Arc::new(engine);
     app.manage(engine.clone());
     engine
 }
 
 /// Load the Whisper model in a background thread so the UI stays responsive.
-fn spawn_model_loading(engine: Arc<Mutex<AnyEngine>>, app_handle: tauri::AppHandle) {
+fn spawn_model_loading(engine: Arc<AnyEngine>, app_handle: tauri::AppHandle) {
     tauri::async_runtime::spawn_blocking(move || {
         info!("background model loading started");
-        if let Some(mut e) = util::lock_mutex(&engine, "engine") {
-            if let Err(e) = e.load_model() {
-                warn!(
-                    "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
-                );
-            }
+        if let Err(e) = engine.load_model() {
+            warn!(
+                "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
+            );
         }
         let _ = app_handle.emit("model-loaded", ());
         info!("background model loading finished");

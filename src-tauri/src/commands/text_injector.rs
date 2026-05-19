@@ -106,7 +106,7 @@ mod tests {
     fn build_ps() -> PipelineState {
         let sm = Arc::new(Mutex::new(StateMachine::new()));
         let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-        let engine = Arc::new(Mutex::new(AnyEngine::Mock(MockEngine::new("test"))));
+        let engine = Arc::new(AnyEngine::Mock(MockEngine::new("test")));
         let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
 
         let emitter: Arc<dyn EventEmitter> = Arc::new(crate::commands::MockEmitter::new());

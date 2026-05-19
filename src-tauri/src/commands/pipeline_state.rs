@@ -20,7 +20,7 @@ use tracing::info;
 pub(crate) struct PipelineState {
     pub sm: Arc<Mutex<StateMachine>>,
     pub ac: Arc<Mutex<dyn AudioCaptureProvider>>,
-    pub engine: Arc<Mutex<AnyEngine>>,
+    pub engine: Arc<AnyEngine>,
     pub clipboard: Arc<Mutex<AnyClipboard>>,
     pub perf_history: Arc<PerfHistory>,
     pub config_cache: ConfigCache,
@@ -44,7 +44,7 @@ impl PipelineState {
     pub fn new(
         sm: Arc<Mutex<StateMachine>>,
         ac: Arc<Mutex<dyn AudioCaptureProvider>>,
-        engine: Arc<Mutex<AnyEngine>>,
+        engine: Arc<AnyEngine>,
         clipboard: Arc<Mutex<AnyClipboard>>,
         perf_history: Arc<PerfHistory>,
         config_cache: ConfigCache,
@@ -80,7 +80,7 @@ impl PipelineState {
                 .state::<Arc<Mutex<dyn AudioCaptureProvider>>>()
                 .inner()
                 .clone(),
-            engine: app.state::<Arc<Mutex<AnyEngine>>>().inner().clone(),
+            engine: app.state::<Arc<AnyEngine>>().inner().clone(),
             clipboard: app.state::<Arc<Mutex<AnyClipboard>>>().inner().clone(),
             perf_history: app.state::<Arc<PerfHistory>>().inner().clone(),
             config_cache: app.state::<ConfigCache>().inner().clone(),
