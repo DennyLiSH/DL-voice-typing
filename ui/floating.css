@@ -45,7 +45,9 @@ html, body {
 .indicator.visible {
   opacity: 1;
   transform: scale(1);
-  box-shadow: 0 0 20px rgba(var(--accent-rgb), 0.15);
+  box-shadow:
+    0 0 24px rgba(var(--accent-rgb), 0.12),
+    0 0 48px rgba(var(--accent-rgb), 0.06);
 }
 
 .indicator.exit {
@@ -90,7 +92,7 @@ html, body {
   margin-top: -34px;
   margin-left: -34px;
   border-radius: var(--radius-full);
-  border: 2px solid var(--floating-accent);
+  box-shadow: 0 0 0 2px var(--floating-accent);
   pointer-events: none;
   animation: ripple-out 700ms ease-out forwards;
 }
@@ -102,7 +104,7 @@ html, body {
   max-width: 160px;
   padding: var(--space-1) var(--space-2);
   background: var(--floating-text-bg);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--floating-text);
   font-size: var(--font-hint);
   line-height: 1.5;
@@ -119,6 +121,7 @@ html, body {
   overflow: hidden;
   margin-top: -4px;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 
 #transcript-text.visible {

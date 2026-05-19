@@ -22,11 +22,14 @@ html, body {
   background: var(--review-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   overflow: hidden;
   font-family: var(--font-family);
   user-select: none;
   -webkit-user-select: none;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.2),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 /* --------------------------------------------------------------------------
@@ -58,8 +61,8 @@ textarea {
   min-height: 80px;
   max-height: calc(100% - 50px);
   background: var(--review-surface);
-  border: 1px solid var(--review-border);
-  border-radius: var(--radius-md);
+  border: none;
+  border-radius: var(--radius-lg);
   padding: var(--space-3);
   color: var(--review-text);
   font-size: var(--font-body);
@@ -68,21 +71,20 @@ textarea {
   resize: none;
   outline: none;
   overflow-y: auto;
+  box-shadow: inset 0 0 0 1px var(--review-border);
   transition:
-    border-color var(--duration-micro) ease,
-    background var(--duration-micro) ease,
-    box-shadow var(--duration-micro) ease;
+    box-shadow var(--duration-micro) ease,
+    background var(--duration-micro) ease;
 }
 
 textarea:hover:not(:disabled) {
   background: var(--review-surface-hover);
-  border-color: var(--review-border-hover);
+  box-shadow: inset 0 0 0 1px var(--review-border-hover);
 }
 
 textarea:focus {
-  border-color: rgba(var(--accent-rgb), 0.5);
   background: rgba(255, 255, 255, 0.07);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.15);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.5), 0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 textarea::placeholder {
@@ -146,22 +148,23 @@ textarea::placeholder {
 }
 
 .btn-cancel {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.04);
   color: var(--review-btn-cancel);
-  border: 1px solid var(--review-btn-cancel-border);
+  border: none;
   padding: 6px 16px;
   font-weight: 500;
+  box-shadow: 0 0 0 1px var(--review-btn-cancel-border);
   transition:
     background var(--duration-micro) ease,
     color var(--duration-micro) ease,
-    border-color var(--duration-micro) ease,
+    box-shadow var(--duration-micro) ease,
     transform var(--duration-micro) ease;
 }
 
 .btn-cancel:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
   color: var(--review-btn-cancel-hover);
-  border-color: var(--review-btn-cancel-border-hover);
+  box-shadow: 0 0 0 1px var(--review-btn-cancel-border-hover);
 }
 
 .btn-cancel:active:not(:disabled) {

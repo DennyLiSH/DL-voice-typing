@@ -40,7 +40,7 @@ body {
   flex-direction: column;
   align-items: center;
   padding-top: var(--space-3);
-  border-right: 1px solid var(--border);
+  box-shadow: 1px 0 0 var(--border-subtle);
   transition: background var(--duration-micro) ease;
 }
 
@@ -52,21 +52,18 @@ body {
   justify-content: center;
   padding: var(--space-2) 0 6px;
   cursor: pointer;
-  border-left: 3px solid transparent;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   transition:
-    background var(--duration-micro) ease,
-    border-left-color var(--duration-micro) ease;
+    background var(--duration-micro) ease;
   position: relative;
   user-select: none;
 }
 
 .sidebar-item:hover {
   background: var(--sidebar-active-bg);
-  border-left-color: rgba(var(--accent-rgb), 0.25);
 }
 
 .sidebar-item.active {
-  border-left-color: var(--accent);
   background: var(--sidebar-active-bg);
 }
 
@@ -145,26 +142,25 @@ select, input[type="text"], input[type="password"] {
   width: 100%;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius-sm);
   font-size: var(--font-body);
   font-family: inherit;
   background: var(--bg);
   color: var(--text-primary);
   outline: none;
+  box-shadow: inset 0 0 0 1px var(--border);
   transition:
-    border-color var(--duration-micro) ease,
     box-shadow var(--duration-micro) ease,
     background var(--duration-micro) ease;
 }
 
 select:hover:not(:disabled), input:hover:not(:disabled) {
-  border-color: rgba(var(--accent-rgb), 0.4);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.3);
 }
 
 select:focus, input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.15);
+  box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 
 select:disabled, input:disabled {
@@ -249,14 +245,14 @@ select:disabled, input:disabled {
 
 .progress-bar-track {
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-full);
   background: var(--progress-bg);
   overflow: hidden;
 }
 
 .progress-bar-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--radius-full);
   background: var(--accent);
   transition: width 0.2s ease;
 }
@@ -309,7 +305,7 @@ select:disabled, input:disabled {
   top: 2px;
   left: 2px;
   transition: transform var(--duration-short) var(--ease-spring);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
 }
 
 .toggle-switch.active::after {
@@ -370,8 +366,7 @@ select:disabled, input:disabled {
    -------------------------------------------------------------------------- */
 .bottom-bar {
   padding: var(--space-4) var(--space-5);
-  border-top: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--surface);
   display: flex;
   justify-content: flex-end;
   align-items: center;
@@ -474,13 +469,13 @@ button:disabled {
    Error banner
    -------------------------------------------------------------------------- */
 .error-banner {
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   margin-bottom: var(--space-4);
   color: var(--error);
   font-size: var(--font-label);
   display: none;
-  border-left: 3px solid var(--error);
+  border: 1px solid rgba(var(--error-rgb), 0.15);
   background: rgba(var(--error-rgb), 0.08);
 }
 
@@ -526,7 +521,7 @@ button:disabled {
 .mode-badge {
   display: inline-block;
   padding: 2px 10px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: var(--font-hint);
   font-weight: 600;
 }
@@ -625,7 +620,7 @@ button:disabled {
   margin-bottom: var(--space-3);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 0 0 1px var(--border-subtle);
   overflow: hidden;
 }
 
@@ -688,14 +683,14 @@ button:disabled {
   margin-bottom: var(--space-2);
   border-radius: var(--radius-md);
   background: var(--bg);
-  border: 1px solid var(--border);
+  box-shadow: 0 0 0 1px var(--border-subtle);
   transition:
-    border-color var(--duration-micro) ease,
+    box-shadow var(--duration-micro) ease,
     background var(--duration-micro) ease;
 }
 
 .help-item:hover {
-  border-color: rgba(var(--accent-rgb), 0.4);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.25);
   background: var(--sidebar-active-bg);
 }
 

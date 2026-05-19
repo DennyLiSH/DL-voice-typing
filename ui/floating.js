@@ -21,7 +21,7 @@ const COLOR_STOPS = [
 ];
 
 const BASE_BG = 'rgba(18, 40, 48, 0.82)';
-const BASE_SHADOW = '0 4px 18px rgba(58,186,180,0.2)';
+const BASE_SHADOW = '0 4px 20px rgba(58,186,180,0.15)';
 
 // Spring state
 let currentScale = MIN_SCALE;
@@ -65,11 +65,11 @@ function getShadow(visualRms) {
     const r = Math.round(30 + 28 * visualRms);
     const g = Math.round(120 + 66 * visualRms);
     const b = Math.round(140 + 40 * visualRms);
-    const alpha = (0.2 + visualRms * 0.15).toFixed(2);
+    const alpha = (0.15 + visualRms * 0.12).toFixed(2);
     const spread = 18 + visualRms * 8;
     let shadow = `0 4px ${Math.round(spread)}px rgba(${r},${g},${b},${alpha})`;
     if (visualRms > 0.35) {
-        const glowAlpha = ((visualRms - 0.35) * 0.25).toFixed(2);
+        const glowAlpha = ((visualRms - 0.35) * 0.2).toFixed(2);
         shadow += `, 0 0 ${Math.round(22 + visualRms * 15)}px rgba(58,186,180,${glowAlpha})`;
     }
     return shadow;

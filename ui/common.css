@@ -33,9 +33,10 @@
   --space-6: 32px;
 
   /* Border radius */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-full: 50%;
 
   /* Motion */
@@ -44,6 +45,11 @@
   --duration-micro: 100ms;
   --duration-short: 200ms;
   --duration-medium: 350ms;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
 
   /* Focus ring */
   --focus-ring: 2px solid rgba(var(--accent-rgb), 0.8);
@@ -58,7 +64,7 @@
     --bg: #1A1B1E;
     --surface: #222326;
     --surface-hover: #2A2B2E;
-    --border: #38393C;
+    --border: rgba(255, 255, 255, 0.08);
     --border-subtle: rgba(255, 255, 255, 0.06);
     --text-primary: #E8E6E3;
     --text-secondary: rgba(232, 230, 227, 0.65);
@@ -82,7 +88,7 @@
     --bg: #FAFAF8;
     --surface: #FFFFFF;
     --surface-hover: #F5F4F2;
-    --border: #E0DDD8;
+    --border: rgba(0, 0, 0, 0.08);
     --border-subtle: rgba(0, 0, 0, 0.04);
     --text-primary: #1A1B1E;
     --text-secondary: rgba(26, 27, 30, 0.65);
