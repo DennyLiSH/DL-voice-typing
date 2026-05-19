@@ -1,38 +1,36 @@
-/// Application state machine.
-///
-/// All app behavior is driven by transitions between these states.
-/// Invalid transitions return an error.
-///
-/// ```text
-/// Idle → Recording → Transcribing → LLMRefining → Injecting → Idle
-///                              ↘ Reviewing ↗         ↗
-///                                   ↓      (review disabled)
-///                              Injecting → Idle
-/// * → Idle  (error/cancel)
-/// ```
+//! Application state machine — pure state tag with transition guards.
+//!
+//! All resources (audio buffer, partial results, text, clipboard state)
+//! have been extracted to external holders (AudioRingBuffer, PipelineState).
+//! The state machine only validates which transitions are legal.
+//!
+//! ```text
+//! Idle → Recording → Transcribing → LLMRefining → Injecting → Idle
+//!                              ↘ Reviewing ↗         ↗
+//!                                   ↓      (review disabled)
+//!                              Injecting → Idle
+//! * → Idle  (error/cancel)
+//! ```
 
-#[derive(Debug)]
-pub enum AppState {
+/// Lightweight state tag — no associated data.
+///
+/// Previous versions of `AppState` carried resources (audio_buffer,
+/// partial_results, text, saved_clipboard). These have been extracted
+/// to eliminate lock contention and simplify the state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateTag {
     /// No recording in progress.
     Idle,
-
     /// Hotkey pressed, audio is being captured.
-    Recording { audio_buffer: Vec<f32> },
-
+    Recording,
     /// Hotkey released, Whisper is transcribing.
-    Transcribing { partial_results: Vec<String> },
-
+    Transcribing,
     /// LLM is refining the transcribed text.
     LLMRefining,
-
     /// Transcription done, waiting for user to review/edit text before injection.
-    Reviewing { text: String },
-
+    Reviewing,
     /// Text is ready, injecting via clipboard paste.
-    Injecting {
-        text: String,
-        saved_clipboard: Option<String>,
-    },
+    Injecting,
 }
 
 /// Error for invalid state transitions.
@@ -43,33 +41,29 @@ pub struct TransitionError {
     pub to: String,
 }
 
-/// Wraps AppState with controlled transitions.
+/// Wraps StateTag with controlled transitions.
+///
+/// All resources have been extracted; this struct only guards legal transitions.
 pub struct StateMachine {
-    state: AppState,
+    tag: StateTag,
 }
-
-// Pre-allocated audio buffer capacity: 60 seconds at 48 kHz.
-// Prevents dynamic reallocation during recording.
-const AUDIO_BUFFER_CAPACITY: usize = 48_000 * 60;
 
 impl StateMachine {
     pub fn new() -> Self {
         Self {
-            state: AppState::Idle,
+            tag: StateTag::Idle,
         }
     }
 
-    pub fn state(&self) -> &AppState {
-        &self.state
+    pub fn state(&self) -> StateTag {
+        self.tag
     }
 
     /// Transition to Recording (from Idle only).
     pub fn start_recording(&mut self) -> Result<(), TransitionError> {
-        match &self.state {
-            AppState::Idle => {
-                self.state = AppState::Recording {
-                    audio_buffer: Vec::with_capacity(AUDIO_BUFFER_CAPACITY),
-                };
+        match self.tag {
+            StateTag::Idle => {
+                self.tag = StateTag::Recording;
                 Ok(())
             }
             _ => Err(TransitionError {
@@ -80,140 +74,108 @@ impl StateMachine {
     }
 
     /// Transition to Transcribing (from Recording only).
-    pub fn stop_recording(&mut self) -> Result<Vec<f32>, TransitionError> {
-        match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::Recording { audio_buffer, .. } => {
-                self.state = AppState::Transcribing {
-                    partial_results: Vec::new(),
-                };
-                Ok(audio_buffer)
+    pub fn stop_recording(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::Recording => {
+                self.tag = StateTag::Transcribing;
+                Ok(())
             }
-            other => {
-                self.state = other;
-                Err(TransitionError {
-                    from: self.state_name(),
-                    to: "Transcribing".to_string(),
-                })
-            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Transcribing".to_string(),
+            }),
         }
     }
 
     /// Transition from Transcribing to LLMRefining.
     pub fn start_llm_refining(&mut self) -> Result<(), TransitionError> {
-        match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::Transcribing { .. } => {
-                self.state = AppState::LLMRefining;
+        match self.tag {
+            StateTag::Transcribing => {
+                self.tag = StateTag::LLMRefining;
                 Ok(())
             }
-            other => {
-                self.state = other;
-                Err(TransitionError {
-                    from: self.state_name(),
-                    to: "LLMRefining".to_string(),
-                })
-            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "LLMRefining".to_string(),
+            }),
         }
     }
 
     /// Transition from Transcribing to Injecting (LLM disabled path).
-    pub fn transcribing_to_injecting(&mut self, text: String) -> Result<(), TransitionError> {
-        match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::Transcribing { .. } => {
-                self.state = AppState::Injecting {
-                    text,
-                    saved_clipboard: None,
-                };
+    pub fn transcribing_to_injecting(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::Transcribing => {
+                self.tag = StateTag::Injecting;
                 Ok(())
             }
-            other => {
-                self.state = other;
-                Err(TransitionError {
-                    from: self.state_name(),
-                    to: "Injecting".to_string(),
-                })
-            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Injecting".to_string(),
+            }),
         }
     }
 
     /// Transition from LLMRefining to Injecting.
-    pub fn llm_to_injecting(&mut self, text: String) -> Result<(), TransitionError> {
-        match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::LLMRefining => {
-                self.state = AppState::Injecting {
-                    text,
-                    saved_clipboard: None,
-                };
+    pub fn llm_to_injecting(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::LLMRefining => {
+                self.tag = StateTag::Injecting;
                 Ok(())
             }
-            other => {
-                self.state = other;
-                Err(TransitionError {
-                    from: self.state_name(),
-                    to: "Injecting".to_string(),
-                })
-            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Injecting".to_string(),
+            }),
         }
     }
 
     /// Transition from Transcribing to Reviewing.
-    pub fn transcribing_to_reviewing(&mut self, text: String) -> Result<(), TransitionError> {
-        match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::Transcribing { .. } => {
-                self.state = AppState::Reviewing { text };
+    pub fn transcribing_to_reviewing(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::Transcribing => {
+                self.tag = StateTag::Reviewing;
                 Ok(())
             }
-            other => {
-                self.state = other;
-                Err(TransitionError {
-                    from: self.state_name(),
-                    to: "Reviewing".to_string(),
-                })
-            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Reviewing".to_string(),
+            }),
         }
     }
 
     /// Transition from LLMRefining to Reviewing.
-    pub fn llm_to_reviewing(&mut self, text: String) -> Result<(), TransitionError> {
-        match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::LLMRefining => {
-                self.state = AppState::Reviewing { text };
+    pub fn llm_to_reviewing(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::LLMRefining => {
+                self.tag = StateTag::Reviewing;
                 Ok(())
             }
-            other => {
-                self.state = other;
-                Err(TransitionError {
-                    from: self.state_name(),
-                    to: "Reviewing".to_string(),
-                })
-            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Reviewing".to_string(),
+            }),
         }
     }
 
     /// Transition from Reviewing to Injecting (user confirmed).
-    pub fn reviewing_to_injecting(&mut self, text: String) -> Result<(), TransitionError> {
-        match std::mem::replace(&mut self.state, AppState::Idle) {
-            AppState::Reviewing { .. } => {
-                self.state = AppState::Injecting {
-                    text,
-                    saved_clipboard: None,
-                };
+    pub fn reviewing_to_injecting(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::Reviewing => {
+                self.tag = StateTag::Injecting;
                 Ok(())
             }
-            other => {
-                self.state = other;
-                Err(TransitionError {
-                    from: self.state_name(),
-                    to: "Injecting".to_string(),
-                })
-            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Injecting".to_string(),
+            }),
         }
     }
 
     /// Cancel review and return to Idle (user cancelled).
     pub fn cancel_reviewing(&mut self) -> Result<(), TransitionError> {
-        match &self.state {
-            AppState::Reviewing { .. } => {
-                self.state = AppState::Idle;
+        match self.tag {
+            StateTag::Reviewing => {
+                self.tag = StateTag::Idle;
                 Ok(())
             }
             _ => Err(TransitionError {
@@ -225,9 +187,9 @@ impl StateMachine {
 
     /// Transition from Injecting to Idle.
     pub fn finish_injecting(&mut self) -> Result<(), TransitionError> {
-        match &self.state {
-            AppState::Injecting { .. } => {
-                self.state = AppState::Idle;
+        match self.tag {
+            StateTag::Injecting => {
+                self.tag = StateTag::Idle;
                 Ok(())
             }
             _ => Err(TransitionError {
@@ -239,53 +201,17 @@ impl StateMachine {
 
     /// Reset to Idle from any state (error/cancel).
     pub fn reset(&mut self) {
-        self.state = AppState::Idle;
-    }
-
-    /// Append audio samples to the recording buffer.
-    pub fn append_audio(&mut self, samples: &[f32]) -> Result<(), TransitionError> {
-        match &mut self.state {
-            AppState::Recording { audio_buffer, .. } => {
-                audio_buffer.extend_from_slice(samples);
-                Ok(())
-            }
-            _ => Err(TransitionError {
-                from: self.state_name(),
-                to: "Recording (append)".to_string(),
-            }),
-        }
-    }
-
-    /// Get a reference to the current audio buffer if recording.
-    pub fn get_audio_buffer(&self) -> Option<&[f32]> {
-        match &self.state {
-            AppState::Recording { audio_buffer } => Some(audio_buffer),
-            _ => None,
-        }
-    }
-
-    /// Add a partial transcription result.
-    pub fn add_partial_result(&mut self, text: String) -> Result<(), TransitionError> {
-        match &mut self.state {
-            AppState::Transcribing { partial_results } => {
-                partial_results.push(text);
-                Ok(())
-            }
-            _ => Err(TransitionError {
-                from: self.state_name(),
-                to: "Transcribing (add_partial)".to_string(),
-            }),
-        }
+        self.tag = StateTag::Idle;
     }
 
     pub(crate) fn state_name(&self) -> String {
-        match self.state {
-            AppState::Idle => "Idle".to_string(),
-            AppState::Recording { .. } => "Recording".to_string(),
-            AppState::Transcribing { .. } => "Transcribing".to_string(),
-            AppState::LLMRefining => "LLMRefining".to_string(),
-            AppState::Reviewing { .. } => "Reviewing".to_string(),
-            AppState::Injecting { .. } => "Injecting".to_string(),
+        match self.tag {
+            StateTag::Idle => "Idle".to_string(),
+            StateTag::Recording => "Recording".to_string(),
+            StateTag::Transcribing => "Transcribing".to_string(),
+            StateTag::LLMRefining => "LLMRefining".to_string(),
+            StateTag::Reviewing => "Reviewing".to_string(),
+            StateTag::Injecting => "Injecting".to_string(),
         }
     }
 }
@@ -303,37 +229,32 @@ mod tests {
     #[test]
     fn test_happy_path_with_llm() {
         let mut sm = StateMachine::new();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
 
         sm.start_recording().unwrap();
-        assert!(matches!(sm.state(), AppState::Recording { .. }));
+        assert_eq!(sm.state(), StateTag::Recording);
 
-        sm.append_audio(&[0.1, 0.2, 0.3]).unwrap();
+        sm.stop_recording().unwrap();
+        assert_eq!(sm.state(), StateTag::Transcribing);
 
-        let audio = sm.stop_recording().unwrap();
-        assert_eq!(audio, vec![0.1, 0.2, 0.3]);
-        assert!(matches!(sm.state(), AppState::Transcribing { .. }));
-
-        sm.add_partial_result("hello".to_string()).unwrap();
         sm.start_llm_refining().unwrap();
-        assert!(matches!(sm.state(), AppState::LLMRefining));
+        assert_eq!(sm.state(), StateTag::LLMRefining);
 
-        sm.llm_to_injecting("hello world refined".to_string())
-            .unwrap();
-        assert!(matches!(sm.state(), AppState::Injecting { .. }));
+        sm.llm_to_injecting().unwrap();
+        assert_eq!(sm.state(), StateTag::Injecting);
 
         sm.finish_injecting().unwrap();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 
     #[test]
     fn test_happy_path_without_llm() {
         let mut sm = StateMachine::new();
         sm.start_recording().unwrap();
-        let _ = sm.stop_recording().unwrap();
-        sm.transcribing_to_injecting("hello".to_string()).unwrap();
+        sm.stop_recording().unwrap();
+        sm.transcribing_to_injecting().unwrap();
         sm.finish_injecting().unwrap();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 
     #[test]
@@ -341,12 +262,12 @@ mod tests {
         let mut sm = StateMachine::new();
         sm.start_recording().unwrap();
         sm.reset();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
 
         sm.start_recording().unwrap();
-        let _ = sm.stop_recording().unwrap();
+        sm.stop_recording().unwrap();
         sm.reset();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 
     #[test]
@@ -366,11 +287,9 @@ mod tests {
     fn test_invalid_transitions() {
         let mut sm = StateMachine::new();
         assert!(sm.start_llm_refining().is_err());
-        assert!(sm.transcribing_to_injecting("text".to_string()).is_err());
-        assert!(sm.llm_to_injecting("text".to_string()).is_err());
+        assert!(sm.transcribing_to_injecting().is_err());
+        assert!(sm.llm_to_injecting().is_err());
         assert!(sm.finish_injecting().is_err());
-        assert!(sm.append_audio(&[]).is_err());
-        assert!(sm.add_partial_result("text".to_string()).is_err());
     }
 
     #[test]
@@ -385,65 +304,61 @@ mod tests {
     fn test_happy_path_with_review() {
         let mut sm = StateMachine::new();
         sm.start_recording().unwrap();
-        let _ = sm.stop_recording().unwrap();
-        sm.transcribing_to_reviewing("hello".to_string()).unwrap();
-        assert!(matches!(sm.state(), AppState::Reviewing { .. }));
+        sm.stop_recording().unwrap();
+        sm.transcribing_to_reviewing().unwrap();
+        assert_eq!(sm.state(), StateTag::Reviewing);
 
-        sm.reviewing_to_injecting("hello edited".to_string())
-            .unwrap();
-        assert!(matches!(sm.state(), AppState::Injecting { .. }));
+        sm.reviewing_to_injecting().unwrap();
+        assert_eq!(sm.state(), StateTag::Injecting);
 
         sm.finish_injecting().unwrap();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 
     #[test]
     fn test_happy_path_with_llm_and_review() {
         let mut sm = StateMachine::new();
         sm.start_recording().unwrap();
-        let _ = sm.stop_recording().unwrap();
-        sm.add_partial_result("hello".to_string()).unwrap();
+        sm.stop_recording().unwrap();
         sm.start_llm_refining().unwrap();
 
-        sm.llm_to_reviewing("hello world refined".to_string())
-            .unwrap();
-        assert!(matches!(sm.state(), AppState::Reviewing { .. }));
+        sm.llm_to_reviewing().unwrap();
+        assert_eq!(sm.state(), StateTag::Reviewing);
 
-        sm.reviewing_to_injecting("hello world refined".to_string())
-            .unwrap();
+        sm.reviewing_to_injecting().unwrap();
         sm.finish_injecting().unwrap();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 
     #[test]
     fn test_review_cancel() {
         let mut sm = StateMachine::new();
         sm.start_recording().unwrap();
-        let _ = sm.stop_recording().unwrap();
-        sm.transcribing_to_reviewing("hello".to_string()).unwrap();
+        sm.stop_recording().unwrap();
+        sm.transcribing_to_reviewing().unwrap();
 
         sm.cancel_reviewing().unwrap();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 
     #[test]
     fn test_review_reset() {
         let mut sm = StateMachine::new();
         sm.start_recording().unwrap();
-        let _ = sm.stop_recording().unwrap();
-        sm.transcribing_to_reviewing("hello".to_string()).unwrap();
+        sm.stop_recording().unwrap();
+        sm.transcribing_to_reviewing().unwrap();
 
         sm.reset();
-        assert!(matches!(sm.state(), AppState::Idle));
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 
     #[test]
     fn test_invalid_review_transitions() {
         let mut sm = StateMachine::new();
         // Cannot review from Idle
-        assert!(sm.transcribing_to_reviewing("text".to_string()).is_err());
-        assert!(sm.llm_to_reviewing("text".to_string()).is_err());
-        assert!(sm.reviewing_to_injecting("text".to_string()).is_err());
+        assert!(sm.transcribing_to_reviewing().is_err());
+        assert!(sm.llm_to_reviewing().is_err());
+        assert!(sm.reviewing_to_injecting().is_err());
         assert!(sm.cancel_reviewing().is_err());
     }
 }

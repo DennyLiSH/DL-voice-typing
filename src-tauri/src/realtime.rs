@@ -9,7 +9,6 @@
 /// only the new content, which is appended to a running accumulated string.
 use crate::audio::{Resampler, TARGET_SAMPLE_RATE, rms};
 use crate::speech::{AnyEngine, SpeechEngine};
-use crate::state::StateMachine;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -23,29 +22,6 @@ pub trait AudioSource: Send + Sync {
     /// Returns the most recent `max_samples` audio samples, or `None` if
     /// the source is unavailable (e.g. not recording).
     fn get_recent_samples(&self, max_samples: usize) -> Option<Vec<f32>>;
-}
-
-/// Adapter: exposes `StateMachine` audio buffer as an `AudioSource`.
-pub struct StateMachineAudioSource {
-    sm: Arc<Mutex<StateMachine>>,
-}
-
-impl StateMachineAudioSource {
-    pub fn new(sm: Arc<Mutex<StateMachine>>) -> Self {
-        Self { sm }
-    }
-}
-
-impl AudioSource for StateMachineAudioSource {
-    fn get_recent_samples(&self, max_samples: usize) -> Option<Vec<f32>> {
-        let sm = self.sm.lock().ok()?;
-        let buf = sm.get_audio_buffer()?;
-        if buf.is_empty() {
-            return Some(Vec::new());
-        }
-        let start = buf.len().saturating_sub(max_samples);
-        Some(buf[start..].to_vec())
-    }
 }
 
 /// Adapter: exposes `AudioRingBuffer` as an `AudioSource`.

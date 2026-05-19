@@ -98,20 +98,20 @@ fn test_config_cache_round_trip() {
 fn test_state_machine_with_mock_engine() {
     let mut sm = StateMachine::new();
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 1600]).unwrap();
-    let audio = sm.stop_recording().unwrap();
+    sm.stop_recording().unwrap();
 
     let engine = AnyEngine::new_mock("hello world");
+    let audio = vec![0.5f32; 1600];
     let text = engine.transcribe_sync(&audio).unwrap();
 
-    sm.transcribing_to_injecting(text.clone()).unwrap();
+    sm.transcribing_to_injecting().unwrap();
 
     let mut cb = AnyClipboard::Mock(MockClipboard::new());
     cb.save().unwrap();
     cb.inject_text(&text).unwrap();
 
     sm.finish_injecting().unwrap();
-    assert!(matches!(sm.state(), crate::state::AppState::Idle));
+    assert_eq!(sm.state(), crate::state::StateTag::Idle);
 }
 
 // ---------------------------------------------------------------------------

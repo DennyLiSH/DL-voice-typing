@@ -11,7 +11,7 @@ use crate::config::AppConfig;
 use crate::llm::{AnyCorrector, MockCorrector};
 use crate::perf::PerfHistory;
 use crate::speech::{AnyEngine, mock::MockEngine};
-use crate::state::{AppState, StateMachine};
+use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
 
 fn build_ps() -> PipelineState {
@@ -47,23 +47,19 @@ fn test_classic_direct_lifecycle() {
 
     // Idle → Recording
     sm.start_recording().unwrap();
-    assert!(matches!(sm.state(), AppState::Recording { .. }));
+    assert_eq!(sm.state(), StateTag::Recording);
 
     // Recording → Transcribing
-    sm.append_audio(&[0.5f32; 4800]).unwrap();
-    let _audio = sm.stop_recording().unwrap();
-    assert!(matches!(sm.state(), AppState::Transcribing { .. }));
+    sm.stop_recording().unwrap();
+    assert_eq!(sm.state(), StateTag::Transcribing);
 
     // Transcribing → Injecting
-    sm.add_partial_result("test transcription".to_string())
-        .unwrap();
-    sm.transcribing_to_injecting("test transcription".to_string())
-        .unwrap();
-    assert!(matches!(sm.state(), AppState::Injecting { .. }));
+    sm.transcribing_to_injecting().unwrap();
+    assert_eq!(sm.state(), StateTag::Injecting);
 
     // Injecting → Idle
     sm.finish_injecting().unwrap();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 }
 
 #[test]
@@ -73,22 +69,19 @@ fn test_classic_review_lifecycle() {
 
     // Idle → Recording → Transcribing
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 4800]).unwrap();
     sm.stop_recording().unwrap();
 
     // Transcribing → Reviewing
-    sm.add_partial_result("test".to_string()).unwrap();
-    sm.transcribing_to_reviewing("test".to_string()).unwrap();
-    assert!(matches!(sm.state(), AppState::Reviewing { .. }));
+    sm.transcribing_to_reviewing().unwrap();
+    assert_eq!(sm.state(), StateTag::Reviewing);
 
     // Reviewing → Injecting
-    sm.reviewing_to_injecting("edited text".to_string())
-        .unwrap();
-    assert!(matches!(sm.state(), AppState::Injecting { .. }));
+    sm.reviewing_to_injecting().unwrap();
+    assert_eq!(sm.state(), StateTag::Injecting);
 
     // Injecting → Idle
     sm.finish_injecting().unwrap();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 }
 
 #[test]
@@ -98,21 +91,19 @@ fn test_llm_lifecycle() {
 
     // Idle → Recording → Transcribing
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 4800]).unwrap();
     sm.stop_recording().unwrap();
 
     // Transcribing → LLMRefining
-    sm.add_partial_result("raw".to_string()).unwrap();
     sm.start_llm_refining().unwrap();
-    assert!(matches!(sm.state(), AppState::LLMRefining));
+    assert_eq!(sm.state(), StateTag::LLMRefining);
 
     // LLMRefining → Injecting
-    sm.llm_to_injecting("corrected".to_string()).unwrap();
-    assert!(matches!(sm.state(), AppState::Injecting { .. }));
+    sm.llm_to_injecting().unwrap();
+    assert_eq!(sm.state(), StateTag::Injecting);
 
     // Injecting → Idle
     sm.finish_injecting().unwrap();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 }
 
 #[test]
@@ -121,12 +112,11 @@ fn test_cancel_during_recording() {
     let mut sm = ps.sm.lock().unwrap();
 
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 4800]).unwrap();
-    assert!(matches!(sm.state(), AppState::Recording { .. }));
+    assert_eq!(sm.state(), StateTag::Recording);
 
     // Cancel: reset to Idle
     sm.reset();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 }
 
 #[test]
@@ -135,14 +125,12 @@ fn test_cancel_during_reviewing() {
     let mut sm = ps.sm.lock().unwrap();
 
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 4800]).unwrap();
     sm.stop_recording().unwrap();
-    sm.add_partial_result("test".to_string()).unwrap();
-    sm.transcribing_to_reviewing("test".to_string()).unwrap();
+    sm.transcribing_to_reviewing().unwrap();
 
     // Cancel from reviewing
     sm.cancel_reviewing().unwrap();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 }
 
 #[test]
@@ -152,19 +140,16 @@ fn test_realtime_review_lifecycle() {
 
     // Idle → Recording (realtime starts)
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 4800]).unwrap();
 
     // Recording → Transcribing → Reviewing (realtime accumulated text)
     sm.stop_recording().unwrap();
-    sm.transcribing_to_reviewing("accumulated text".to_string())
-        .unwrap();
-    assert!(matches!(sm.state(), AppState::Reviewing { .. }));
+    sm.transcribing_to_reviewing().unwrap();
+    assert_eq!(sm.state(), StateTag::Reviewing);
 
     // Confirm from reviewing
-    sm.reviewing_to_injecting("accumulated text".to_string())
-        .unwrap();
+    sm.reviewing_to_injecting().unwrap();
     sm.finish_injecting().unwrap();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 }
 
 #[test]
@@ -175,21 +160,18 @@ fn test_reset_from_any_state() {
     // Test reset from Recording
     sm.start_recording().unwrap();
     sm.reset();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 
     // Test reset from Transcribing
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 100]).unwrap();
     sm.stop_recording().unwrap();
     sm.reset();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 
     // Test reset from Injecting
     sm.start_recording().unwrap();
-    sm.append_audio(&[0.5f32; 100]).unwrap();
     sm.stop_recording().unwrap();
-    sm.add_partial_result("test".to_string()).unwrap();
-    sm.transcribing_to_injecting("test".to_string()).unwrap();
+    sm.transcribing_to_injecting().unwrap();
     sm.reset();
-    assert!(matches!(sm.state(), AppState::Idle));
+    assert_eq!(sm.state(), StateTag::Idle);
 }

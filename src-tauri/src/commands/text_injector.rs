@@ -135,8 +135,7 @@ mod tests {
             let mut sm = ps.sm.lock().unwrap();
             sm.start_recording().unwrap();
             sm.stop_recording().unwrap();
-            sm.add_partial_result("test".to_string()).unwrap();
-            sm.transcribing_to_injecting("test".to_string()).unwrap();
+            sm.transcribing_to_injecting().unwrap();
         }
 
         let mut perf = PerfMetrics::new(0);
@@ -153,7 +152,7 @@ mod tests {
 
         // State should be Idle
         let sm = ps.sm.lock().unwrap();
-        assert!(matches!(sm.state(), crate::state::AppState::Idle));
+        assert_eq!(sm.state(), crate::state::StateTag::Idle);
         // Perf metrics should be set
         assert!(ctx.perf.injection_ms.is_some());
         assert!(ctx.perf.end_to_end_ms.is_some());

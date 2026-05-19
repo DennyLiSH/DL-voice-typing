@@ -108,7 +108,7 @@ impl Watchdog {
         };
 
         let state_name = sm.state_name();
-        let is_idle = matches!(sm.state(), crate::state::AppState::Idle);
+        let is_idle = matches!(sm.state(), crate::state::StateTag::Idle);
 
         if is_idle {
             if self.last_non_idle_at.take().is_some() {
@@ -244,10 +244,7 @@ mod tests {
         assert!(actions.contains(&"hide_floating".to_string()));
         assert!(actions.contains(&"emit_reset".to_string()));
         assert!(actions.contains(&"set_tray".to_string()));
-        assert!(matches!(
-            wd.sm.lock().unwrap().state(),
-            crate::state::AppState::Idle
-        ));
+        assert_eq!(wd.sm.lock().unwrap().state(), crate::state::StateTag::Idle);
     }
 
     #[test]

@@ -146,9 +146,6 @@ async fn transcribe_and_save(
                 "transcription-complete",
                 serde_json::to_value(&text).unwrap_or_default(),
             );
-            if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-                let _ = s.add_partial_result(text.clone());
-            }
             text
         }
         Ok(Err(e)) => {
@@ -252,9 +249,9 @@ async fn deliver_review(
     // Transition to Reviewing.
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         if config.llm_enabled {
-            let _ = s.llm_to_reviewing(final_text.clone());
+            let _ = s.llm_to_reviewing();
         } else {
-            let _ = s.transcribing_to_reviewing(final_text.clone());
+            let _ = s.transcribing_to_reviewing();
         }
     } else {
         warn!("deliver_review: state_machine lock returned None (poisoned?)");
@@ -364,9 +361,9 @@ async fn deliver_direct(
 ) {
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         if config.llm_enabled {
-            let _ = s.llm_to_injecting(final_text.clone());
+            let _ = s.llm_to_injecting();
         } else {
-            let _ = s.transcribing_to_injecting(final_text.clone());
+            let _ = s.transcribing_to_injecting();
         }
     }
 
@@ -435,9 +432,9 @@ async fn run_realtime_fast_path(
     // State: Transcribing → Injecting.
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         if config.llm_enabled {
-            let _ = s.llm_to_injecting(final_text.clone());
+            let _ = s.llm_to_injecting();
         } else {
-            let _ = s.transcribing_to_injecting(final_text.clone());
+            let _ = s.transcribing_to_injecting();
         }
     }
 
@@ -529,16 +526,10 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                     // Start audio capture with RMS-emitting callback (~30 fps).
                     let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
                     if let Some(mut ac_guard) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
-                        let sm_for_audio = Arc::clone(&ps.sm);
                         let ring_buf_for_audio = Arc::clone(&ps.audio_ring_buffer);
                         let emitter_for_rms = ps.emitter.clone();
                         let last_rms_for_cb = Arc::clone(&last_rms_emit);
                         let start_result = ac_guard.start(Box::new(move |data: &[f32]| {
-                            if let Some(mut s) =
-                                crate::util::lock_mutex(&sm_for_audio, "state_machine")
-                            {
-                                let _ = s.append_audio(data);
-                            }
                             if let Some(mut buf) =
                                 crate::util::lock_mutex(&ring_buf_for_audio, "audio_ring_buffer")
                             {
@@ -647,7 +638,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                             }
                             if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
                                 let _ = s.stop_recording();
-                                let _ = s.transcribing_to_reviewing(accumulated);
+                                let _ = s.transcribing_to_reviewing();
                             }
                             ps.window_controller.hide_floating();
                             return;
@@ -662,11 +653,22 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 "hotkey release: RealtimeDirect fast path, {} chars",
                                 accumulated.len()
                             );
+                            // Get audio from ring buffer before locking state machine.
+                            let audio_data = {
+                                if let Some(mut buf) = crate::util::lock_mutex(
+                                    &ps.audio_ring_buffer,
+                                    "audio_ring_buffer",
+                                ) {
+                                    buf.take_all()
+                                } else {
+                                    Vec::new()
+                                }
+                            };
                             if let Some(mut sm_guard) =
                                 crate::util::lock_mutex(&ps.sm, "state_machine")
                             {
                                 match sm_guard.stop_recording() {
-                                    Ok(audio_data) => {
+                                    Ok(()) => {
                                         let native_rate = sample_rate.unwrap_or(48000);
                                         perf.audio_samples = audio_data.len();
                                         perf.audio_sample_rate = native_rate;
@@ -708,13 +710,23 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                 }
 
                 // Full pipeline (Classic modes, or realtime modes with no accumulated text).
+                // Get audio from ring buffer before locking state machine.
+                let audio_data = {
+                    if let Some(mut buf) =
+                        crate::util::lock_mutex(&ps.audio_ring_buffer, "audio_ring_buffer")
+                    {
+                        buf.take_all()
+                    } else {
+                        Vec::new()
+                    }
+                };
                 if let Some(mut sm_guard) = crate::util::lock_mutex(&ps.sm, "state_machine") {
                     let record_result = sm_guard.stop_recording();
                     info!(
                         "hotkey release: stop_recording result={}",
                         record_result.is_ok()
                     );
-                    if let Ok(audio_data) = record_result {
+                    if record_result.is_ok() {
                         perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
                         perf.audio_samples = audio_data.len();
                         perf.audio_sample_rate = sample_rate.unwrap_or(48000);

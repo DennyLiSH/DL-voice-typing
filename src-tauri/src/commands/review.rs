@@ -168,15 +168,15 @@ pub async fn confirm_inject(
             message: e.to_string(),
         })?;
         match sm.state() {
-            crate::state::AppState::Reviewing { .. } => {
-                sm.reviewing_to_injecting(text).map_err(|e| CommandError {
+            crate::state::StateTag::Reviewing => {
+                sm.reviewing_to_injecting().map_err(|e| CommandError {
                     code: "STATE".to_string(),
                     message: e.to_string(),
                 })?;
                 true
             }
-            crate::state::AppState::Recording { .. }
-            | crate::state::AppState::Transcribing { .. } => {
+            crate::state::StateTag::Recording
+            | crate::state::StateTag::Transcribing => {
                 // Early confirm during recording — stop audio capture and
                 // realtime transcriber, then reset state to Idle.
                 info!("confirm_inject: early confirm during recording/transcribing");
@@ -246,14 +246,14 @@ pub async fn cancel_review(
             message: e.to_string(),
         })?;
         match sm.state() {
-            crate::state::AppState::Reviewing { .. } => {
+            crate::state::StateTag::Reviewing => {
                 sm.cancel_reviewing().map_err(|e| CommandError {
                     code: "STATE".to_string(),
                     message: e.to_string(),
                 })?;
             }
-            crate::state::AppState::Recording { .. }
-            | crate::state::AppState::Transcribing { .. } => {
+            crate::state::StateTag::Recording
+            | crate::state::StateTag::Transcribing => {
                 // Early cancel during recording — stop audio capture and
                 // realtime transcriber, then reset state to Idle.
                 info!("cancel_review: early cancel during recording/transcribing");
