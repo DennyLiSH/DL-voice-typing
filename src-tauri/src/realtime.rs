@@ -135,8 +135,8 @@ fn has_speech_energy(resampled: &[f32]) -> bool {
 pub struct RealtimeTranscriber {
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
-    /// Accumulated text from all partial transcriptions (deduplicated).
-    accumulated: Arc<Mutex<String>>,
+    /// Incremental text accumulator with buffer reuse for overlap detection.
+    accumulated: Arc<Mutex<TextAccumulator>>,
 }
 
 /// Whether a character is punctuation or whitespace that should be ignored
@@ -165,6 +165,95 @@ fn is_punct(c: char) -> bool {
     ) || c.is_whitespace()
 }
 
+/// Incremental text accumulator with buffer reuse for real-time transcription overlap detection.
+/// Maintains internal state across pushes to avoid repeated allocations and re-parsing.
+pub struct TextAccumulator {
+    /// Confirmed text that will no longer change.
+    confirmed: String,
+    /// Content characters (punctuation-stripped) of the last partial, reused via scratch buffer.
+    last_content: Vec<char>,
+    /// Raw text of the last partial (preserves original formatting).
+    last_raw: String,
+    /// Scratch buffer for parsing new partial content without allocation.
+    scratch: Vec<char>,
+}
+
+impl TextAccumulator {
+    pub fn new() -> Self {
+        Self {
+            confirmed: String::new(),
+            last_content: Vec::new(),
+            last_raw: String::new(),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Push a new partial transcription and return the updated accumulated text.
+    pub fn push(&mut self, new_partial: &str) -> &str {
+        if self.confirmed.is_empty() {
+            self.confirmed = new_partial.to_string();
+            self.last_raw = new_partial.to_string();
+            self.update_last_content(new_partial);
+            return &self.confirmed;
+        }
+
+        if new_partial.is_empty() {
+            return &self.confirmed;
+        }
+
+        // Parse new partial into scratch buffer (reuses capacity).
+        self.scratch.clear();
+        self.scratch.extend(new_partial.chars().filter(|c| !is_punct(*c)));
+
+        let overlap_len = find_longest_suffix_prefix(&self.last_content, &self.scratch);
+
+        if overlap_len > 0 {
+            let byte_offset = content_char_offset(new_partial, overlap_len);
+            self.confirmed.push_str(&new_partial[byte_offset..]);
+            self.last_raw = new_partial.to_string();
+            std::mem::swap(&mut self.last_content, &mut self.scratch);
+        } else {
+            // No overlap: Whisper re-transcribed differently. Don't append to prevent explosion.
+            self.last_raw = new_partial.to_string();
+            std::mem::swap(&mut self.last_content, &mut self.scratch);
+        }
+
+        &self.confirmed
+    }
+
+    /// Get the current accumulated text.
+    pub fn text(&self) -> &str {
+        &self.confirmed
+    }
+
+    /// Take the accumulated text, clearing the internal state.
+    pub fn take(&mut self) -> String {
+        self.last_content.clear();
+        self.last_raw.clear();
+        self.scratch.clear();
+        std::mem::take(&mut self.confirmed)
+    }
+
+    /// Clear all state.
+    pub fn clear(&mut self) {
+        self.confirmed.clear();
+        self.last_content.clear();
+        self.last_raw.clear();
+        self.scratch.clear();
+    }
+
+    fn update_last_content(&mut self, raw: &str) {
+        self.last_content.clear();
+        self.last_content.extend(raw.chars().filter(|c| !is_punct(*c)));
+    }
+}
+
+impl Default for TextAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Walk through `s` and return the byte offset right after the `n`-th content
 /// (non-punctuation) character. Returns `s.len()` if fewer than `n` content
 /// characters exist. This preserves any punctuation between the overlap and
@@ -182,27 +271,19 @@ fn content_char_offset(s: &str, n: usize) -> usize {
     s.len()
 }
 
-/// Find the character position where `prev_partial` overlaps with `new_partial`.
-/// Returns the byte offset in `new_partial` where new content begins.
-/// Returns 0 if no meaningful overlap is found.
-/// Comparison ignores punctuation/whitespace to handle Whisper output variation.
-fn find_overlap_end(prev_partial: &str, new_partial: &str) -> usize {
-    if prev_partial.is_empty() || new_partial.is_empty() {
+/// Find the longest suffix of `a` that matches a prefix of `b`.
+/// Returns the match length in characters (not bytes).
+/// Both slices are already punctuation-stripped content characters.
+fn find_longest_suffix_prefix(a: &[char], b: &[char]) -> usize {
+    if a.is_empty() || b.is_empty() {
         return 0;
     }
 
-    let prev_content: Vec<char> = prev_partial.chars().filter(|c| !is_punct(*c)).collect();
-    let new_content: Vec<char> = new_partial.chars().filter(|c| !is_punct(*c)).collect();
-    let min_overlap = ((prev_content.len() as f32) * MIN_OVERLAP_RATIO) as usize;
-
-    // Try longest overlap first: find the longest suffix of prev that matches
-    // a prefix of new, comparing content characters only (ignoring punctuation).
-    let max_check = prev_content.len().min(new_content.len());
+    let min_overlap = ((a.len() as f32) * MIN_OVERLAP_RATIO) as usize;
+    let max_check = a.len().min(b.len());
     for len in (min_overlap.max(1)..=max_check).rev() {
-        if prev_content[prev_content.len() - len..] == new_content[..len] {
-            // Found overlap of `len` content chars.
-            // Map back to byte offset in original new_partial.
-            return content_char_offset(new_partial, len);
+        if a[a.len() - len..] == b[..len] {
+            return len;
         }
     }
 
@@ -211,26 +292,19 @@ fn find_overlap_end(prev_partial: &str, new_partial: &str) -> usize {
 
 /// Accumulate a new partial transcription into the running text.
 /// Uses suffix-matching to detect sliding-window overlap and extract only new content.
+///
+/// This is a stateless convenience wrapper around `TextAccumulator` for testing.
+/// The hot path (`RealtimeTranscriber`) uses `TextAccumulator` directly for buffer reuse.
+#[cfg(test)]
 fn accumulate(accumulated: &str, prev_partial: &str, new_partial: &str) -> String {
-    if accumulated.is_empty() {
-        return new_partial.to_string();
-    }
-
-    let overlap_end = find_overlap_end(prev_partial, new_partial);
-    if overlap_end > 0 {
-        // Found overlap — append only the non-overlapping part.
-        let new_content = &new_partial[overlap_end..];
-        let mut result = String::with_capacity(accumulated.len() + new_content.len());
-        result.push_str(accumulated);
-        result.push_str(new_content);
-        result
-    } else {
-        // No overlap — Whisper re-transcribed the same audio with different characters
-        // (common with Chinese homophones, e.g. 二十多年 vs 24小时).
-        // Don't append to prevent text explosion; just return accumulated as-is.
-        // The next cycle will likely find overlap with the updated prev_partial.
-        accumulated.to_string()
-    }
+    let mut acc = TextAccumulator {
+        confirmed: accumulated.to_string(),
+        last_raw: prev_partial.to_string(),
+        last_content: prev_partial.chars().filter(|c| !is_punct(*c)).collect(),
+        scratch: Vec::new(),
+    };
+    acc.push(new_partial);
+    acc.take()
 }
 
 impl RealtimeTranscriber {
@@ -247,12 +321,12 @@ impl RealtimeTranscriber {
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
-        let accumulated: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let accumulated: Arc<Mutex<TextAccumulator>> =
+            Arc::new(Mutex::new(TextAccumulator::new()));
         let accumulated_clone = accumulated.clone();
 
         let handle = thread::spawn(move || {
             let _span = tracing::info_span!("realtime_transcriber").entered();
-            let mut prev_partial = String::new();
 
             while running_clone.load(Ordering::Relaxed) {
                 let samples_needed = (sample_rate * WINDOW_SECS) as usize;
@@ -311,11 +385,9 @@ impl RealtimeTranscriber {
                             Ok(g) => g,
                             Err(_) => break,
                         };
-                        let new_acc = accumulate(&acc_guard, &prev_partial, &text);
-                        *acc_guard = new_acc.clone();
-                        new_acc
+                        acc_guard.push(&text);
+                        acc_guard.text().to_string()
                     };
-                    prev_partial = text;
 
                     // Only emit if still running — avoid late events after stop signal.
                     if running_clone.load(Ordering::Relaxed) {
@@ -340,7 +412,7 @@ impl RealtimeTranscriber {
     /// Returns the deduplicated concatenated text from all partial transcriptions.
     pub fn take_accumulated(&self) -> String {
         match self.accumulated.lock() {
-            Ok(mut guard) => std::mem::take(&mut *guard),
+            Ok(mut guard) => guard.take(),
             Err(_) => String::new(),
         }
     }
@@ -542,7 +614,7 @@ mod tests {
         let mut rt = RealtimeTranscriber {
             running,
             handle: Some(handle),
-            accumulated: Arc::new(Mutex::new(String::new())),
+            accumulated: Arc::new(Mutex::new(TextAccumulator::new())),
         };
         rt.stop();
         assert!(!rt.running.load(Ordering::Relaxed));
@@ -550,10 +622,12 @@ mod tests {
 
     #[test]
     fn test_take_accumulated() {
+        let mut acc = TextAccumulator::new();
+        acc.push("test text");
         let rt = RealtimeTranscriber {
             running: Arc::new(AtomicBool::new(false)),
             handle: None,
-            accumulated: Arc::new(Mutex::new("test text".to_string())),
+            accumulated: Arc::new(Mutex::new(acc)),
         };
         assert_eq!(rt.take_accumulated(), "test text");
         assert_eq!(rt.take_accumulated(), "");
