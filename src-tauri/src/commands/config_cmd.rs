@@ -15,7 +15,7 @@ use tauri::{Emitter, Manager};
 pub fn get_config(
     config_cache: tauri::State<'_, crate::config::ConfigCache>,
 ) -> Result<AppConfig, CommandError> {
-    let mut config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
+    let mut config: AppConfig = (*config_cache.read_cached()).clone();
     if !config.llm_api_key.is_empty() {
         config.llm_api_key = MASKED_MARKER.to_string();
     }
@@ -34,7 +34,7 @@ pub fn save_settings(
     config.validate().map_err(CommandError::from)?;
 
     // Load old config to detect hotkey change and preserve API key if masked.
-    let old_config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
+    let old_config = config_cache.read_cached();
     let hotkey_changed = config.hotkey != old_config.hotkey;
 
     // If the frontend sent the masked marker, preserve the existing decrypted key.
@@ -42,18 +42,18 @@ pub fn save_settings(
     if config.llm_api_key == MASKED_MARKER
         || (config.llm_api_key.is_empty() && !old_config.llm_api_key.is_empty())
     {
-        config.llm_api_key = old_config.llm_api_key;
+        config.llm_api_key = old_config.llm_api_key.clone();
     }
 
     // Save new config to disk and update cache (save_cached encrypts the API key).
-    config
-        .save_cached(&config_cache)
+    config_cache
+        .save_cached(&config)
         .map_err(CommandError::from)?;
 
     // Re-register hotkey if changed.
     if hotkey_changed {
         let (tx, rx) = mpsc::channel();
-        let old_key = old_config.hotkey;
+        let old_key = old_config.hotkey.clone();
         let new_key = config.hotkey;
         let app_clone = app.clone();
 
@@ -122,10 +122,9 @@ mod tests {
 
     #[test]
     fn test_read_cached_returns_default() {
-        let cache = crate::config::ConfigCache::new(std::sync::RwLock::new(AppConfig::default()));
-        let result = AppConfig::read_cached(&cache);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().hotkey, "RightCtrl");
+        let cache = crate::config::ConfigCache::new(AppConfig::default());
+        let result = cache.read_cached();
+        assert_eq!(result.hotkey, "RightCtrl");
     }
 
     #[test]

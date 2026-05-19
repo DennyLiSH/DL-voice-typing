@@ -175,7 +175,7 @@ fn load_and_manage_config(app: &tauri::AppHandle) -> AppConfig {
         }
     };
 
-    let config_cache = ConfigCache::new(std::sync::RwLock::new(config.clone()));
+    let config_cache = ConfigCache::new(config.clone());
     app.manage(config_cache);
 
     // Sync autostart registry with config preference.

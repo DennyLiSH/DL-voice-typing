@@ -49,7 +49,7 @@ async fn run_pipeline(
     mut perf: PerfMetrics,
     t_press_for_e2e: Instant,
 ) {
-    let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+    let config = ps.config_cache.read_cached();
     info!(
         "Pipeline: starting (review={}, llm={}, samples={})",
         config.review_before_paste,
@@ -399,7 +399,7 @@ async fn run_realtime_fast_path(
     mut perf: PerfMetrics,
     t_press_for_e2e: Instant,
 ) {
-    let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+    let config = ps.config_cache.read_cached();
     info!(
         "RealtimeFastPath: starting (llm={}, accumulated={} chars)",
         config.llm_enabled,
@@ -515,7 +515,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                 }
 
                 if can_record {
-                    let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+                    let config = ps.config_cache.read_cached();
                     let mode = config.pipeline_mode();
 
                     // Show floating window near text caret.
@@ -626,7 +626,7 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                 // Stop audio capture and realtime transcriber, get accumulated text.
                 let realtime_accumulated = ps.stop_recording_resources();
 
-                let config = AppConfig::read_cached(&ps.config_cache).unwrap_or_default();
+                let config = ps.config_cache.read_cached();
                 let mode = config.pipeline_mode();
 
                 // Mode-specific fast paths using exhaustive match.

@@ -114,7 +114,7 @@ pub async fn download_whisper_model(
     let url = if model.is_q8() {
         format!("{}/{filename}", crate::config::Q8_MODELS_BASE_URL)
     } else {
-        let config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
+        let config = config_cache.read_cached();
         let base_url = config.download_mirror.base_url();
         format!("{base_url}/{filename}")
     };
@@ -240,13 +240,13 @@ pub fn delete_custom_model(
         message: format!("failed to delete {filename}: {e}"),
     })?;
 
-    let config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
+    let config = config_cache.read_cached();
     if let WhisperModel::Custom(ref name) = config.whisper_model {
         if name == &filename {
-            let mut config = config;
+            let mut config: AppConfig = (*config).clone();
             config.whisper_model = WhisperModel::Base;
-            config
-                .save_cached(&config_cache)
+            config_cache
+                .save_cached(&config)
                 .map_err(CommandError::from)?;
         }
     }

@@ -1,4 +1,3 @@
-use crate::config::AppConfig;
 use crate::error::CommandError;
 use crate::llm::LLMClient;
 use crate::perf::{PerfHistory, PerfMetrics};
@@ -30,8 +29,8 @@ pub async fn test_llm_connection(
     config_cache: tauri::State<'_, crate::config::ConfigCache>,
 ) -> Result<(), CommandError> {
     let api_key = if api_key == MASKED_MARKER {
-        let config = AppConfig::read_cached(&config_cache).map_err(CommandError::from)?;
-        config.llm_api_key
+        let config = config_cache.read_cached();
+        config.llm_api_key.clone()
     } else {
         api_key
     };

@@ -11,7 +11,7 @@ use crate::config::AppConfig;
 use crate::llm::{AnyCorrector, MockCorrector, TextCorrector};
 use crate::speech::{AnyEngine, SpeechEngine};
 use crate::state::StateMachine;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 struct MockEmitter {
     events: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
@@ -85,8 +85,8 @@ fn test_config_cache_round_trip() {
         language: crate::config::Language::Zh,
         ..Default::default()
     };
-    let cache: Arc<RwLock<AppConfig>> = Arc::new(RwLock::new(config.clone()));
-    let cached = AppConfig::read_cached(&cache).unwrap();
+    let cache = crate::config::ConfigCache::new(config.clone());
+    let cached = cache.read_cached();
     assert_eq!(cached.language, crate::config::Language::Zh);
 }
 

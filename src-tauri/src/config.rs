@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
 
 const APP_DIR_NAME: &str = "dl-voice-typing";
 const CONFIG_FILE_NAME: &str = "config.json";
@@ -528,8 +530,35 @@ impl AppConfig {
     }
 }
 
-/// In-memory config cache to avoid repeated disk reads.
-pub type ConfigCache = Arc<RwLock<AppConfig>>;
+/// In-memory config cache using wait-free atomic pointer swaps.
+/// Optimized for "very frequent reads, very rare writes" pattern.
+#[derive(Clone)]
+pub struct ConfigCache {
+    snapshot: Arc<ArcSwap<AppConfig>>,
+}
+
+impl ConfigCache {
+    /// Create a new cache with the given initial config.
+    pub fn new(initial: AppConfig) -> Self {
+        Self {
+            snapshot: Arc::new(ArcSwap::new(Arc::new(initial))),
+        }
+    }
+
+    /// Read from the in-memory cache.
+    /// Returns an `Arc<AppConfig>` — callers can clone the Arc (atomic refcount bump)
+    /// or deref to `&AppConfig` for read-only access.
+    pub fn read_cached(&self) -> Arc<AppConfig> {
+        self.snapshot.load_full()
+    }
+
+    /// Save to disk AND atomically update the in-memory cache.
+    pub fn save_cached(&self, config: &AppConfig) -> Result<(), AppError> {
+        config.save()?;
+        self.snapshot.store(Arc::new(config.clone()));
+        Ok(())
+    }
+}
 
 impl AppConfig {
     /// Derive the pipeline mode from realtime_transcription and review_before_paste.
@@ -540,23 +569,6 @@ impl AppConfig {
             (true, false) => PipelineMode::RealtimeDirect,
             (true, true) => PipelineMode::RealtimeReview,
         }
-    }
-
-    /// Read from the in-memory cache.
-    pub fn read_cached(cache: &ConfigCache) -> Result<Self, AppError> {
-        cache
-            .read()
-            .map(|guard| guard.clone())
-            .map_err(|e| AppError::Config(format!("cache read failed: {e}")))
-    }
-
-    /// Save to disk AND update the in-memory cache.
-    pub fn save_cached(&self, cache: &ConfigCache) -> Result<(), AppError> {
-        self.save()?;
-        if let Ok(mut guard) = cache.write() {
-            *guard = self.clone();
-        }
-        Ok(())
     }
 }
 

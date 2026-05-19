@@ -101,7 +101,7 @@ mod tests {
     use crate::perf::PerfHistory;
     use crate::speech::{AnyEngine, mock::MockEngine};
     use crate::state::StateMachine;
-    use std::sync::{Arc, Mutex, RwLock};
+    use std::sync::{Arc, Mutex};
 
     fn build_ps() -> PipelineState {
         let sm = Arc::new(Mutex::new(StateMachine::new()));
@@ -116,7 +116,7 @@ mod tests {
             engine,
             clipboard,
             Arc::new(PerfHistory::new()),
-            Arc::new(RwLock::new(AppConfig::default())),
+            crate::config::ConfigCache::new(AppConfig::default()),
             Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new(
                 "corrected",
             ))))),
