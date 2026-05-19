@@ -7,7 +7,7 @@
 /// Text accumulation: consecutive sliding windows overlap by ~90%.
 /// Each new transcription is diffed against the previous one to extract
 /// only the new content, which is appended to a running accumulated string.
-use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
+use crate::audio::{Resampler, TARGET_SAMPLE_RATE, rms};
 use crate::speech::{AnyEngine, SpeechEngine};
 use crate::state::StateMachine;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -349,6 +349,7 @@ impl RealtimeTranscriber {
 
         let handle = thread::spawn(move || {
             let _span = tracing::info_span!("realtime_transcriber").entered();
+            let mut resampler = Resampler::new(sample_rate, TARGET_SAMPLE_RATE);
 
             while running_clone.load(Ordering::Relaxed) {
                 let samples_needed = (sample_rate * WINDOW_SECS) as usize;
@@ -361,10 +362,10 @@ impl RealtimeTranscriber {
                     None => break,
                 };
 
-                let resampled = resample(&window, sample_rate, TARGET_SAMPLE_RATE);
-                let rms_val = rms::calculate_rms(&resampled);
+                let resampled = resampler.process(&window);
+                let rms_val = rms::calculate_rms(resampled);
 
-                let speech_energy = has_speech_energy(&resampled);
+                let speech_energy = has_speech_energy(resampled);
                 debug!(
                     "realtime VAD: rms={rms_val:.4} energy={speech_energy} samples={}",
                     resampled.len()
@@ -388,7 +389,7 @@ impl RealtimeTranscriber {
                             break;
                         }
                     };
-                    match guard.transcribe_sync(&resampled) {
+                    match guard.transcribe_sync(resampled) {
                         Ok(t) => t,
                         Err(err) => {
                             warn!("realtime transcription error: {err}");

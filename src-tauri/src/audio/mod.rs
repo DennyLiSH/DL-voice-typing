@@ -9,27 +9,73 @@ use tracing::error;
 /// Target sample rate for Whisper (16 kHz).
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 
-/// Linear interpolation resampling.
+/// Stateful linear-interpolation resampler with internal buffer reuse.
+///
+/// Hot paths (e.g. the realtime transcription loop) should create one
+/// `Resampler` and call `process()` each cycle to avoid repeated allocations.
+/// Cold paths can use the [`resample`] convenience function.
+pub struct Resampler {
+    from_rate: u32,
+    to_rate: u32,
+    output_buf: Vec<f32>,
+}
+
+impl Resampler {
+    /// Create a new resampler for the given rate conversion.
+    pub fn new(from_rate: u32, to_rate: u32) -> Self {
+        Self {
+            from_rate,
+            to_rate,
+            output_buf: Vec::new(),
+        }
+    }
+
+    /// Resample `input` and return a slice pointing to the internal buffer.
+    ///
+    /// The returned slice is only valid until the next call to `process` or
+    /// `reset`. Clone it if you need to keep it longer.
+    pub fn process(&mut self, input: &[f32]) -> &[f32] {
+        if input.is_empty() {
+            return &[];
+        }
+        if self.from_rate == self.to_rate {
+            self.output_buf.clear();
+            self.output_buf.extend_from_slice(input);
+            return &self.output_buf;
+        }
+        let ratio = self.from_rate as f64 / self.to_rate as f64;
+        let output_len = ((input.len() as f64) / ratio).round() as usize;
+        self.output_buf.clear();
+        self.output_buf.reserve(output_len);
+        for i in 0..output_len {
+            let src_pos = i as f64 * ratio;
+            let src_idx = src_pos as usize;
+            let frac = src_pos - src_idx as f64;
+            let s0 = input[src_idx];
+            let s1 = if src_idx + 1 < input.len() {
+                input[src_idx + 1]
+            } else {
+                s0
+            };
+            self.output_buf
+                .push((s0 as f64 + frac * (s1 as f64 - s0 as f64)) as f32);
+        }
+        &self.output_buf
+    }
+
+    /// Reset the internal state (does not deallocate the buffer).
+    pub fn reset(&mut self) {
+        self.output_buf.clear();
+    }
+}
+
+/// One-shot convenience wrapper around [`Resampler`].
+///
+/// Creates a temporary `Resampler`, processes the samples, and returns an
+/// owned `Vec`. Suitable for cold paths; hot paths should reuse a `Resampler`.
 pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
-    if from_rate == to_rate || samples.is_empty() {
-        return samples.to_vec();
-    }
-    let ratio = from_rate as f64 / to_rate as f64;
-    let output_len = ((samples.len() as f64) / ratio).round() as usize;
-    let mut output = Vec::with_capacity(output_len);
-    for i in 0..output_len {
-        let src_pos = i as f64 * ratio;
-        let src_idx = src_pos as usize;
-        let frac = src_pos - src_idx as f64;
-        let s0 = samples[src_idx];
-        let s1 = if src_idx + 1 < samples.len() {
-            samples[src_idx + 1]
-        } else {
-            s0
-        };
-        output.push((s0 as f64 + frac * (s1 as f64 - s0 as f64)) as f32);
-    }
-    output
+    let mut r = Resampler::new(from_rate, to_rate);
+    r.process(samples).to_vec()
 }
 
 /// Callback type for audio data: receives a slice of f32 samples.
@@ -376,5 +422,51 @@ mod tests {
         assert_eq!(rb.capacity(), 100);
         rb.take_all();
         assert_eq!(rb.capacity(), 100);
+    }
+
+    // -----------------------------------------------------------------------
+    // Resampler tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resampler_identity() {
+        let mut r = Resampler::new(16_000, 16_000);
+        let samples = vec![1.0f32, 2.0, 3.0, 4.0];
+        let out = r.process(&samples);
+        assert_eq!(out, &samples);
+    }
+
+    #[test]
+    fn test_resampler_48k_to_16k() {
+        let mut r = Resampler::new(48_000, 16_000);
+        let samples: Vec<f32> = (0..48_000).map(|i| i as f32).collect();
+        let out = r.process(&samples);
+        assert_eq!(out.len(), 16_000);
+    }
+
+    #[test]
+    fn test_resampler_buffer_reuse() {
+        let mut r = Resampler::new(48_000, 16_000);
+        let first = r.process(&[0.5f32; 48_000]);
+        let first_cap = first.len();
+        let second = r.process(&[0.3f32; 48_000]);
+        // Same capacity reused, same output length.
+        assert_eq!(second.len(), first_cap);
+    }
+
+    #[test]
+    fn test_resampler_empty_input() {
+        let mut r = Resampler::new(48_000, 16_000);
+        assert!(r.process(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_resampler_reset() {
+        let mut r = Resampler::new(48_000, 16_000);
+        let first = r.process(&[0.5f32; 1000]).to_vec();
+        assert!(!first.is_empty());
+        r.reset();
+        let second = r.process(&[0.3f32; 500]).to_vec();
+        assert_eq!(second.len(), 167); // 500 / 3 ≈ 166.67 → rounds to 167
     }
 }
