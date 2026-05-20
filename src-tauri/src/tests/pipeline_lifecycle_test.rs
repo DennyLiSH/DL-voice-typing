@@ -17,9 +17,7 @@ use std::sync::{Arc, Mutex};
 fn build_ps() -> PipelineState {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let engine = Arc::new(AnyEngine::Mock(MockEngine::new(
-        "test transcription",
-    )));
+    let engine = Arc::new(AnyEngine::Mock(MockEngine::new("test transcription")));
     let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
     let emitter: Arc<dyn EventEmitter> = Arc::new(MockEmitter::new());
 

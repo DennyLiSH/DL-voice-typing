@@ -201,7 +201,8 @@ impl TextAccumulator {
 
         // Parse new partial into scratch buffer (reuses capacity).
         self.scratch.clear();
-        self.scratch.extend(new_partial.chars().filter(|c| !is_punct(*c)));
+        self.scratch
+            .extend(new_partial.chars().filter(|c| !is_punct(*c)));
 
         let overlap_len = find_longest_suffix_prefix(&self.last_content, &self.scratch);
 
@@ -242,7 +243,8 @@ impl TextAccumulator {
 
     fn update_last_content(&mut self, raw: &str) {
         self.last_content.clear();
-        self.last_content.extend(raw.chars().filter(|c| !is_punct(*c)));
+        self.last_content
+            .extend(raw.chars().filter(|c| !is_punct(*c)));
     }
 }
 
@@ -319,8 +321,7 @@ impl RealtimeTranscriber {
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
-        let accumulated: Arc<Mutex<TextAccumulator>> =
-            Arc::new(Mutex::new(TextAccumulator::new()));
+        let accumulated: Arc<Mutex<TextAccumulator>> = Arc::new(Mutex::new(TextAccumulator::new()));
         let accumulated_clone = accumulated.clone();
 
         let handle = thread::spawn(move || {

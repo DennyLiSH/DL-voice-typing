@@ -567,11 +567,9 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                                 | crate::config::PipelineMode::RealtimeReview
                         ) {
                             if let Some(sr) = ac_guard.sample_rate() {
-                                let audio = Arc::new(
-                                    crate::realtime::AudioRingBufferSource::new(
-                                        ps.audio_ring_buffer.clone(),
-                                    ),
-                                );
+                                let audio = Arc::new(crate::realtime::AudioRingBufferSource::new(
+                                    ps.audio_ring_buffer.clone(),
+                                ));
                                 let emitter = Arc::new(RealtimeEmitterAdapter(ps.emitter.clone()));
                                 let rt = crate::realtime::RealtimeTranscriber::start(
                                     audio,

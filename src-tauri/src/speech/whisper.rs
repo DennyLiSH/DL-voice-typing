@@ -111,16 +111,11 @@ impl WhisperEngine {
     }
 
     fn pop_state(&self, ctx: &Arc<WhisperContext>) -> whisper_rs::WhisperState {
-        self.state_pool
-            .lock()
-            .unwrap()
-            .pop()
-            .unwrap_or_else(|| {
-                // Pool exhausted: create a new state (slow path).
-                ctx.create_state().unwrap_or_else(|e| {
-                    panic!("Whisper: failed to create state and pool empty: {e}")
-                })
-            })
+        self.state_pool.lock().unwrap().pop().unwrap_or_else(|| {
+            // Pool exhausted: create a new state (slow path).
+            ctx.create_state()
+                .unwrap_or_else(|e| panic!("Whisper: failed to create state and pool empty: {e}"))
+        })
     }
 
     fn push_state(&self, state: whisper_rs::WhisperState) {

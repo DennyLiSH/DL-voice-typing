@@ -49,9 +49,7 @@ pub fn get_perf_history(
 
 /// Return the current compute mode: "gpu", "cpu", or "unloaded".
 #[tauri::command]
-pub fn get_compute_mode(
-    engine: tauri::State<'_, Arc<AnyEngine>>,
-) -> Result<String, CommandError> {
+pub fn get_compute_mode(engine: tauri::State<'_, Arc<AnyEngine>>) -> Result<String, CommandError> {
     if engine.is_ready() {
         Ok(if engine.is_gpu_mode() {
             "gpu".to_string()
