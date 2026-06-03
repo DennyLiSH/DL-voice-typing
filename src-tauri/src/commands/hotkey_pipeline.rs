@@ -1,6 +1,7 @@
 use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
 use crate::clipboard::ClipboardProvider;
 use crate::config::{AppConfig, Language};
+use crate::error::AppError;
 use crate::data_saving::{SaveConfig, SaveResult};
 use crate::hotkey::{HotkeyCallback, HotkeyEvent};
 use crate::llm::{AnyCorrector, LLMClient, TextCorrector};
@@ -75,7 +76,12 @@ async fn run_pipeline(
     // -- LLM Correction (optional) --
     perf.llm_enabled = config.llm_enabled;
     let final_text = if config.llm_enabled {
-        resolve_llm_text(&ps, &config, &transcription, &mut perf).await
+        resolve_llm_text(&ps, &config, &transcription, &mut perf)
+            .await
+            .unwrap_or_else(|e| {
+                warn!("run_pipeline: LLM correction failed: {e}");
+                transcription.clone()
+            })
     } else {
         transcription.clone()
     };
@@ -175,7 +181,7 @@ async fn resolve_llm_text(
     config: &AppConfig,
     transcription: &str,
     perf: &mut PerfMetrics,
-) -> String {
+) -> Result<String, AppError> {
     if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
         let _ = s.start_llm_refining();
     }
@@ -186,7 +192,7 @@ async fn resolve_llm_text(
     // Ensure the cached corrector matches config, creating a new one if needed.
     {
         let mut cached = crate::util::lock_mutex(&ps.cached_llm, "cached_llm")
-            .expect("cached_llm lock poisoned");
+            .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
         let needs_new = cached.as_ref().is_none_or(|c| {
             !c.matches_config(&config.llm_api_url, &config.llm_api_key, &config.llm_model)
         });
@@ -202,8 +208,11 @@ async fn resolve_llm_text(
     // Call correct_sync while re-acquiring the lock (holds lock for HTTP duration).
     let result = {
         let cached = crate::util::lock_mutex(&ps.cached_llm, "cached_llm")
-            .expect("cached_llm lock poisoned");
-        cached.as_ref().unwrap().correct_sync(transcription)
+            .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
+        let corrector = cached
+            .as_ref()
+            .ok_or_else(|| AppError::Llm("no LLM corrector available".to_string()))?;
+        corrector.correct_sync(transcription)
     };
 
     perf.llm_correction_ms = Some(t_llm.elapsed().as_millis() as u64);
@@ -214,14 +223,14 @@ async fn resolve_llm_text(
                 "llm-complete",
                 serde_json::to_value(&corrected).unwrap_or_default(),
             );
-            corrected
+            Ok(corrected)
         }
         Err(e) => {
             ps.emitter.emit(
                 "llm-error",
                 serde_json::to_value(e.to_string()).unwrap_or_default(),
             );
-            transcription.to_string()
+            Ok(transcription.to_string())
         }
     }
 }
@@ -417,7 +426,12 @@ async fn run_realtime_fast_path(
     let transcription = accumulated.clone();
     perf.llm_enabled = config.llm_enabled;
     let final_text = if config.llm_enabled {
-        resolve_llm_text(&ps, &config, &transcription, &mut perf).await
+        resolve_llm_text(&ps, &config, &transcription, &mut perf)
+            .await
+            .unwrap_or_else(|e| {
+                warn!("run_realtime_fast_path: LLM correction failed: {e}");
+                transcription.clone()
+            })
     } else {
         transcription.clone()
     };

@@ -28,7 +28,8 @@ pub(crate) async fn inject_text(ps: &PipelineState, ctx: &mut InjectionContext<'
         let cb_for_inject = ps.clipboard.clone();
         let text_for_inject = ctx.text.clone();
         match tauri::async_runtime::spawn_blocking(move || {
-            let mut cb = cb_for_inject.lock().map_err(|e| e.to_string())?;
+            let mut cb = crate::util::lock_mutex(&cb_for_inject, "text_injector::clipboard")
+                .ok_or_else(|| "clipboard lock poisoned".to_string())?;
             cb.save().map_err(|e| e.to_string())?;
             cb.inject_text(&text_for_inject).map_err(|e| e.to_string())
         })

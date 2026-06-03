@@ -53,16 +53,17 @@ impl MockEmitter {
     }
 
     pub fn take_events(&self) -> Vec<(String, serde_json::Value)> {
-        self.events.lock().unwrap().drain(..).collect()
+        crate::util::lock_mutex(&self.events, "MockEmitter::take_events")
+            .map(|mut guard| guard.drain(..).collect())
+            .unwrap_or_default()
     }
 }
 
 impl EventEmitter for MockEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
-        self.events
-            .lock()
-            .unwrap()
-            .push((event.to_string(), payload));
+        if let Some(mut guard) = crate::util::lock_mutex(&self.events, "MockEmitter::emit") {
+            guard.push((event.to_string(), payload));
+        }
     }
 }
 

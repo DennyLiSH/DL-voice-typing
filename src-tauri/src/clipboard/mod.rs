@@ -146,7 +146,9 @@ impl ClipboardProvider for MockClipboard {
     }
 
     fn inject_text(&self, text: &str) -> Result<(), AppError> {
-        self.injected.lock().unwrap().push(text.to_string());
+        if let Some(mut guard) = crate::util::lock_mutex(&self.injected, "MockClipboard::injected") {
+            guard.push(text.to_string());
+        }
         Ok(())
     }
 
