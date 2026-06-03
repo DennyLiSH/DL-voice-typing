@@ -36,6 +36,8 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::time::OffsetTime;
 
+/// Application entry point: initializes logging, state, engine, windows, hotkey, and watchdog,
+/// then runs the Tauri event loop.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _log_guard = init_logging();

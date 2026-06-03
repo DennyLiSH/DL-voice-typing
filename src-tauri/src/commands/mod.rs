@@ -46,12 +46,14 @@ impl Default for MockEmitter {
 }
 
 impl MockEmitter {
+    /// Create a new mock emitter with an empty event log.
     pub fn new() -> Self {
         Self {
             events: std::sync::Mutex::new(Vec::new()),
         }
     }
 
+    /// Drain and return all recorded (event, payload) pairs.
     pub fn take_events(&self) -> Vec<(String, serde_json::Value)> {
         crate::util::lock_mutex(&self.events, "MockEmitter::take_events")
             .map(|mut guard| guard.drain(..).collect())

@@ -15,6 +15,7 @@ pub struct DownloadState {
 }
 
 impl DownloadState {
+    /// Create a new download state with no active download and cancel flag cleared.
     pub fn new() -> Self {
         Self {
             cancel: Arc::new(AtomicBool::new(false)),
@@ -51,7 +52,7 @@ impl Drop for DownloadGuard {
     }
 }
 
-/// Check which Whisper models are downloaded and scan for custom models.
+/// Response payload listing built-in model availability and custom model filenames.
 #[derive(serde::Serialize)]
 pub struct ModelsResponse {
     pub built_in: std::collections::HashMap<String, bool>,

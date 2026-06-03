@@ -35,6 +35,8 @@ pub trait ClipboardProvider: Send + Sync {
 }
 
 /// Enum-based dispatch for clipboard providers (avoids `dyn` overhead).
+///
+/// Selects between the real Win32 clipboard and a mock at compile time.
 pub enum AnyClipboard {
     Windows(ClipboardManager),
     Mock(MockClipboard),
@@ -69,6 +71,7 @@ pub struct ClipboardManager {
 }
 
 impl ClipboardManager {
+    /// Create a new clipboard manager with no saved content.
     pub fn new() -> Self {
         Self {
             saved_content: None,
@@ -124,6 +127,7 @@ pub struct MockClipboard {
 }
 
 impl MockClipboard {
+    /// Create a new mock clipboard in the initial (no save/inject/restore) state.
     pub fn new() -> Self {
         Self {
             saved: false,

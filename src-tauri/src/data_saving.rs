@@ -22,6 +22,7 @@ pub struct SaveConfig {
 }
 
 impl SaveConfig {
+    /// Extract the minimal save config fields from a full `AppConfig`.
     pub fn from_app_config(config: &AppConfig) -> Self {
         Self {
             enabled: config.data_saving_enabled,

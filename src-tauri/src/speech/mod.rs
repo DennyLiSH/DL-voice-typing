@@ -47,6 +47,7 @@ impl AnyEngine {
         Self::Whisper(whisper::WhisperEngine::new(model_path, language))
     }
 
+    /// Create a mock engine variant that always returns the given response.
     pub fn new_mock(response: &str) -> Self {
         Self::Mock(mock::MockEngine::new(response))
     }

@@ -76,6 +76,7 @@ pub struct LLMClient {
 }
 
 impl LLMClient {
+    /// Create a new LLM client targeting the given OpenAI-compatible endpoint.
     pub fn new(api_url: String, api_key: String, model: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
@@ -146,6 +147,7 @@ impl LLMClient {
         })
     }
 
+    /// Check whether this client's endpoint, key, and model match the given config values.
     pub fn matches_config(&self, api_url: &str, api_key: &str, model: &str) -> bool {
         self.api_url == api_url && self.api_key == api_key && self.model == model
     }

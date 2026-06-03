@@ -8,6 +8,7 @@ pub struct MockEngine {
 }
 
 impl MockEngine {
+    /// Create a mock engine that always returns the given fixed response.
     pub fn new(response: impl Into<String>) -> Self {
         Self {
             response: response.into(),
@@ -15,10 +16,12 @@ impl MockEngine {
         }
     }
 
+    /// Change the fixed response returned by `transcribe` / `transcribe_sync`.
     pub fn set_response(&mut self, response: impl Into<String>) {
         self.response = response.into();
     }
 
+    /// Set whether the engine reports itself as ready.
     pub fn set_ready(&mut self, ready: bool) {
         self.ready = ready;
     }

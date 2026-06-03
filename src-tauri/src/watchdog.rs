@@ -26,6 +26,7 @@ pub struct TauriRecoveryActions {
 }
 
 impl TauriRecoveryActions {
+    /// Create a new Tauri recovery adapter wrapping the given app handle.
     pub fn new(app: AppHandle) -> Self {
         Self { app }
     }
@@ -77,6 +78,7 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
+    /// Create a new watchdog with the given state machine, recovery actions, and timing parameters.
     pub fn new(
         sm: Arc<Mutex<StateMachine>>,
         recovery: Arc<dyn RecoveryActions + Send + Sync>,

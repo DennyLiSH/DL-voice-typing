@@ -136,6 +136,11 @@ fn has_speech_energy(resampled: &[f32]) -> bool {
     high_energy_frames >= ENERGY_MIN_FRAMES
 }
 
+/// Background transcriber that runs a sliding-window loop on a dedicated thread.
+///
+/// Owns the thread handle, stop flag, and incremental text accumulator.
+/// Call [`start`](Self::start) to spawn the loop, [`take_accumulated`](Self::take_accumulated)
+/// to collect results, and [`stop`](Self::stop) / [`stop_and_wait`](Self::stop_and_wait) to shut down.
 pub struct RealtimeTranscriber {
     running: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,

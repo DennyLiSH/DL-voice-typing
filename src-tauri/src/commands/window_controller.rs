@@ -32,6 +32,7 @@ pub struct TauriWindowController {
 }
 
 impl TauriWindowController {
+    /// Create a new Tauri window controller wrapping the given app handle.
     pub fn new(app: tauri::AppHandle) -> Self {
         Self { app }
     }

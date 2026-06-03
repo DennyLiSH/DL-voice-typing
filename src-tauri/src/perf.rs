@@ -38,6 +38,7 @@ pub struct PerfMetrics {
 }
 
 impl PerfMetrics {
+    /// Create a new metrics instance with all durations set to `None`.
     pub fn new(cycle_id: u64) -> Self {
         Self {
             cycle_id,
@@ -89,8 +90,10 @@ pub struct PerfHistory {
 }
 
 impl PerfHistory {
+    /// Maximum number of cycle metrics retained in the ring buffer.
     pub const CAPACITY: usize = 64;
 
+    /// Create an empty history buffer with cycle counter starting at 1.
     pub fn new() -> Self {
         Self {
             counter: AtomicU64::new(1),

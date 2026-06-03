@@ -96,6 +96,7 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
+    /// Create a new audio capture instance (no stream active).
     pub fn new() -> Self {
         Self {
             stream: None,
@@ -261,6 +262,7 @@ pub struct MockAudioCapture {
 }
 
 impl MockAudioCapture {
+    /// Create a new mock audio capture in the idle (not capturing) state.
     pub fn new() -> Self {
         Self {
             capturing: false,

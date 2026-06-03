@@ -55,6 +55,7 @@ pub const Q8_MODELS_BASE_URL: &str =
 // Typed enums for config fields (serde serializes as lowercase strings)
 // ---------------------------------------------------------------------------
 
+/// Whisper model variant used for transcription, including built-in sizes and user-supplied custom models.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum WhisperModel {
     Tiny,
@@ -161,6 +162,7 @@ impl<'de> Deserialize<'de> for WhisperModel {
 }
 
 impl WhisperModel {
+    /// Returns the model filename (e.g. `ggml-base.bin`), or the custom name for user-supplied models.
     pub fn filename(&self) -> std::borrow::Cow<'static, str> {
         if let Some(meta) = BUILT_IN_MODELS.iter().find(|m| m.variant == *self) {
             meta.filename.into()
@@ -171,6 +173,7 @@ impl WhisperModel {
         }
     }
 
+    /// Returns the human-readable download size (e.g. `"142MB"`, `"~75MB"`), or `""` for custom models.
     pub fn display_size(&self) -> &'static str {
         BUILT_IN_MODELS
             .iter()
@@ -221,6 +224,7 @@ impl WhisperModel {
     }
 }
 
+/// Supported recognition languages for Whisper transcription (Chinese, English, Japanese, Korean).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
@@ -258,6 +262,7 @@ impl Language {
     }
 }
 
+/// Download mirror source for Whisper model files (domestic HF-Mirror or international HuggingFace).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadMirror {
