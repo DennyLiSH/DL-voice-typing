@@ -81,6 +81,8 @@ impl HotkeyManager for WindowsHotkeyManager {
 
     fn unregister(&mut self) -> Result<(), AppError> {
         if let Some(hook) = self.hook.take() {
+            // SAFETY: UnhookWindowsHookEx removes a hook installed by SetWindowsHookExW.
+            // `hook` is a valid HHOOK from a successful SetWindowsHookExW call.
             unsafe {
                 UnhookWindowsHookEx(hook)
                     .map_err(|e| AppError::Hotkey(format!("failed to unhook: {e}")))?;
@@ -115,6 +117,8 @@ unsafe impl Sync for WindowsHotkeyManager {}
 impl Drop for WindowsHotkeyManager {
     fn drop(&mut self) {
         if let Some(hook) = self.hook.take() {
+            // SAFETY: UnhookWindowsHookEx removes a hook installed by SetWindowsHookExW.
+            // `hook` is a valid HHOOK. Best-effort cleanup in Drop — error is discarded.
             unsafe {
                 let _ = UnhookWindowsHookEx(hook);
             }
@@ -126,18 +130,27 @@ impl Drop for WindowsHotkeyManager {
 ///
 /// Reads the registered key_code and callback from global state,
 /// detects press/release, and invokes the callback.
+///
+/// # Safety
+/// This function is called by Windows from the hook chain. `l_param` must point to a
+/// valid `KBDLLHOOKSTRUCT`. The function reads global state through a Mutex and clones
+/// any data before releasing the lock to avoid re-entrant deadlocks.
 unsafe extern "system" fn keyboard_hook_proc(
     n_code: i32,
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
     if n_code >= 0 {
+        // SAFETY: Windows guarantees l_param points to a valid KBDLLHOOKSTRUCT when
+        // called from a WH_KEYBOARD_LL hook with n_code >= 0.
         let kb_struct = unsafe { *(l_param.0 as *const KBDLLHOOKSTRUCT) };
         let vk = kb_struct.vkCode;
 
         // Ignore synthetic (injected) key events from SendInput/keybd_event.
         // This prevents tools like Ditto from accidentally triggering the hotkey.
         if kb_struct.flags & LLKHF_INJECTED != KBDLLHOOKSTRUCT_FLAGS(0) {
+            // SAFETY: CallNextHookEx passes the event to the next hook in the chain.
+            // All parameters are forwarded unchanged from our hook proc.
             return unsafe { CallNextHookEx(None, n_code, w_param, l_param) };
         }
 
@@ -186,6 +199,8 @@ unsafe extern "system" fn keyboard_hook_proc(
         }
     }
 
+    // SAFETY: CallNextHookEx passes the event to the next hook in the chain.
+    // All parameters are forwarded unchanged from our hook proc.
     unsafe { CallNextHookEx(None, n_code, w_param, l_param) }
 }
 

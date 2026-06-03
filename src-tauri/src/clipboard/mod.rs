@@ -164,12 +164,18 @@ fn read_clipboard() -> Result<String, AppError> {
 
     with_clipboard_timeout(
         move || unsafe {
+            // SAFETY: OpenClipboard with None opens the clipboard associated with
+            // the current task. We close it before returning (CloseClipboard below).
+            // All Win32 clipboard APIs require the clipboard to be open; we open
+            // it here and ensure CloseClipboard is called on all exit paths.
             OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
 
             let result = (|| -> Result<String, AppError> {
                 let handle = GetClipboardData(13u32)
                     .map_err(|e| AppError::Clipboard(format!("get data failed: {e}")))?;
 
+                // SAFETY: GlobalLock locks the clipboard data handle returned by
+                // GetClipboardData. The handle is valid and we unlock it below.
                 let ptr = GlobalLock(windows::Win32::Foundation::HGLOBAL(handle.0));
                 if ptr.is_null() {
                     return Err(AppError::Clipboard("lock failed: null pointer".to_string()));
@@ -188,6 +194,8 @@ fn read_clipboard() -> Result<String, AppError> {
                 };
 
                 let u16_ptr = ptr as *const u16;
+                // SAFETY: ptr points to a valid GlobalLock'd memory region of at least
+                // `len` u16 elements. We verified len bounds above (block_size or null-term).
                 let slice = std::slice::from_raw_parts(u16_ptr, len);
                 let text = String::from_utf16(slice)
                     .map_err(|e| AppError::Clipboard(format!("utf16 decode failed: {e}")))?;
@@ -229,6 +237,8 @@ fn write_clipboard(text: &str) -> Result<(), AppError> {
     let text = text.to_string();
     with_clipboard_timeout(
         move || unsafe {
+            // SAFETY: OpenClipboard with None opens the clipboard for the current task.
+            // We close it before returning (CloseClipboard below).
             OpenClipboard(None).map_err(|e| AppError::Clipboard(format!("open failed: {e}")))?;
             EmptyClipboard().map_err(|e| AppError::Clipboard(format!("empty failed: {e}")))?;
 
@@ -238,11 +248,15 @@ fn write_clipboard(text: &str) -> Result<(), AppError> {
             let hglobal = GlobalAlloc(GMEM_MOVEABLE, byte_len)
                 .map_err(|e| AppError::Clipboard(format!("alloc failed: {e}")))?;
 
+            // SAFETY: GlobalLock on a freshly allocated, valid HGLOBAL. We unlock below.
             let ptr = GlobalLock(hglobal);
             if ptr.is_null() {
                 return Err(AppError::Clipboard("lock failed".to_string()));
             }
 
+            // SAFETY: ptr is a valid, locked buffer of byte_len bytes. `wide` has
+            // wide.len() u16 elements = byte_len bytes (allocated above). No overlap
+            // because ptr is a fresh allocation.
             std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr as *mut u16, wide.len());
             let _ = GlobalUnlock(hglobal);
 
@@ -264,6 +278,9 @@ fn simulate_paste() -> Result<(), AppError> {
         INPUT, INPUT_TYPE, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_V,
     };
 
+    // SAFETY: We zero-initialize a 4-element INPUT array, then populate each entry
+    // with valid keyboard event data (Ctrl down, V down, V up, Ctrl up). SendInput
+    // receives a valid slice and the correct struct size. All fields are properly set.
     unsafe {
         let mut inputs: [INPUT; 4] = std::mem::zeroed();
 

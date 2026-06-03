@@ -21,6 +21,9 @@ pub fn encrypt(plaintext: &str) -> Result<String, AppError> {
         pbData: std::ptr::null_mut(),
     };
 
+    // SAFETY: CryptProtectData receives a valid CRYPT_INTEGER_BLOB pointing to `bytes`
+    // (borrowed, lifetime covers this call). `output_blob` is zero-initialized and owned
+    // by us; DPAPI writes the encrypted data into a newly allocated buffer we must free.
     let result =
         unsafe { CryptProtectData(&input_blob, None, None, None, None, 0, &mut output_blob) };
 
@@ -28,12 +31,15 @@ pub fn encrypt(plaintext: &str) -> Result<String, AppError> {
         return Err(AppError::Crypto("CryptProtectData failed".to_string()));
     }
 
+    // SAFETY: output_blob.pbData is a valid DPAPI-allocated buffer with cbData bytes.
+    // We read it before freeing below. The slice does not outlive this function.
     let encrypted_bytes =
         unsafe { std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize) };
     let b64 = BASE64.encode(encrypted_bytes);
     let encoded = format!("{DPAPI_PREFIX}{b64}");
 
-    // Free the buffer allocated by DPAPI.
+    // SAFETY: LocalFree releases the DPAPI-allocated buffer. pbData was validated
+    // non-null above. After this call, pbData must not be used.
     unsafe {
         LocalFree(HLOCAL(output_blob.pbData as *mut core::ffi::c_void));
     }
@@ -61,6 +67,9 @@ pub fn decrypt(ciphertext: &str) -> Result<String, AppError> {
         pbData: std::ptr::null_mut(),
     };
 
+    // SAFETY: CryptUnprotectData receives a valid CRYPT_INTEGER_BLOB pointing to
+    // `encrypted_bytes` (borrowed, lifetime covers this call). `output_blob` is
+    // zero-initialized and owned by us; DPAPI writes the plaintext buffer we must free.
     let result =
         unsafe { CryptUnprotectData(&input_blob, None, None, None, None, 0, &mut output_blob) };
 
@@ -68,12 +77,15 @@ pub fn decrypt(ciphertext: &str) -> Result<String, AppError> {
         return Err(AppError::Crypto("CryptUnprotectData failed".to_string()));
     }
 
+    // SAFETY: output_blob.pbData is a valid DPAPI-allocated buffer with cbData bytes.
+    // We read it before freeing below. The slice does not outlive this function.
     let plaintext_bytes =
         unsafe { std::slice::from_raw_parts(output_blob.pbData, output_blob.cbData as usize) };
     let plaintext = String::from_utf8(plaintext_bytes.to_vec())
         .map_err(|e| AppError::Crypto(format!("utf8 conversion failed: {e}")))?;
 
-    // Free the buffer allocated by DPAPI.
+    // SAFETY: LocalFree releases the DPAPI-allocated buffer. pbData was validated
+    // non-null above. After this call, pbData must not be used.
     unsafe {
         LocalFree(HLOCAL(output_blob.pbData as *mut core::ffi::c_void));
     }
