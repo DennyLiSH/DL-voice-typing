@@ -6,33 +6,12 @@
 
 use crate::audio::{AudioCaptureProvider, MockAudioCapture};
 use crate::clipboard::{AnyClipboard, ClipboardProvider, MockClipboard};
-use crate::commands::EventEmitter;
+use crate::commands::{EventEmitter, MockEmitter};
 use crate::config::AppConfig;
 use crate::llm::{AnyCorrector, MockCorrector, TextCorrector};
 use crate::speech::{AnyEngine, SpeechEngine};
 use crate::state::StateMachine;
-use std::sync::{Arc, Mutex};
-
-struct MockEmitter {
-    events: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
-}
-
-impl MockEmitter {
-    fn new() -> Self {
-        Self {
-            events: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-}
-
-impl EventEmitter for MockEmitter {
-    fn emit(&self, event: &str, payload: serde_json::Value) {
-        self.events
-            .lock()
-            .unwrap()
-            .push((event.to_string(), payload));
-    }
-}
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Mock component interactions
@@ -124,7 +103,7 @@ fn test_emitter_records_events() {
     emitter.emit("test-event", serde_json::json!("payload"));
     emitter.emit("another", serde_json::Value::Null);
 
-    let events = emitter.events.lock().unwrap();
+    let events = emitter.take_events();
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].0, "test-event");
     assert_eq!(events[1].0, "another");
