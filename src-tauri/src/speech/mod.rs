@@ -59,6 +59,21 @@ impl AnyEngine {
             Self::Mock(_) => Ok(()),
         }
     }
+
+    /// Transcribe with prior context for stabilizing overlapping regions.
+    /// For Whisper: appends `context` to the language anchor in `initial_prompt`.
+    /// For Mock/other engines: ignores context, delegates to `transcribe_sync`.
+    pub fn transcribe_sync_with_context(
+        &self,
+        samples: &[f32],
+        context: Option<&str>,
+    ) -> Result<String, AppError> {
+        match self {
+            #[cfg(feature = "whisper")]
+            Self::Whisper(e) => e.transcribe_with_context(samples, context),
+            Self::Mock(e) => e.transcribe_sync(samples),
+        }
+    }
 }
 
 impl SpeechEngine for AnyEngine {

@@ -8,7 +8,7 @@
 /// Each new transcription is diffed against the previous one to extract
 /// only the new content, which is appended to a running accumulated string.
 use crate::audio::{Resampler, TARGET_SAMPLE_RATE, rms};
-use crate::speech::{AnyEngine, SpeechEngine};
+use crate::speech::AnyEngine;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -99,6 +99,12 @@ const VAD_THRESHOLD: f32 = 0.02;
 /// Minimum overlap ratio to consider two consecutive partials as continuous speech.
 /// Below this threshold, we treat the new partial as a fresh segment.
 const MIN_OVERLAP_RATIO: f32 = 0.5;
+
+/// Edit distance tolerance for fuzzy overlap matching (10% = 1 edit per 10 chars).
+const EDIT_DISTANCE_RATIO: f32 = 0.1;
+
+/// Fuzzy matching only tries the top-N longest candidates (performance guard).
+const FUZZY_TOP_N: usize = 3;
 
 /// Frame size for speech energy detection (100ms at 16kHz = 1600 samples).
 const ENERGY_FRAME_SAMPLES: usize = 1600;
@@ -271,9 +277,42 @@ fn content_char_offset(s: &str, n: usize) -> usize {
     s.len()
 }
 
+/// Compute Levenshtein edit distance between two char slices.
+/// Returns early with `usize::MAX` if the distance exceeds `max_dist`.
+fn bounded_edit_distance(a: &[char], b: &[char], max_dist: usize) -> usize {
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+    let mut prev = vec![0usize; b.len() + 1];
+    let mut curr = vec![0usize; b.len() + 1];
+    for (j, val) in prev.iter_mut().enumerate() {
+        *val = j;
+    }
+    for i in 1..=a.len() {
+        curr[0] = i;
+        let mut row_min = curr[0];
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+            row_min = row_min.min(curr[j]);
+        }
+        if row_min > max_dist {
+            return usize::MAX;
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
 /// Find the longest suffix of `a` that matches a prefix of `b`.
 /// Returns the match length in characters (not bytes).
 /// Both slices are already punctuation-stripped content characters.
+///
+/// Two-phase matching: first tries exact match (fast), then fuzzy match
+/// with edit distance tolerance (handles homophone drift).
 fn find_longest_suffix_prefix(a: &[char], b: &[char]) -> usize {
     if a.is_empty() || b.is_empty() {
         return 0;
@@ -281,8 +320,19 @@ fn find_longest_suffix_prefix(a: &[char], b: &[char]) -> usize {
 
     let min_overlap = ((a.len() as f32) * MIN_OVERLAP_RATIO) as usize;
     let max_check = a.len().min(b.len());
+
+    // Phase 1: exact match (fast path).
     for len in (min_overlap.max(1)..=max_check).rev() {
         if a[a.len() - len..] == b[..len] {
+            return len;
+        }
+    }
+
+    // Phase 2: fuzzy match — only try top-N longest candidates.
+    for len in (min_overlap.max(1)..=max_check).rev().take(FUZZY_TOP_N) {
+        let max_edits = ((len as f32) * EDIT_DISTANCE_RATIO).max(1.0) as usize;
+        let dist = bounded_edit_distance(&a[a.len() - len..], &b[..len], max_edits);
+        if dist <= max_edits {
             return len;
         }
     }
@@ -353,12 +403,29 @@ impl RealtimeTranscriber {
                     continue;
                 }
 
-                let text = match engine.transcribe_sync(resampled) {
-                    Ok(t) => t,
-                    Err(err) => {
-                        warn!("realtime transcription error: {err}");
-                        sleep_or_stop(&running_clone, STEP_MS);
-                        continue;
+                let text = {
+                    // Read accumulated text as context before transcription.
+                    let context_text = {
+                        match accumulated_clone.lock() {
+                            Ok(guard) => {
+                                let t = guard.text();
+                                if t.is_empty() {
+                                    None
+                                } else {
+                                    Some(t.to_string())
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    };
+
+                    match engine.transcribe_sync_with_context(resampled, context_text.as_deref()) {
+                        Ok(t) => t,
+                        Err(err) => {
+                            warn!("realtime transcription error: {err}");
+                            sleep_or_stop(&running_clone, STEP_MS);
+                            continue;
+                        }
                     }
                 };
 
@@ -715,5 +782,131 @@ mod tests {
         // because the engine always returns the same text.
         assert!(!events.is_empty());
         assert!(events.iter().all(|e| e == "First"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzzy overlap detection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fuzzy_overlap_single_homophone() {
+        // Chinese: 他 → 她 (single character difference)
+        let result = accumulate("你好他是小明", "你好他是小明", "你好她是小明今年二十岁");
+        assert!(
+            result.contains("今年二十岁"),
+            "expected fuzzy overlap to detect 他/她 difference, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_overlap_english_minor_diff() {
+        // Suffix-prefix model: old="the cat", new="the bat sat down"
+        // suffix of old "thecat" vs prefix of new "thebat": 1 edit (c→b), within tolerance.
+        let result = accumulate("the cat", "the cat", "the bat sat down");
+        assert!(
+            result.contains("sat down"),
+            "expected fuzzy overlap to detect cat/bat difference, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_overlap_within_tolerance() {
+        // Exactly 1 edit in 10 chars = 10% = within EDIT_DISTANCE_RATIO
+        // "ABCDEFGHIJ" → "ABCXEFGHIJ" (1 substitution)
+        let result = accumulate(
+            "ABCDEFGHIJ hello",
+            "ABCDEFGHIJ hello",
+            "ABCXEFGHIJ hello world",
+        );
+        assert!(
+            result.contains("world"),
+            "expected fuzzy overlap within tolerance, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_overlap_exceeds_tolerance() {
+        // 3 edits in 10 chars = 30% = exceeds EDIT_DISTANCE_RATIO (10%)
+        // "ABCDEFGHIJ" → "XXXDEFGHIJ" (3 substitutions)
+        let result = accumulate(
+            "ABCDEFGHIJ hello",
+            "ABCDEFGHIJ hello",
+            "XXXDEFGHIJ hello world",
+        );
+        assert_eq!(
+            result, "ABCDEFGHIJ hello",
+            "expected freeze when edit distance exceeds tolerance, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_bounded_edit_distance_identical() {
+        let a: Vec<char> = "hello".chars().collect();
+        let b: Vec<char> = "hello".chars().collect();
+        assert_eq!(bounded_edit_distance(&a, &b, 0), 0);
+    }
+
+    #[test]
+    fn test_bounded_edit_distance_one_sub() {
+        let a: Vec<char> = "hallo".chars().collect();
+        let b: Vec<char> = "hello".chars().collect();
+        assert_eq!(bounded_edit_distance(&a, &b, 1), 1);
+    }
+
+    #[test]
+    fn test_bounded_edit_distance_early_exit() {
+        let a: Vec<char> = "abcdefghij".chars().collect();
+        let b: Vec<char> = "xxxxxxxxxx".chars().collect();
+        // 10 edits, max_dist=1 → should return usize::MAX via early exit
+        assert_eq!(bounded_edit_distance(&a, &b, 1), usize::MAX);
+    }
+
+    #[test]
+    fn test_bounded_edit_distance_empty() {
+        let a: Vec<char> = "".chars().collect();
+        let b: Vec<char> = "abc".chars().collect();
+        assert_eq!(bounded_edit_distance(&a, &b, 10), 3);
+        assert_eq!(bounded_edit_distance(&b, &a, 10), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // last_n_chars tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_last_n_chars_shorter_than_n() {
+        let result = crate::speech::whisper::WhisperEngine::last_n_chars("你好", 50);
+        assert_eq!(result, "你好");
+    }
+
+    #[test]
+    fn test_last_n_chars_truncation() {
+        let result =
+            crate::speech::whisper::WhisperEngine::last_n_chars("你好我是小明今年二十岁", 5);
+        assert_eq!(result, "今年二十岁");
+    }
+
+    #[test]
+    fn test_last_n_chars_exact() {
+        let result = crate::speech::whisper::WhisperEngine::last_n_chars("一二三四五", 5);
+        assert_eq!(result, "一二三四五");
+    }
+
+    // -----------------------------------------------------------------------
+    // transcribe_sync_with_context tests (via MockEngine)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_transcribe_with_context_mock_ignores_context() {
+        let engine = AnyEngine::new_mock("hello");
+        let result = engine.transcribe_sync_with_context(&[0.5f32; 100], Some("ignored context"));
+        assert_eq!(result.unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_transcribe_with_context_none_works() {
+        let engine = AnyEngine::new_mock("test");
+        let result = engine.transcribe_sync_with_context(&[0.5f32; 100], None);
+        assert_eq!(result.unwrap(), "test");
     }
 }

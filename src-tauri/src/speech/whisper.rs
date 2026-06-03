@@ -24,6 +24,10 @@ fn initial_prompt_for_lang(lang: Language) -> Option<&'static str> {
 /// Number of pre-created states in the pool.
 const STATE_POOL_SIZE: usize = 2;
 
+/// Maximum characters from confirmed text to include in initial_prompt context.
+/// Conservative: 50 Chinese chars ≈ 50-150 tokens, well under Whisper's ~224-token prompt budget.
+const MAX_CONTEXT_CHARS: usize = 50;
+
 /// Whisper.cpp speech engine with internal state pool.
 ///
 /// `WhisperContext` (model weights) is `Arc`-shared so multiple concurrent
@@ -125,16 +129,10 @@ impl WhisperEngine {
         }
         // If pool is full, drop the state (it will be cleaned up naturally).
     }
-}
 
-impl SpeechEngine for WhisperEngine {
-    async fn transcribe(&self, samples: &[f32]) -> Result<String, AppError> {
-        self.transcribe_sync(samples)
-    }
-
-    fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
-        let ctx = self.get_ctx()?;
-
+    /// Build base transcription params shared by all callers.
+    /// Does NOT set `initial_prompt` — each caller sets its own.
+    fn build_base_params(&self) -> FullParams<'_, '_> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some(self.language.code()));
         params.set_print_progress(false);
@@ -142,10 +140,16 @@ impl SpeechEngine for WhisperEngine {
         params.set_no_timestamps(true);
         params.set_single_segment(true);
         params.set_translate(false);
-        if let Some(prompt) = initial_prompt_for_lang(self.language) {
-            params.set_initial_prompt(prompt);
-        }
+        params
+    }
 
+    /// Core transcription logic shared by `transcribe_sync` and `transcribe_with_context`.
+    fn transcribe_with_params(
+        &self,
+        samples: &[f32],
+        params: FullParams,
+    ) -> Result<String, AppError> {
+        let ctx = self.get_ctx()?;
         let mut state = self.pop_state(&ctx);
 
         let result = state
@@ -187,6 +191,59 @@ impl SpeechEngine for WhisperEngine {
 
         self.push_state(state);
         result
+    }
+
+    /// Transcribe with prior context appended to the initial_prompt.
+    /// This stabilizes Whisper's output for overlapping regions by conditioning
+    /// on previously confirmed transcription, reducing homophone drift.
+    pub fn transcribe_with_context(
+        &self,
+        samples: &[f32],
+        context: Option<&str>,
+    ) -> Result<String, AppError> {
+        let mut params = self.build_base_params();
+        let lang_anchor = initial_prompt_for_lang(self.language);
+        let prompt = match (lang_anchor, context) {
+            (Some(anchor), Some(ctx_text)) => {
+                let tail = Self::last_n_chars(ctx_text, MAX_CONTEXT_CHARS);
+                format!("{anchor}{tail}")
+            }
+            (Some(anchor), None) => anchor.to_string(),
+            (None, Some(ctx_text)) => Self::last_n_chars(ctx_text, MAX_CONTEXT_CHARS),
+            (None, None) => String::new(),
+        };
+        if !prompt.is_empty() {
+            params.set_initial_prompt(&prompt);
+        }
+        self.transcribe_with_params(samples, params)
+    }
+
+    /// Take the last `n` characters from `text`.
+    pub(crate) fn last_n_chars(text: &str, n: usize) -> String {
+        if text.chars().count() <= n {
+            return text.to_string();
+        }
+        text.chars()
+            .rev()
+            .take(n)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    }
+}
+
+impl SpeechEngine for WhisperEngine {
+    async fn transcribe(&self, samples: &[f32]) -> Result<String, AppError> {
+        self.transcribe_sync(samples)
+    }
+
+    fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
+        let mut params = self.build_base_params();
+        if let Some(prompt) = initial_prompt_for_lang(self.language) {
+            params.set_initial_prompt(prompt);
+        }
+        self.transcribe_with_params(samples, params)
     }
 
     fn is_ready(&self) -> bool {
