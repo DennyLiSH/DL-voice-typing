@@ -16,6 +16,8 @@ pub trait RecoveryActions: Send + Sync {
     fn emit_watchdog_reset(&self);
     /// Update the tray tooltip to indicate automatic recovery.
     fn set_tray_recovered(&self);
+    /// Reset review session state (e.g., shown_on_press flag).
+    fn reset_review_state(&self);
 }
 
 /// Tauri-based implementation of recovery actions.
@@ -49,6 +51,16 @@ impl RecoveryActions for TauriRecoveryActions {
     fn set_tray_recovered(&self) {
         if let Some(tray) = self.app.tray_by_id("default") {
             let _ = tray.set_tooltip(Some("语文兔 - 已自动恢复"));
+        }
+    }
+
+    fn reset_review_state(&self) {
+        if let Some(pending) = self.app.try_state::<super::commands::review::PendingReview>() {
+            if let Some(mut guard) =
+                crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
+            {
+                *guard = false;
+            }
         }
     }
 }
@@ -101,45 +113,52 @@ impl Watchdog {
     /// Single check cycle. Public for testing.
     /// `now`: injectable clock for deterministic testing.
     pub fn tick(&mut self, now: Instant) {
-        let guard = self.sm.try_lock();
-        let Ok(sm) = guard else {
-            warn!("Watchdog: state_machine lock busy/unavailable, skipping check");
-            return;
-        };
+        // Scope the state machine lock so the borrow ends before force_reset
+        // (which needs &mut self) is called.
+        let needs_force_reset = {
+            let guard = self.sm.try_lock();
+            let Ok(sm) = guard else {
+                warn!("Watchdog: state_machine lock busy/unavailable, skipping check");
+                return;
+            };
 
-        let state_name = sm.state_name();
-        let is_idle = matches!(sm.state(), crate::state::StateTag::Idle);
+            let state_name = sm.state_name();
+            let is_idle = matches!(sm.state(), crate::state::StateTag::Idle);
 
-        if is_idle {
-            if self.last_non_idle_at.take().is_some() {
-                info!("Watchdog: state recovered to Idle");
-            }
-            return;
-        }
-
-        // Non-Idle state
-        let elapsed = match self.last_non_idle_at {
-            Some(t) => now.duration_since(t),
-            None => {
-                self.last_non_idle_at = Some(now);
-                info!("Watchdog: detected non-Idle state: {state_name}");
+            if is_idle {
+                if self.last_non_idle_at.take().is_some() {
+                    info!("Watchdog: state recovered to Idle");
+                }
                 return;
             }
-        };
 
-        if elapsed >= self.stuck_threshold {
-            error!(
-                "Watchdog: state machine stuck in {state_name} for {:?}, forcing reset",
-                elapsed
-            );
-            // Force reset: drop the guard to release the lock before calling reset helpers
-            drop(sm);
+            // Non-Idle state
+            let elapsed = match self.last_non_idle_at {
+                Some(t) => now.duration_since(t),
+                None => {
+                    self.last_non_idle_at = Some(now);
+                    info!("Watchdog: detected non-Idle state: {state_name}");
+                    return;
+                }
+            };
+
+            if elapsed >= self.stuck_threshold {
+                error!(
+                    "Watchdog: state machine stuck in {state_name} for {:?}, forcing reset",
+                    elapsed
+                );
+                true
+            } else {
+                warn!(
+                    "Watchdog: state machine in {state_name} for {:?}, waiting...",
+                    elapsed
+                );
+                false
+            }
+        }; // guard dropped here — borrow of self.sm ends.
+
+        if needs_force_reset {
             self.force_reset();
-        } else {
-            warn!(
-                "Watchdog: state machine in {state_name} for {:?}, waiting...",
-                elapsed
-            );
         }
     }
 
@@ -148,7 +167,7 @@ impl Watchdog {
         self.stopped.store(true, Ordering::Relaxed);
     }
 
-    fn force_reset(&self) {
+    fn force_reset(&mut self) {
         // Use try_lock instead of blocking lock_mutex to avoid the watchdog
         // itself hanging when the state machine lock is deadlocked by another thread.
         match self.sm.try_lock() {
@@ -164,14 +183,19 @@ impl Watchdog {
         // Always perform UI recovery even if lock acquisition failed.
         self.recovery.hide_floating_window();
         self.recovery.hide_review_window();
+        self.recovery.reset_review_state();
         self.recovery.emit_watchdog_reset();
         self.recovery.set_tray_recovered();
+        // Clear the stuck timer so a fresh recording doesn't immediately
+        // trigger another reset.
+        self.last_non_idle_at = None;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::StateTag;
 
     struct MockRecovery {
         actions: Arc<Mutex<Vec<String>>>,
@@ -185,16 +209,19 @@ mod tests {
 
     impl RecoveryActions for MockRecovery {
         fn hide_floating_window(&self) {
-            self.actions.lock().unwrap().push("hide_floating".into());
+            let _ = self.actions.lock().map(|mut a| a.push("hide_floating".into()));
         }
         fn hide_review_window(&self) {
-            self.actions.lock().unwrap().push("hide_review".into());
+            let _ = self.actions.lock().map(|mut a| a.push("hide_review".into()));
         }
         fn emit_watchdog_reset(&self) {
-            self.actions.lock().unwrap().push("emit_reset".into());
+            let _ = self.actions.lock().map(|mut a| a.push("emit_reset".into()));
         }
         fn set_tray_recovered(&self) {
-            self.actions.lock().unwrap().push("set_tray".into());
+            let _ = self.actions.lock().map(|mut a| a.push("set_tray".into()));
+        }
+        fn reset_review_state(&self) {
+            let _ = self.actions.lock().map(|mut a| a.push("reset_review".into()));
         }
     }
 
@@ -244,7 +271,13 @@ mod tests {
         assert!(actions.contains(&"hide_floating".to_string()));
         assert!(actions.contains(&"emit_reset".to_string()));
         assert!(actions.contains(&"set_tray".to_string()));
-        assert_eq!(wd.sm.lock().unwrap().state(), crate::state::StateTag::Idle);
+        assert!(actions.contains(&"reset_review".to_string()));
+        assert_eq!(
+            wd.sm.lock().map_or(StateTag::Idle, |s| s.state()),
+            crate::state::StateTag::Idle
+        );
+        // last_non_idle_at should be cleared after force reset.
+        assert!(wd.last_non_idle_at.is_none());
     }
 
     #[test]

@@ -500,6 +500,21 @@ pub(crate) fn make_hotkey_callback(ps: PipelineState) -> HotkeyCallback {
                 }
 
                 if can_record {
+                    // === Session state cleanup: prevent leaks from previous session ===
+                    // If the previous recording ended abnormally (e.g., hotkey release
+                    // never delivered, watchdog reset), stale state can cause the
+                    // current session to take the wrong code path.
+                    ps.review.set_shown_on_press(false);
+                    if let Some(mut rt_guard) = crate::util::lock_mutex(
+                        &ps.realtime_transcriber,
+                        "realtime_transcriber",
+                    ) {
+                        if let Some(ref mut rt) = *rt_guard {
+                            rt.stop();
+                            rt_guard.take();
+                        }
+                    }
+
                     let config = ps.config_cache.read_cached();
                     let mode = config.pipeline_mode();
 
