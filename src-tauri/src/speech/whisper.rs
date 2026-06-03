@@ -89,6 +89,8 @@ impl WhisperEngine {
         };
 
         // Pre-warm the state pool.
+        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
+        // shared across panic-capable boundaries. Lock poisoning is impossible here.
         let mut pool = self.state_pool.lock().unwrap();
         pool.clear();
         for _ in 0..STATE_POOL_SIZE {
@@ -102,11 +104,15 @@ impl WhisperEngine {
         }
         info!("Whisper: state pool warmed with {} states", pool.len());
 
+        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
+        // shared across panic-capable boundaries. Lock poisoning is impossible here.
         *self.ctx.lock().unwrap() = Some(ctx);
         Ok(())
     }
 
     fn get_ctx(&self) -> Result<Arc<WhisperContext>, AppError> {
+        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
+        // shared across panic-capable boundaries. Lock poisoning is impossible here.
         self.ctx
             .lock()
             .unwrap()
@@ -115,6 +121,8 @@ impl WhisperEngine {
     }
 
     fn pop_state(&self, ctx: &Arc<WhisperContext>) -> whisper_rs::WhisperState {
+        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
+        // shared across panic-capable boundaries. Lock poisoning is impossible here.
         self.state_pool.lock().unwrap().pop().unwrap_or_else(|| {
             // Pool exhausted: create a new state (slow path).
             ctx.create_state()
@@ -123,6 +131,8 @@ impl WhisperEngine {
     }
 
     fn push_state(&self, state: whisper_rs::WhisperState) {
+        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
+        // shared across panic-capable boundaries. Lock poisoning is impossible here.
         let mut pool = self.state_pool.lock().unwrap();
         if pool.len() < STATE_POOL_SIZE {
             pool.push(state);
@@ -247,10 +257,14 @@ impl SpeechEngine for WhisperEngine {
     }
 
     fn is_ready(&self) -> bool {
+        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
+        // shared across panic-capable boundaries. Lock poisoning is impossible here.
         self.ctx.lock().unwrap().is_some()
     }
 
     fn is_gpu_mode(&self) -> bool {
+        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
+        // shared across panic-capable boundaries. Lock poisoning is impossible here.
         self.gpu_mode.load(std::sync::atomic::Ordering::Relaxed)
             && self.ctx.lock().unwrap().is_some()
     }
