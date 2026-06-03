@@ -14,6 +14,12 @@ pub trait TextCorrector: Send + Sync {
 }
 
 /// Enum-based dispatch for text correctors.
+///
+/// TODO(architecture): Consider replacing with `Box<dyn TextCorrector>` to match
+/// AudioCaptureProvider/EventEmitter/ReviewProvider pattern. AnyCorrector is a
+/// shallow 1:1 passthrough with no domain-specific dispatch logic; the dyn pattern
+/// is already proven in this codebase. Only AnyEngine needs enum dispatch
+/// (async fn in traits is not dyn-safe).
 pub enum AnyCorrector {
     Live(LLMClient),
     Mock(MockCorrector),
