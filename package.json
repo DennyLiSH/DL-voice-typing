@@ -2,11 +2,17 @@
   "name": "dl-voice-typing-ui",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "format": "biome check --write ."
   },
   "devDependencies": {
-    "vitest": "^3.0.0"
+    "@biomejs/biome": "~2.0",
+    "vitest": "^4.1.9"
   }
 }

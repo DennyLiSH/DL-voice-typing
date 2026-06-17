@@ -21,6 +21,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Frontend lint/test (runs before the heavy Rust/Vulkan setup so a
+      # frontend failure skips the costly install). Requires Node >= 20
+      # (Biome v2 engines + vitest 4).
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Frontend install
+        run: npm ci
+
+      - name: Frontend lint
+        run: npm run lint
+
+      - name: Frontend audit
+        run: npm audit --audit-level=high
+
+      - name: Frontend test
+        run: npm test
+
       # CI pins a specific version for reproducibility.
       # MSRV is 1.85 — see Cargo.toml rust-version.
       - name: Install Rust toolchain
