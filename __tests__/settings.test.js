@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { isConfigDirty, validateSettings } from '../lib/settings-utils.js';
 
 const baseConfig = {
@@ -75,12 +75,22 @@ describe('isConfigDirty', () => {
 
     it('returns true when realtime_transcription differs', () => {
         const current = { ...baseConfig, realtime_transcription: true };
-        expect(isConfigDirty(current, { ...baseConfig, realtime_transcription: false })).toBe(true);
+        expect(
+            isConfigDirty(current, {
+                ...baseConfig,
+                realtime_transcription: false,
+            }),
+        ).toBe(true);
     });
 
     it('returns false when realtime_transcription matches', () => {
         const current = { ...baseConfig, realtime_transcription: true };
-        expect(isConfigDirty(current, { ...baseConfig, realtime_transcription: true })).toBe(false);
+        expect(
+            isConfigDirty(current, {
+                ...baseConfig,
+                realtime_transcription: true,
+            }),
+        ).toBe(false);
     });
 });
 
@@ -94,20 +104,38 @@ describe('validateSettings', () => {
     });
 
     it('returns invalid when LLM enabled but API URL missing', () => {
-        const config = { ...baseConfig, llm_enabled: true, llm_api_url: '', llm_api_key: 'sk-test', llm_model: 'gpt-4' };
+        const config = {
+            ...baseConfig,
+            llm_enabled: true,
+            llm_api_url: '',
+            llm_api_key: 'sk-test',
+            llm_model: 'gpt-4',
+        };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(false);
         expect(result.error).toBeTruthy();
     });
 
     it('returns invalid when LLM enabled but API key missing', () => {
-        const config = { ...baseConfig, llm_enabled: true, llm_api_url: 'https://api.example.com', llm_api_key: '', llm_model: 'gpt-4' };
+        const config = {
+            ...baseConfig,
+            llm_enabled: true,
+            llm_api_url: 'https://api.example.com',
+            llm_api_key: '',
+            llm_model: 'gpt-4',
+        };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(false);
     });
 
     it('returns invalid when LLM enabled but model name missing', () => {
-        const config = { ...baseConfig, llm_enabled: true, llm_api_url: 'https://api.example.com', llm_api_key: 'sk-test', llm_model: '' };
+        const config = {
+            ...baseConfig,
+            llm_enabled: true,
+            llm_api_url: 'https://api.example.com',
+            llm_api_key: 'sk-test',
+            llm_model: '',
+        };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(false);
     });
@@ -120,19 +148,33 @@ describe('validateSettings', () => {
     });
 
     it('returns invalid when data saving enabled but path empty', () => {
-        const config = { ...baseConfig, data_saving_enabled: true, data_saving_path: '' };
+        const config = {
+            ...baseConfig,
+            data_saving_enabled: true,
+            data_saving_path: '',
+        };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(false);
     });
 
     it('returns valid when LLM disabled (no API fields needed)', () => {
-        const config = { ...baseConfig, llm_enabled: false, llm_api_url: '', llm_api_key: '', llm_model: '' };
+        const config = {
+            ...baseConfig,
+            llm_enabled: false,
+            llm_api_url: '',
+            llm_api_key: '',
+            llm_model: '',
+        };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(true);
     });
 
     it('returns valid when data saving disabled (no path needed)', () => {
-        const config = { ...baseConfig, data_saving_enabled: false, data_saving_path: '' };
+        const config = {
+            ...baseConfig,
+            data_saving_enabled: false,
+            data_saving_path: '',
+        };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(true);
     });
@@ -144,7 +186,10 @@ describe('validateSettings', () => {
     });
 
     it('returns valid for custom model with empty modelStatus', () => {
-        const config = { ...baseConfig, whisper_model: 'custom:path/to/model.bin' };
+        const config = {
+            ...baseConfig,
+            whisper_model: 'custom:path/to/model.bin',
+        };
         const result = validateSettings(config, {});
         expect(result.valid).toBe(true);
     });

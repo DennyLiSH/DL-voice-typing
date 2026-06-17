@@ -42,7 +42,7 @@ listen('review-show', async () => {
             textarea.value = text;
             updateButtons();
         }
-    } catch (e) {
+    } catch (_e) {
         errorMsg.textContent = '加载转写结果失败';
     }
     textarea.focus();
@@ -128,7 +128,8 @@ async function doConfirm() {
         errorMsg.textContent = '';
         await invoke('confirm_inject', { text });
     } catch (err) {
-        errorMsg.textContent = typeof err === 'string' ? err : '粘贴失败，请重试';
+        errorMsg.textContent =
+            typeof err === 'string' ? err : '粘贴失败，请重试';
         isClosing = false;
         updateButtons();
     }

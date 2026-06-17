@@ -37,7 +37,7 @@ const pageContents = document.querySelectorAll('.page-content');
 
 // State
 let loadedConfig = null;
-let modelStatus = {};  // { tiny: true, base: false, ... }
+let modelStatus = {}; // { tiny: true, base: false, ... }
 let customModels = []; // ["my-model.bin", ...]
 let selectedModel = 'base';
 let activeDownload = null;
@@ -50,18 +50,18 @@ let currentPage = 'general';
 
 function switchPage(pageName) {
     currentPage = pageName;
-    sidebarItems.forEach(item => {
+    sidebarItems.forEach((item) => {
         const isActive = item.dataset.page === pageName;
         item.classList.toggle('active', isActive);
         item.setAttribute('aria-selected', String(isActive));
         item.setAttribute('tabindex', isActive ? '0' : '-1');
     });
-    pageContents.forEach(page => {
-        page.classList.toggle('active', page.id === 'page-' + pageName);
+    pageContents.forEach((page) => {
+        page.classList.toggle('active', page.id === `page-${pageName}`);
     });
 }
 
-sidebarItems.forEach(item => {
+sidebarItems.forEach((item) => {
     item.addEventListener('click', () => switchPage(item.dataset.page));
     item.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -75,11 +75,12 @@ sidebarItems.forEach(item => {
 document.querySelector('.sidebar').addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
     e.preventDefault();
-    const pages = Array.from(sidebarItems).map(item => item.dataset.page);
+    const pages = Array.from(sidebarItems).map((item) => item.dataset.page);
     const idx = pages.indexOf(currentPage);
-    const next = e.key === 'ArrowDown'
-        ? pages[(idx + 1) % pages.length]
-        : pages[(idx - 1 + pages.length) % pages.length];
+    const next =
+        e.key === 'ArrowDown'
+            ? pages[(idx + 1) % pages.length]
+            : pages[(idx - 1 + pages.length) % pages.length];
     switchPage(next);
     document.querySelector(`.sidebar-item[data-page="${next}"]`).focus();
 });
@@ -116,7 +117,7 @@ async function init() {
                 autostartToggle.setAttribute('aria-disabled', 'true');
                 autostartToggle.parentElement.classList.add('disabled');
             }
-        } catch (e) {
+        } catch (_e) {
             // Non-critical: just skip gray-out
         }
 
@@ -125,12 +126,14 @@ async function init() {
         // Display version
         try {
             const version = await window.__TAURI__.app.getVersion();
-            document.getElementById('version-info').textContent = '语文兔 v' + version;
-            document.getElementById('version-display').textContent = 'v' + version;
-        } catch (e) {
+            document.getElementById('version-info').textContent =
+                `语文兔 v${version}`;
+            document.getElementById('version-display').textContent =
+                `v${version}`;
+        } catch (_e) {
             // Version display is non-critical, silently ignore
         }
-    } catch (e) {
+    } catch (_e) {
         showError('加载配置失败，请重试');
     }
 }
@@ -153,13 +156,22 @@ function populateFields(config) {
     }
     downloadMirrorSelect.value = config.download_mirror || 'hf-mirror';
     dataSavingToggle.classList.toggle('active', !!config.data_saving_enabled);
-    dataSavingToggle.setAttribute('aria-checked', String(!!config.data_saving_enabled));
+    dataSavingToggle.setAttribute(
+        'aria-checked',
+        String(!!config.data_saving_enabled),
+    );
     updateDataSavingFieldsState(!!config.data_saving_enabled);
     dataSavingPath.value = config.data_saving_path || '';
     reviewToggle.classList.toggle('active', !!config.review_before_paste);
-    reviewToggle.setAttribute('aria-checked', String(!!config.review_before_paste));
+    reviewToggle.setAttribute(
+        'aria-checked',
+        String(!!config.review_before_paste),
+    );
     realtimeToggle.classList.toggle('active', !!config.realtime_transcription);
-    realtimeToggle.setAttribute('aria-checked', String(!!config.realtime_transcription));
+    realtimeToggle.setAttribute(
+        'aria-checked',
+        String(!!config.realtime_transcription),
+    );
 }
 
 // --- Model Select ---
@@ -198,9 +210,9 @@ function populateModelSelect() {
         customGroup.label = '自定义模型';
         for (const name of customModels) {
             const opt = document.createElement('option');
-            opt.value = 'custom:' + name;
+            opt.value = `custom:${name}`;
             opt.textContent = name;
-            if ('custom:' + name === selectedModel) opt.selected = true;
+            if (`custom:${name}` === selectedModel) opt.selected = true;
             customGroup.appendChild(opt);
         }
         whisperModelSelect.appendChild(customGroup);
@@ -273,7 +285,7 @@ async function loadComputeMode() {
             badge.textContent = '模型未加载';
             badge.className = 'mode-badge unloaded';
         }
-    } catch (e) {
+    } catch (_e) {
         badge.textContent = '检测失败';
         badge.className = 'mode-badge unloaded';
     }
@@ -293,13 +305,13 @@ btnDownloadModel.addEventListener('click', async () => {
             modelStatus = modelsData.built_in;
             customModels = modelsData.custom;
             // If deleted was selected, reset to base
-            if (!customModels.some(n => 'custom:' + n === selectedModel)) {
+            if (!customModels.some((n) => `custom:${n}` === selectedModel)) {
                 selectedModel = 'base';
             }
             populateModelSelect();
             updateModelAction();
             updateDirtyState();
-        } catch (e) {
+        } catch (_e) {
             showError('删除失败，请重试');
         }
     } else {
@@ -337,7 +349,7 @@ async function startDownload(size) {
 async function cancelDownload() {
     try {
         await invoke('cancel_download');
-    } catch (e) {
+    } catch (_e) {
         progressPercent.textContent = '取消下载失败';
     }
 }
@@ -347,8 +359,8 @@ listen('download-progress', (event) => {
     const { size, percent } = event.payload;
     if (size !== activeDownload) return;
 
-    progressFill.style.width = percent + '%';
-    progressPercent.textContent = percent + '%';
+    progressFill.style.width = `${percent}%`;
+    progressPercent.textContent = `${percent}%`;
 });
 
 // Listen for hotkey errors
@@ -470,7 +482,7 @@ btnBrowsePath.addEventListener('click', async () => {
             dataSavingPath.value = selected;
             updateDirtyState();
         }
-    } catch (e) {
+    } catch (_e) {
         showError('打开文件夹选择器失败');
     }
 });
@@ -497,7 +509,8 @@ testBtn.addEventListener('click', async () => {
 
     // If key input is empty and a key was previously set, use masked marker.
     // Otherwise, require the user to enter a key.
-    const hasExistingKey = loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
+    const hasExistingKey =
+        loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
     const apiKey = apiKeyRaw || (hasExistingKey ? '__MASKED__' : '');
 
     if (!apiUrl || !apiKey || !model) {
@@ -512,7 +525,7 @@ testBtn.addEventListener('click', async () => {
     try {
         await invoke('test_llm_connection', { apiUrl, apiKey, model });
         setTestStatus('✓ 连接成功', 'success');
-    } catch (e) {
+    } catch (_e) {
         setTestStatus('✗ 连接失败，请检查配置', 'error');
     } finally {
         testBtn.disabled = false;
@@ -522,7 +535,7 @@ testBtn.addEventListener('click', async () => {
 
 function setTestStatus(message, type) {
     testStatus.textContent = message;
-    testStatus.className = 'status ' + type;
+    testStatus.className = `status ${type}`;
 }
 
 // --- Dirty State ---
@@ -534,9 +547,9 @@ function updateDirtyState() {
     // API key dirty check: only dirty if user typed a new key (non-empty, non-masked)
     const hasExistingKey = loadedConfig.llm_api_key === '__MASKED__';
     const apiKeyDirty = hasExistingKey
-        ? (current.llm_api_key !== '__MASKED__')
-        : (current.llm_api_key !== loadedConfig.llm_api_key);
-    isDirty = (
+        ? current.llm_api_key !== '__MASKED__'
+        : current.llm_api_key !== loadedConfig.llm_api_key;
+    isDirty =
         current.language !== loadedConfig.language ||
         current.hotkey !== loadedConfig.hotkey ||
         current.whisper_model !== loadedConfig.whisper_model ||
@@ -549,8 +562,7 @@ function updateDirtyState() {
         current.data_saving_path !== loadedConfig.data_saving_path ||
         current.review_before_paste !== loadedConfig.review_before_paste ||
         current.autostart !== loadedConfig.autostart ||
-        current.realtime_transcription !== loadedConfig.realtime_transcription
-    );
+        current.realtime_transcription !== loadedConfig.realtime_transcription;
 
     saveBtn.disabled = !isDirty;
     saveStatus.textContent = '';
@@ -560,7 +572,8 @@ function updateDirtyState() {
 function getCurrentConfig() {
     const apiKeyValue = apiKeyInput.value.trim();
     // Send masked marker only if user hasn't typed anything AND a key was previously set
-    const hasExistingKey = loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
+    const hasExistingKey =
+        loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
     return {
         language: languageSelect.value,
         hotkey: hotkeySelect.value,
@@ -593,7 +606,10 @@ saveBtn.addEventListener('click', async () => {
     const config = getCurrentConfig();
 
     // Validate: LLM fields when enabled
-    if (config.llm_enabled && (!config.llm_api_url || !config.llm_api_key || !config.llm_model)) {
+    if (
+        config.llm_enabled &&
+        (!config.llm_api_url || !config.llm_api_key || !config.llm_model)
+    ) {
         showError('启用 LLM 时，API 地址、密钥和模型名称不能为空');
         return;
     }
@@ -633,14 +649,16 @@ saveBtn.addEventListener('click', async () => {
                 }
             }
             loadedAutostart = wantAutostart;
-        } catch (e) {
+        } catch (_e) {
             saveMsg = '⚠ 已保存，开机自启同步失败';
             saveMsgType = 'error';
         }
         isDirty = false;
         setSaveStatus(saveMsg, saveMsgType);
-        setTimeout(() => { saveStatus.textContent = ''; }, 1500);
-    } catch (e) {
+        setTimeout(() => {
+            saveStatus.textContent = '';
+        }, 1500);
+    } catch (_e) {
         setSaveStatus('✗ 保存失败，请重试', 'error');
         showError('保存失败，请重试');
     } finally {
@@ -650,10 +668,9 @@ saveBtn.addEventListener('click', async () => {
     }
 });
 
-
 function setSaveStatus(message, type) {
     saveStatus.textContent = message;
-    saveStatus.className = 'status ' + type;
+    saveStatus.className = `status ${type}`;
 }
 
 // --- Error Banner ---

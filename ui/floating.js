@@ -1,4 +1,4 @@
-import { lerpColor, remapRms, getColor, getShadow, COLOR_STOPS } from './floating-utils.js';
+import { getColor, getShadow, remapRms } from './floating-utils.js';
 
 const { listen } = window.__TAURI__.event;
 
@@ -47,7 +47,10 @@ function springFrame() {
     currentScale += velocity;
 
     // Clamp to reasonable range
-    currentScale = Math.max(MIN_SCALE * 0.9, Math.min(MAX_SCALE * 1.1, currentScale));
+    currentScale = Math.max(
+        MIN_SCALE * 0.9,
+        Math.min(MAX_SCALE * 1.1, currentScale),
+    );
 
     indicator.style.transform = `scale(${currentScale})`;
 
@@ -56,7 +59,10 @@ function springFrame() {
     updateVisuals(Math.max(0, Math.min(1, t)));
 
     // Continue animation if spring is still moving
-    if (Math.abs(velocity) > 0.001 || Math.abs(targetScale - currentScale) > 0.005) {
+    if (
+        Math.abs(velocity) > 0.001 ||
+        Math.abs(targetScale - currentScale) > 0.005
+    ) {
         rafId = requestAnimationFrame(springFrame);
     } else {
         currentScale = targetScale;
@@ -117,7 +123,7 @@ function hide(delay = 0) {
         return;
     }
     // Remove any lingering ripples
-    document.querySelectorAll('.ripple').forEach(r => r.remove());
+    document.querySelectorAll('.ripple').forEach((r) => r.remove());
     indicator.classList.remove('visible', 'processing');
     indicator.classList.add('exit');
     transcriptText.textContent = '';
@@ -154,7 +160,10 @@ function showProcessing() {
     // Let spring settle naturally before switching to CSS animation
     targetScale = 1.0;
     const settleAndTransition = () => {
-        if (Math.abs(velocity) > 0.005 || Math.abs(targetScale - currentScale) > 0.01) {
+        if (
+            Math.abs(velocity) > 0.005 ||
+            Math.abs(targetScale - currentScale) > 0.01
+        ) {
             requestAnimationFrame(settleAndTransition);
         } else {
             indicator.style.background = '';
