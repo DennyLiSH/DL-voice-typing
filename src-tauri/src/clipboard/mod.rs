@@ -32,6 +32,10 @@ pub trait ClipboardProvider: Send + Sync {
     fn save(&mut self) -> Result<(), AppError>;
     fn inject_text(&self, text: &str) -> Result<(), AppError>;
     fn restore(&mut self) -> Result<(), AppError>;
+    /// Whether `save()` has been called and not yet cleared by `restore()`.
+    /// Used by panic-recovery to decide whether restoring the old clipboard
+    /// is meaningful (Maj-γ conditional restore).
+    fn was_saved(&self) -> bool;
 }
 
 /// Enum-based dispatch for clipboard providers (avoids `dyn` overhead).
@@ -67,6 +71,13 @@ impl ClipboardProvider for AnyClipboard {
         match self {
             AnyClipboard::Windows(m) => m.restore(),
             AnyClipboard::Mock(m) => m.restore(),
+        }
+    }
+
+    fn was_saved(&self) -> bool {
+        match self {
+            AnyClipboard::Windows(m) => m.was_saved(),
+            AnyClipboard::Mock(m) => m.was_saved(),
         }
     }
 }
@@ -117,6 +128,10 @@ impl ClipboardProvider for ClipboardManager {
         self.saved_content = None;
         Ok(())
     }
+
+    fn was_saved(&self) -> bool {
+        self.saved_content.is_some()
+    }
 }
 
 impl Default for ClipboardManager {
@@ -156,7 +171,8 @@ impl ClipboardProvider for MockClipboard {
     }
 
     fn inject_text(&self, text: &str) -> Result<(), AppError> {
-        if let Some(mut guard) = crate::util::lock_mutex(&self.injected, "MockClipboard::injected") {
+        if let Some(mut guard) = crate::util::lock_mutex(&self.injected, "MockClipboard::injected")
+        {
             guard.push(text.to_string());
         }
         Ok(())
@@ -165,6 +181,10 @@ impl ClipboardProvider for MockClipboard {
     fn restore(&mut self) -> Result<(), AppError> {
         self.restored = true;
         Ok(())
+    }
+
+    fn was_saved(&self) -> bool {
+        self.saved
     }
 }
 

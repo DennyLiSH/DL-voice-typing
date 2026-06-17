@@ -1,6 +1,6 @@
 [package]
 name = "dl-voice-typing"
-version = "26.6.2"
+version = "26.6.3"
 edition = "2024"
 rust-version = "1.85"
 

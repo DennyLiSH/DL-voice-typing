@@ -33,4 +33,3 @@ impl PlatformProvider for Win32PlatformProvider {
         crate::win32::restore_foreground_hwnd(hwnd);
     }
 }
-

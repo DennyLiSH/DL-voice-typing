@@ -3,6 +3,7 @@ pub mod download;
 pub mod hotkey_pipeline;
 pub mod misc_cmd;
 pub(crate) mod pipeline_state;
+pub(crate) mod recording_session;
 pub mod review;
 pub(crate) mod review_provider;
 pub(crate) mod text_injector;

@@ -56,7 +56,10 @@ impl RecoveryActions for TauriRecoveryActions {
     }
 
     fn reset_review_state(&self) {
-        if let Some(pending) = self.app.try_state::<super::commands::review::PendingReview>() {
+        if let Some(pending) = self
+            .app
+            .try_state::<super::commands::review::PendingReview>()
+        {
             if let Some(mut guard) =
                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
             {
@@ -211,10 +214,16 @@ mod tests {
 
     impl RecoveryActions for MockRecovery {
         fn hide_floating_window(&self) {
-            let _ = self.actions.lock().map(|mut a| a.push("hide_floating".into()));
+            let _ = self
+                .actions
+                .lock()
+                .map(|mut a| a.push("hide_floating".into()));
         }
         fn hide_review_window(&self) {
-            let _ = self.actions.lock().map(|mut a| a.push("hide_review".into()));
+            let _ = self
+                .actions
+                .lock()
+                .map(|mut a| a.push("hide_review".into()));
         }
         fn emit_watchdog_reset(&self) {
             let _ = self.actions.lock().map(|mut a| a.push("emit_reset".into()));
@@ -223,7 +232,10 @@ mod tests {
             let _ = self.actions.lock().map(|mut a| a.push("set_tray".into()));
         }
         fn reset_review_state(&self) {
-            let _ = self.actions.lock().map(|mut a| a.push("reset_review".into()));
+            let _ = self
+                .actions
+                .lock()
+                .map(|mut a| a.push("reset_review".into()));
         }
     }
 

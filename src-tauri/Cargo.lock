@@ -941,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "dl-voice-typing"
-version = "26.6.2"
+version = "26.6.3"
 dependencies = [
  "arc-swap",
  "base64 0.22.1",

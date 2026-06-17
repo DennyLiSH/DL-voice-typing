@@ -322,4 +322,5 @@ mod tests {
     mod pipeline_integration_test;
     mod pipeline_lifecycle_test;
     mod pipeline_test;
+    mod recording_session_test;
 }
