@@ -131,7 +131,7 @@ async function init() {
             // Version display is non-critical, silently ignore
         }
     } catch (e) {
-        showError('加载配置失败: ' + e);
+        showError('加载配置失败，请重试');
     }
 }
 
@@ -300,7 +300,7 @@ btnDownloadModel.addEventListener('click', async () => {
             updateModelAction();
             updateDirtyState();
         } catch (e) {
-            showError('删除失败: ' + e);
+            showError('删除失败，请重试');
         }
     } else {
         startDownload(selectedModel);
@@ -328,7 +328,7 @@ async function startDownload(size) {
         if (e === 'download cancelled') {
             updateModelAction();
         } else {
-            showError('下载失败: ' + e);
+            showError('下载失败，请重试');
             updateModelAction();
         }
     }
@@ -338,7 +338,7 @@ async function cancelDownload() {
     try {
         await invoke('cancel_download');
     } catch (e) {
-        console.error('cancel failed:', e);
+        progressPercent.textContent = '取消下载失败';
     }
 }
 
@@ -471,7 +471,7 @@ btnBrowsePath.addEventListener('click', async () => {
             updateDirtyState();
         }
     } catch (e) {
-        console.error('folder picker error:', e);
+        showError('打开文件夹选择器失败');
     }
 });
 
@@ -513,7 +513,7 @@ testBtn.addEventListener('click', async () => {
         await invoke('test_llm_connection', { apiUrl, apiKey, model });
         setTestStatus('✓ 连接成功', 'success');
     } catch (e) {
-        setTestStatus('✗ 连接失败: ' + e, 'error');
+        setTestStatus('✗ 连接失败，请检查配置', 'error');
     } finally {
         testBtn.disabled = false;
         testBtn.textContent = '测试连接';
@@ -620,6 +620,8 @@ saveBtn.addEventListener('click', async () => {
         loadedConfig = config;
 
         // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
+        let saveMsg = '✓ 已保存';
+        let saveMsgType = 'success';
         try {
             const wantAutostart = autostartToggle.classList.contains('active');
             const autostartAvailable = await invoke('is_autostart_available');
@@ -632,14 +634,15 @@ saveBtn.addEventListener('click', async () => {
             }
             loadedAutostart = wantAutostart;
         } catch (e) {
-            console.warn('autostart sync failed:', e);
+            saveMsg = '⚠ 已保存，开机自启同步失败';
+            saveMsgType = 'error';
         }
         isDirty = false;
-        setSaveStatus('✓ 已保存', 'success');
+        setSaveStatus(saveMsg, saveMsgType);
         setTimeout(() => { saveStatus.textContent = ''; }, 1500);
     } catch (e) {
-        setSaveStatus('✗ 保存失败: ' + e, 'error');
-        showError(e);
+        setSaveStatus('✗ 保存失败，请重试', 'error');
+        showError('保存失败，请重试');
     } finally {
         saveBtn.textContent = '保存';
         saveBtn.classList.remove('saving');

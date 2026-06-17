@@ -43,7 +43,7 @@ listen('review-show', async () => {
             updateButtons();
         }
     } catch (e) {
-        console.error('[review] failed to get review text:', e);
+        errorMsg.textContent = '加载转写结果失败';
     }
     textarea.focus();
     if (textarea.value) {
