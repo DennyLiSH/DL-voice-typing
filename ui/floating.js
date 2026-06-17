@@ -1,3 +1,5 @@
+import { lerpColor, remapRms, getColor, getShadow, COLOR_STOPS } from './floating-utils.js';
+
 const { listen } = window.__TAURI__.event;
 
 const indicator = document.getElementById('indicator');
@@ -10,15 +12,6 @@ const MAX_SCALE = 1.5;
 // Spring physics parameters
 const STIFFNESS = 0.28;
 const DAMPING = 0.75;
-
-// Color stops: [r, g, b, a] at visual RMS thresholds (after sqrt remap)
-// 青玉色 Jade Teal: #3ABAB4 → dark teal to bright teal
-const COLOR_STOPS = [
-    { at: 0.0, color: [18, 40, 48, 0.82] },
-    { at: 0.25, color: [30, 110, 120, 0.88] },
-    { at: 0.6, color: [58, 186, 180, 0.92] },
-    { at: 1.0, color: [130, 230, 220, 0.98] },
-];
 
 const BASE_BG = 'rgba(18, 40, 48, 0.82)';
 const BASE_SHADOW = '0 4px 20px rgba(58,186,180,0.15)';
@@ -39,45 +32,6 @@ const MAX_ACTIVE_RIPPLES = 3;
 let hideTimeout = null;
 let rafId = null;
 let isSpringActive = false;
-
-function lerpColor(a, b, t) {
-    return [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
-    ];
-}
-
-function getColor(visualRms) {
-    if (visualRms <= COLOR_STOPS[0].at) return COLOR_STOPS[0].color;
-    if (visualRms >= COLOR_STOPS[COLOR_STOPS.length - 1].at) return COLOR_STOPS[COLOR_STOPS.length - 1].color;
-    for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
-        if (visualRms >= COLOR_STOPS[i].at && visualRms <= COLOR_STOPS[i + 1].at) {
-            const t = (visualRms - COLOR_STOPS[i].at) / (COLOR_STOPS[i + 1].at - COLOR_STOPS[i].at);
-            return lerpColor(COLOR_STOPS[i].color, COLOR_STOPS[i + 1].color, t);
-        }
-    }
-    return COLOR_STOPS[0].color;
-}
-
-function getShadow(visualRms) {
-    const r = Math.round(30 + 28 * visualRms);
-    const g = Math.round(120 + 66 * visualRms);
-    const b = Math.round(140 + 40 * visualRms);
-    const alpha = (0.15 + visualRms * 0.12).toFixed(2);
-    const spread = 18 + visualRms * 8;
-    let shadow = `0 4px ${Math.round(spread)}px rgba(${r},${g},${b},${alpha})`;
-    if (visualRms > 0.35) {
-        const glowAlpha = ((visualRms - 0.35) * 0.2).toFixed(2);
-        shadow += `, 0 0 ${Math.round(22 + visualRms * 15)}px rgba(58,186,180,${glowAlpha})`;
-    }
-    return shadow;
-}
-
-function remapRms(rms) {
-    return Math.pow(rms, 0.5);
-}
 
 function updateVisuals(visualRms) {
     const c = getColor(visualRms);

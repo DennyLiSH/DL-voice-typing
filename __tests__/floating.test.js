@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { lerpColor, remapRms, getColor, getShadow, COLOR_STOPS } from '../lib/floating-utils.js';
+import { lerpColor, remapRms, getColor, getShadow, COLOR_STOPS } from '../ui/floating-utils.js';
 
 // ---------------------------------------------------------------------------
 // lerpColor
@@ -171,18 +171,18 @@ describe('getShadow', () => {
 
   it('computes correct rgba values at visualRms = 0', () => {
     const result = getShadow(0);
-    // r=30, g=120, b=140, alpha=(0.2).toFixed(2)='0.20', spread=18
-    expect(result).toContain('rgba(30,120,140,0.20)');
+    // r=30, g=120, b=140, alpha=(0.15).toFixed(2)='0.15', spread=18
+    expect(result).toContain('rgba(30,120,140,0.15)');
     expect(result).toContain('18px');
   });
 
   it('computes correct rgba values at visualRms = 1', () => {
     const result = getShadow(1);
-    // r=58, g=186, b=180, alpha=(0.35).toFixed(2)='0.35', spread=26
-    expect(result).toContain('rgba(58,186,180,0.35)');
+    // r=58, g=186, b=180, alpha=(0.15+0.12)='0.27', spread=26
+    expect(result).toContain('rgba(58,186,180,0.27)');
     expect(result).toContain('26px');
-    // Glow: glowAlpha = (1-0.35)*0.25 = 0.1625 → '0.16', blur = 22+15 = 37
-    expect(result).toContain('rgba(58,186,180,0.16)');
+    // Glow: glowAlpha = (1-0.35)*0.2 = 0.13 → '0.13', blur = 22+15 = 37
+    expect(result).toContain('rgba(58,186,180,0.13)');
     expect(result).toContain('37px');
   });
 
