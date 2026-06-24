@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -e
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/t}"
+cd "$(dirname "$0")/.." || exit 1
+cd src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
