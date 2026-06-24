@@ -111,21 +111,7 @@ impl RecordingSession {
         let t_press = Instant::now();
         let cycle_id = self.ps.perf_history.next_cycle_id();
 
-        let can_record = crate::util::lock_mutex(&self.ps.sm, "state_machine")
-            .map(|mut s| {
-                let result = s.start_recording();
-                if let Err(ref _e) = result {
-                    warn!(
-                        "hotkey press: start_recording failed: state={}",
-                        s.state_name()
-                    );
-                }
-                result.is_ok()
-            })
-            .unwrap_or_else(|| {
-                warn!("hotkey press: state_machine lock returned None (poisoned?)");
-                false
-            });
+        let can_record = self.ps.sm_start_recording();
 
         if can_record && !self.ps.engine.is_ready() {
             reset_to_idle(&self.ps);
@@ -283,10 +269,8 @@ impl RecordingSession {
                 if let Some(mut cb) = crate::util::lock_mutex(&self.ps.clipboard, "clipboard") {
                     let _ = cb.save();
                 }
-                if let Some(mut s) = crate::util::lock_mutex(&self.ps.sm, "state_machine") {
-                    let _ = s.stop_recording();
-                    let _ = s.transcribing_to_reviewing();
-                }
+                self.ps.sm_stop_recording();
+                self.ps.sm_transcribing_to_reviewing();
                 self.ps.window_controller.hide_floating();
                 ReleaseAction::Done
             }
@@ -298,14 +282,10 @@ impl RecordingSession {
                 );
                 let audio_data = take_audio(&self.ps);
                 let native_rate = sample_rate.unwrap_or(48000);
-                let stop_ok = crate::util::lock_mutex(&self.ps.sm, "state_machine")
-                    .map(|mut s| s.stop_recording().is_ok())
-                    .unwrap_or(false);
+                let stop_ok = self.ps.sm_stop_recording();
                 if !stop_ok {
                     info!("hotkey release: RealtimeDirect stop_recording failed");
-                    if let Some(mut s) = crate::util::lock_mutex(&self.ps.sm, "state_machine") {
-                        s.reset();
-                    }
+                    self.ps.sm_reset();
                     self.ps.window_controller.hide_floating();
                     return ReleaseAction::Done;
                 }
@@ -335,9 +315,7 @@ impl RecordingSession {
                             "hotkey release: preprocess_audio returned None (silent?), samples={}",
                             audio_data.len()
                         );
-                        if let Some(mut s) = crate::util::lock_mutex(&self.ps.sm, "state_machine") {
-                            s.reset();
-                        }
+                        self.ps.sm_reset();
                         self.ps.window_controller.hide_floating();
                         if self.ps.review.was_shown_on_press() {
                             self.ps.window_controller.hide_review();
@@ -346,9 +324,7 @@ impl RecordingSession {
                         return ReleaseAction::Done;
                     }
                 };
-                let stop_ok = crate::util::lock_mutex(&self.ps.sm, "state_machine")
-                    .map(|mut s| s.stop_recording().is_ok())
-                    .unwrap_or(false);
+                let stop_ok = self.ps.sm_stop_recording();
                 if !stop_ok {
                     info!("hotkey release: stop_recording failed (state already reset)");
                     self.ps.window_controller.hide_floating();
@@ -411,9 +387,7 @@ impl RecordingSession {
     /// self-restores after a successful paste, so this is a harmless no-op in
     /// the post-inject case and cleans up leaked text in the pre-inject case.
     pub(crate) fn recover(&self) {
-        if let Some(mut s) = crate::util::lock_mutex(&self.ps.sm, "state_machine") {
-            s.reset();
-        }
+        self.ps.sm_reset();
         self.ps.window_controller.hide_floating();
         if let Some(mut cb) = crate::util::lock_mutex(&self.ps.clipboard, "clipboard") {
             if cb.was_saved() {
@@ -552,13 +526,11 @@ impl RecordingSession {
             final_text
         };
 
-        // State: Transcribing → Injecting.
-        if let Some(mut s) = crate::util::lock_mutex(&self.ps.sm, "state_machine") {
-            if config.llm_enabled {
-                let _ = s.llm_to_injecting();
-            } else {
-                let _ = s.transcribing_to_injecting();
-            }
+        // State: Transcribing to Injecting.
+        if config.llm_enabled {
+            self.ps.sm_llm_to_injecting();
+        } else {
+            self.ps.sm_transcribing_to_injecting();
         }
 
         let save_result = save_handle.await.unwrap_or(None);
@@ -644,9 +616,7 @@ async fn resolve_llm_text(
     transcription: &str,
     perf: &mut PerfMetrics,
 ) -> Result<String, AppError> {
-    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-        let _ = s.start_llm_refining();
-    }
+    ps.sm_start_llm_refining();
     ps.emitter.emit("llm-refining", serde_json::Value::Null);
 
     let t_llm = Instant::now();
@@ -718,14 +688,10 @@ async fn deliver_review(
         warn!("deliver_review: clipboard lock returned None (poisoned?)");
     }
     // Transition to Reviewing.
-    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-        if config.llm_enabled {
-            let _ = s.llm_to_reviewing();
-        } else {
-            let _ = s.transcribing_to_reviewing();
-        }
+    if config.llm_enabled {
+        ps.sm_llm_to_reviewing();
     } else {
-        warn!("deliver_review: state_machine lock returned None (poisoned?)");
+        ps.sm_transcribing_to_reviewing();
     }
     // Store text for the review window to fetch on load.
     ps.review.store_text(final_text.clone());
@@ -804,9 +770,7 @@ async fn deliver_review(
             }
         })
         .await;
-        if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-            let _ = s.finish_injecting();
-        }
+        ps.sm_finish_injecting();
         ps.emitter
             .emit("injection-complete", serde_json::Value::Null);
         ps.window_controller.hide_floating();
@@ -823,12 +787,10 @@ async fn deliver_direct(
     perf: &mut PerfMetrics,
     t_press_for_e2e: Instant,
 ) {
-    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-        if config.llm_enabled {
-            let _ = s.llm_to_injecting();
-        } else {
-            let _ = s.transcribing_to_injecting();
-        }
+    if config.llm_enabled {
+        ps.sm_llm_to_injecting();
+    } else {
+        ps.sm_transcribing_to_injecting();
     }
 
     let mut ctx = super::text_injector::InjectionContext {
@@ -844,9 +806,7 @@ async fn deliver_direct(
 
 /// Reset state machine to Idle and hide floating window.
 fn reset_to_idle(ps: &PipelineState) {
-    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-        s.reset();
-    }
+    ps.sm_reset();
     ps.window_controller.hide_floating();
     if ps.review.was_shown_on_press() {
         ps.window_controller.hide_review();
