@@ -318,9 +318,9 @@ mod sm_verb_tests {
     use super::*;
     use crate::audio::MockAudioCapture;
     use crate::clipboard::{AnyClipboard, MockClipboard};
+    use crate::commands::MockEmitter;
     use crate::commands::review_provider::MockReviewProvider;
     use crate::commands::window_controller::NoopWindowController;
-    use crate::commands::MockEmitter;
     use crate::config::{AppConfig, ConfigCache};
     use crate::llm::{AnyCorrector, MockCorrector};
     use crate::perf::PerfHistory;
