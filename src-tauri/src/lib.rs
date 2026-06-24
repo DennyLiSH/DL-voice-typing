@@ -87,6 +87,11 @@ pub fn run() {
             commands::download::delete_custom_model,
             commands::llm_cmd::test_llm_connection,
             commands::perf_cmd::get_perf_history,
+            commands::data_management_cmd::list_saved_recordings,
+            commands::data_management_cmd::delete_recording,
+            commands::data_management_cmd::delete_recordings,
+            commands::data_management_cmd::get_data_usage,
+            commands::data_management_cmd::read_recording_audio,
             commands::review::confirm_inject,
             commands::review::cancel_review,
             commands::review::get_review_text,
@@ -319,6 +324,7 @@ fn start_watchdog(app: &tauri::AppHandle, state_machine: Arc<Mutex<StateMachine>
 
 #[cfg(test)]
 mod tests {
+    mod data_management_test;
     mod pipeline_integration_test;
     mod pipeline_lifecycle_test;
     mod pipeline_test;

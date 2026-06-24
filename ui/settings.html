@@ -183,6 +183,36 @@
                     <div class="toggle-switch" id="review-toggle" role="switch" aria-checked="false" aria-label="粘贴前确认" tabindex="0"></div>
                 </div>
                 <div class="hint" style="margin-top: -8px;">转写完成后弹出编辑窗口，确认后再粘贴</div>
+
+                <!-- Saved recordings management -->
+                <div class="data-list-section" id="data-list-section">
+                    <div class="data-section-title">已保存的录音</div>
+                    <div class="data-stats-bar">
+                        <span class="data-stats-summary">
+                            <span id="data-total-count">0</span> 条 ·
+                            <span id="data-total-size">0 B</span>
+                        </span>
+                        <input type="search" id="data-search-input" class="data-search-input" placeholder="搜索转录文本…" aria-label="搜索录音">
+                        <button type="button" id="btn-refresh-data" class="btn-secondary">刷新</button>
+                    </div>
+                    <div class="data-error-bar" id="data-error-bar" role="alert" hidden></div>
+                    <div class="data-batch-bar" id="data-batch-bar" hidden>
+                        <label class="data-select-all-label">
+                            <input type="checkbox" id="data-select-all-cb"> 全选当前页
+                        </label>
+                        <span class="data-batch-info">
+                            已选 <span id="data-selected-count">0</span> / <span id="data-visible-count">0</span>
+                        </span>
+                        <button type="button" id="btn-batch-delete" class="btn-danger">删除选中</button>
+                    </div>
+                    <div class="data-list" id="data-list" role="list"></div>
+                    <div class="data-empty-state" id="data-empty-state" hidden></div>
+                    <div class="data-pagination" id="data-pagination" hidden>
+                        <button type="button" id="btn-prev-page" class="btn-secondary" aria-label="上一页">‹</button>
+                        <span id="data-page-info" aria-live="polite">1 / 1</span>
+                        <button type="button" id="btn-next-page" class="btn-secondary" aria-label="下一页">›</button>
+                    </div>
+                </div>
             </div>
 
             <!-- Page: Help -->
@@ -307,6 +337,6 @@
         <button class="btn-primary" id="save-btn" disabled>保存</button>
     </div>
 
-    <script src="settings.js"></script>
+    <script type="module" src="settings.js"></script>
 </body>
 </html>

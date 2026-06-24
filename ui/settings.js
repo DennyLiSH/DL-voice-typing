@@ -1,3 +1,12 @@
+import {
+    buildExpandedMetadata,
+    buildRecordingRow,
+    computeOffsetAfterDeletion,
+    deleteConfirmMessage,
+    formatBytes,
+    getPageRange,
+} from '../lib/data-management.js';
+
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
@@ -49,6 +58,10 @@ let currentPage = 'general';
 // --- Sidebar Navigation ---
 
 function switchPage(pageName) {
+    // Page leave hook: pause audio + clear audio state when leaving data sub-page.
+    if (currentPage === 'data' && pageName !== 'data') {
+        onDataPageLeave();
+    }
     currentPage = pageName;
     sidebarItems.forEach((item) => {
         const isActive = item.dataset.page === pageName;
@@ -59,6 +72,10 @@ function switchPage(pageName) {
     pageContents.forEach((page) => {
         page.classList.toggle('active', page.id === `page-${pageName}`);
     });
+    // Page enter hook: reset + reload data list when entering data sub-page.
+    if (pageName === 'data') {
+        onDataPageEnter();
+    }
 }
 
 sidebarItems.forEach((item) => {
@@ -695,6 +712,525 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
+
+// ============================================================
+// Data management — saved recordings list
+// (Constraints F1-F11 from plan review)
+// ============================================================
+
+const dataState = {
+    offset: 0,
+    limit: 50,
+    query: '',
+    total: 0,
+    items: [],
+    selectedFiles: new Set(),
+    expandedRowId: null,
+    audioPlayerRowId: null,
+    audioElement: null,
+    isLoading: false,
+    lastReqId: 0,
+    searchDebounceTimer: null,
+};
+
+// DOM refs (resolved lazily because the script may run before #page-data exists
+// in some test environments).
+function $data(id) {
+    return document.getElementById(id);
+}
+
+function onDataPageEnter() {
+    // Reset all state on entry (constraint #1 from design review).
+    resetDataListState();
+    loadRecordingsPage(0);
+}
+
+function onDataPageLeave() {
+    // Pause audio + clear audio state (constraint #2).
+    if (dataState.audioElement) {
+        try {
+            dataState.audioElement.pause();
+        } catch (_e) {
+            /* ignore */
+        }
+    }
+    dataState.audioPlayerRowId = null;
+}
+
+function resetDataListState() {
+    dataState.offset = 0;
+    dataState.query = '';
+    dataState.total = 0;
+    dataState.items = [];
+    dataState.selectedFiles.clear();
+    dataState.expandedRowId = null;
+    if (dataState.audioElement) {
+        try {
+            dataState.audioElement.pause();
+        } catch (_e) {
+            /* ignore */
+        }
+        dataState.audioElement = null;
+    }
+    dataState.audioPlayerRowId = null;
+    dataState.isLoading = false;
+    dataState.lastReqId = 0;
+
+    const searchInput = $data('data-search-input');
+    if (searchInput) searchInput.value = '';
+    const errBar = $data('data-error-bar');
+    if (errBar) errBar.hidden = true;
+}
+
+async function loadRecordingsPage(offset) {
+    if (dataState.isLoading) return; // race guard (constraint #8)
+    dataState.isLoading = true;
+    const reqId = ++dataState.lastReqId; // out-of-order response guard (constraint F9)
+    const refreshBtn = $data('btn-refresh-data');
+    if (refreshBtn) {
+        refreshBtn.disabled = true;
+        refreshBtn.classList.add('loading');
+    }
+    try {
+        const resp = await invoke('list_saved_recordings', {
+            offset,
+            limit: dataState.limit,
+            query: dataState.query || null,
+        });
+        // Stale response guard — discard if a newer request superseded us.
+        if (reqId !== dataState.lastReqId) return;
+        dataState.offset = resp.offset;
+        dataState.total = resp.total;
+        dataState.items = resp.items;
+        renderDataList();
+        renderStats(resp.total, resp.total_bytes);
+        renderPagination();
+        renderEmptyState();
+        hideDataError();
+    } catch (e) {
+        if (reqId !== dataState.lastReqId) return;
+        showDataError(typeof e === 'string' ? e : e?.message || '加载失败');
+        // Keep previous list contents intact (constraint F2).
+    } finally {
+        if (reqId === dataState.lastReqId) {
+            dataState.isLoading = false;
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+                refreshBtn.classList.remove('loading');
+            }
+        }
+    }
+}
+
+function renderDataList() {
+    const list = $data('data-list');
+    if (!list) return;
+    list.innerHTML = '';
+    for (const entry of dataState.items) {
+        const isSelected = dataState.selectedFiles.has(entry.filename);
+        const isExpanded = dataState.expandedRowId === entry.filename;
+        const row = buildRecordingRow(entry, {
+            selected: isSelected,
+            expanded: isExpanded,
+        });
+        list.appendChild(row);
+        if (isExpanded) {
+            const meta = buildExpandedMetadata(entry);
+            meta.classList.add('data-row-meta-wrapper');
+            list.appendChild(meta);
+        }
+        if (dataState.audioPlayerRowId === entry.filename) {
+            const playerWrap = document.createElement('div');
+            playerWrap.className = 'data-row-player';
+            const audio = document.createElement('audio');
+            audio.controls = true;
+            audio.autoplay = true;
+            // The actual src will be set by attachAudioSrc() once the bytes arrive.
+            playerWrap.appendChild(audio);
+            list.appendChild(playerWrap);
+            dataState.audioElement = audio;
+            audio.addEventListener('error', () => onAudioError(entry.filename));
+            audio.addEventListener('ended', () => {
+                // Auto-cleanup is optional; keep player visible until user closes.
+            });
+            // Fetch bytes asynchronously.
+            attachAudioSrc(audio, entry.filename);
+        }
+    }
+    updateBatchBar();
+}
+
+async function attachAudioSrc(audioEl, filename) {
+    try {
+        const bytes = await invoke('read_recording_audio', { filename });
+        // Tauri returns ArrayLike<number>; convert to Uint8Array for Blob.
+        const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+        const blob = new Blob([u8], { type: 'audio/wav' });
+        const url = URL.createObjectURL(blob);
+        audioEl.dataset.blobUrl = url;
+        audioEl.src = url;
+    } catch (_e) {
+        // Mark this row's audio as failed.
+        onAudioError(filename);
+    }
+}
+
+function onAudioError(filename) {
+    if (dataState.audioPlayerRowId !== filename) return;
+    const row = document.querySelector(
+        `.data-row[data-filename="${cssEscape(filename)}"]`,
+    );
+    if (row) {
+        // Replace play button area with a temporary error badge.
+        const existing = row.querySelector('.audio-error-badge');
+        if (!existing) {
+            const badge = document.createElement('span');
+            badge.className = 'audio-error-badge';
+            badge.textContent = '音频加载失败';
+            row.appendChild(badge);
+            // Auto-remove after 3 seconds (constraint F4).
+            setTimeout(() => badge.remove(), 3000);
+        }
+    }
+    // Collapse the player.
+    dataState.audioPlayerRowId = null;
+    dataState.audioElement = null;
+    renderDataList();
+}
+
+function renderStats(total, totalBytes) {
+    const countEl = $data('data-total-count');
+    const sizeEl = $data('data-total-size');
+    if (countEl) countEl.textContent = String(total);
+    if (sizeEl) sizeEl.textContent = formatBytes(totalBytes);
+}
+
+function renderPagination() {
+    const pagination = $data('data-pagination');
+    if (!pagination) return;
+    const { currentPage, totalPages, hasNext, hasPrev } = getPageRange(
+        dataState.total,
+        dataState.offset,
+        dataState.limit,
+    );
+    if (dataState.total === 0) {
+        pagination.hidden = true;
+        return;
+    }
+    pagination.hidden = totalPages <= 1;
+    const info = $data('data-page-info');
+    if (info) info.textContent = `${currentPage} / ${totalPages}`;
+    const prev = $data('btn-prev-page');
+    const next = $data('btn-next-page');
+    if (prev) prev.disabled = !hasPrev;
+    if (next) next.disabled = !hasNext;
+}
+
+function renderEmptyState() {
+    const empty = $data('data-empty-state');
+    if (!empty) return;
+    if (dataState.items.length > 0) {
+        empty.hidden = true;
+        return;
+    }
+    empty.hidden = false;
+    // Distinguish two empty states (constraint #7).
+    if (dataState.query) {
+        empty.textContent = '未找到匹配的录音';
+    } else {
+        empty.textContent = '暂无录音数据';
+    }
+}
+
+function updateBatchBar() {
+    const bar = $data('data-batch-bar');
+    if (!bar) return;
+    bar.hidden = dataState.selectedFiles.size === 0;
+    const selCountEl = $data('data-selected-count');
+    const visCountEl = $data('data-visible-count');
+    if (selCountEl)
+        selCountEl.textContent = String(dataState.selectedFiles.size);
+    if (visCountEl) visCountEl.textContent = String(dataState.items.length);
+}
+
+function showDataError(msg) {
+    const bar = $data('data-error-bar');
+    if (bar) {
+        bar.textContent = msg;
+        bar.hidden = false;
+    }
+}
+
+function hideDataError() {
+    const bar = $data('data-error-bar');
+    if (bar) bar.hidden = true;
+}
+
+function cssEscape(s) {
+    if (
+        typeof window.CSS !== 'undefined' &&
+        typeof window.CSS.escape === 'function'
+    ) {
+        return window.CSS.escape(s);
+    }
+    return String(s).replace(/["\\]/g, '\\$&');
+}
+
+// --- Event wiring ---
+
+function wireDataListEvents() {
+    const refreshBtn = $data('btn-refresh-data');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () =>
+            loadRecordingsPage(dataState.offset),
+        );
+    }
+
+    const searchInput = $data('data-search-input');
+    if (searchInput) {
+        // Esc clears search (constraint #5)
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                dataState.query = '';
+                loadRecordingsPage(0);
+            }
+        });
+        // Debounced search trigger (300ms)
+        searchInput.addEventListener('input', () => {
+            if (dataState.searchDebounceTimer) {
+                clearTimeout(dataState.searchDebounceTimer);
+            }
+            dataState.searchDebounceTimer = setTimeout(() => {
+                dataState.query = searchInput.value.trim();
+                loadRecordingsPage(0);
+            }, 300);
+        });
+    }
+
+    const list = $data('data-list');
+    if (list) {
+        // Delegated click handler for the whole list.
+        list.addEventListener('click', (e) => {
+            const row = e.target.closest('.data-row');
+            if (!row) return;
+            const filename = row.dataset.filename;
+            if (!filename) return;
+
+            // Checkbox toggle
+            if (e.target.classList.contains('data-row-cb')) {
+                if (e.target.checked) {
+                    dataState.selectedFiles.add(filename);
+                } else {
+                    dataState.selectedFiles.delete(filename);
+                }
+                row.classList.toggle(
+                    'selected',
+                    dataState.selectedFiles.has(filename),
+                );
+                updateBatchBar();
+                return;
+            }
+
+            // Play button
+            if (e.target.classList.contains('btn-play')) {
+                e.stopPropagation();
+                // Toggle: clicking again collapses.
+                if (dataState.audioPlayerRowId === filename) {
+                    dataState.audioPlayerRowId = null;
+                    if (dataState.audioElement) {
+                        try {
+                            dataState.audioElement.pause();
+                        } catch (_e) {
+                            /* ignore */
+                        }
+                        if (dataState.audioElement.dataset.blobUrl) {
+                            URL.revokeObjectURL(
+                                dataState.audioElement.dataset.blobUrl,
+                            );
+                        }
+                        dataState.audioElement = null;
+                    }
+                } else {
+                    if (dataState.audioElement) {
+                        try {
+                            dataState.audioElement.pause();
+                        } catch (_e) {
+                            /* ignore */
+                        }
+                        if (dataState.audioElement.dataset.blobUrl) {
+                            URL.revokeObjectURL(
+                                dataState.audioElement.dataset.blobUrl,
+                            );
+                        }
+                        dataState.audioElement = null;
+                    }
+                    dataState.audioPlayerRowId = filename;
+                }
+                renderDataList();
+                return;
+            }
+
+            // Delete button
+            if (e.target.classList.contains('btn-delete')) {
+                e.stopPropagation();
+                handleSingleDelete(filename);
+                return;
+            }
+
+            // Row body click → toggle expand (single-row expand, constraint implied)
+            if (dataState.expandedRowId === filename) {
+                dataState.expandedRowId = null;
+            } else {
+                dataState.expandedRowId = filename;
+            }
+            renderDataList();
+        });
+    }
+
+    const selectAllCb = $data('data-select-all-cb');
+    if (selectAllCb) {
+        // Select-all only affects current page (constraint #6).
+        selectAllCb.addEventListener('change', () => {
+            if (selectAllCb.checked) {
+                for (const item of dataState.items) {
+                    dataState.selectedFiles.add(item.filename);
+                }
+            } else {
+                for (const item of dataState.items) {
+                    dataState.selectedFiles.delete(item.filename);
+                }
+            }
+            renderDataList();
+        });
+    }
+
+    const batchBtn = $data('btn-batch-delete');
+    if (batchBtn) {
+        batchBtn.addEventListener('click', handleBatchDelete);
+    }
+
+    const prevBtn = $data('btn-prev-page');
+    if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+            // Page change clears selection (constraint #6).
+            dataState.selectedFiles.clear();
+            dataState.expandedRowId = null;
+            loadRecordingsPage(Math.max(0, dataState.offset - dataState.limit));
+        });
+    }
+    const nextBtn = $data('btn-next-page');
+    if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+            dataState.selectedFiles.clear();
+            dataState.expandedRowId = null;
+            loadRecordingsPage(dataState.offset + dataState.limit);
+        });
+    }
+}
+
+async function handleSingleDelete(filename) {
+    if (!confirm(deleteConfirmMessage(1))) return;
+    try {
+        await invoke('delete_recording', { filename });
+        // Clear audio state if it was this row (constraint #10a).
+        if (dataState.audioPlayerRowId === filename) {
+            if (dataState.audioElement) {
+                try {
+                    dataState.audioElement.pause();
+                } catch (_e) {
+                    /* ignore */
+                }
+                if (dataState.audioElement.dataset.blobUrl) {
+                    URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
+                }
+                dataState.audioElement = null;
+            }
+            dataState.audioPlayerRowId = null;
+        }
+        dataState.selectedFiles.delete(filename);
+        if (dataState.expandedRowId === filename) {
+            dataState.expandedRowId = null;
+        }
+        // Auto-navigate to last valid page if current becomes empty (constraint #9).
+        const itemsOnPage = dataState.items.length;
+        if (itemsOnPage === 1 && dataState.offset > 0) {
+            const newOffset = computeOffsetAfterDeletion(
+                dataState.total,
+                1,
+                dataState.limit,
+                dataState.offset,
+            );
+            await loadRecordingsPage(newOffset);
+        } else {
+            await loadRecordingsPage(dataState.offset);
+        }
+    } catch (e) {
+        alert(
+            `删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
+        );
+    }
+}
+
+async function handleBatchDelete() {
+    const count = dataState.selectedFiles.size;
+    if (count === 0) return;
+    if (!confirm(deleteConfirmMessage(count))) return;
+    const filenames = Array.from(dataState.selectedFiles);
+    try {
+        const result = await invoke('delete_recordings', { filenames });
+        dataState.selectedFiles.clear();
+        // Clear audio if it was a selected row.
+        if (
+            dataState.audioPlayerRowId &&
+            filenames.includes(dataState.audioPlayerRowId)
+        ) {
+            if (dataState.audioElement) {
+                try {
+                    dataState.audioElement.pause();
+                } catch (_e) {
+                    /* ignore */
+                }
+                if (dataState.audioElement.dataset.blobUrl) {
+                    URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
+                }
+                dataState.audioElement = null;
+            }
+            dataState.audioPlayerRowId = null;
+        }
+        if (
+            dataState.expandedRowId &&
+            filenames.includes(dataState.expandedRowId)
+        ) {
+            dataState.expandedRowId = null;
+        }
+        // Compute new offset using fresh total (constraint #9 + F6).
+        const deletedCount = filenames.length;
+        const newOffset = computeOffsetAfterDeletion(
+            dataState.total,
+            deletedCount,
+            dataState.limit,
+            dataState.offset,
+        );
+        await loadRecordingsPage(newOffset);
+        // Show partial success message (constraint F3).
+        if (result.failed && result.failed.length > 0) {
+            const failedList = result.failed
+                .map((f) => `${f.filename}：${f.error}`)
+                .join('\n');
+            alert(
+                `已删除 ${result.deleted} 条，失败 ${result.failed.length} 条：\n${failedList}`,
+            );
+        }
+    } catch (e) {
+        alert(
+            `批量删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
+        );
+    }
+}
+
+// Wire events after DOM is ready (script runs at end of body, so DOM is ready).
+wireDataListEvents();
 
 // --- Start ---
 init();

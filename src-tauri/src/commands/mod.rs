@@ -1,4 +1,5 @@
 pub mod config_cmd;
+pub mod data_management_cmd;
 pub mod download;
 pub mod hotkey_pipeline;
 pub mod llm_cmd;
