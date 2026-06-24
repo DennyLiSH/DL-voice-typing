@@ -58,9 +58,7 @@ pub(crate) async fn inject_text(ps: &PipelineState, ctx: &mut InjectionContext<'
     ctx.perf.end_to_end_ms = Some(ctx.t_press_for_e2e.elapsed().as_millis() as u64);
     ctx.perf.text_length = ctx.text.len();
 
-    if let Some(mut s) = crate::util::lock_mutex(&ps.sm, "state_machine") {
-        let _ = s.finish_injecting();
-    }
+    ps.sm_finish_injecting();
     ps.emitter
         .emit("injection-complete", serde_json::Value::Null);
 
