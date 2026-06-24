@@ -18,7 +18,7 @@ use tracing::{info, warn};
 /// Eliminates the need to pass 8 individual `Arc` references to `make_hotkey_callback`.
 #[derive(Clone)]
 pub(crate) struct PipelineState {
-    pub sm: Arc<Mutex<StateMachine>>,
+    pub(crate) sm: Arc<Mutex<StateMachine>>,
     pub ac: Arc<Mutex<dyn AudioCaptureProvider>>,
     pub engine: Arc<AnyEngine>,
     pub clipboard: Arc<Mutex<AnyClipboard>>,
