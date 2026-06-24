@@ -5,9 +5,38 @@ use crate::config::AppConfig;
 use crate::error::CommandError;
 use crate::hotkey::HotkeyManager;
 use crate::hotkey::windows::WindowsHotkeyManager;
+use crate::speech::AnyEngine;
+use crate::speech::SpeechEngine;
+use std::sync::Arc;
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
+
+/// Whether autostart is available in the current build.
+/// - Release: always true.
+/// - Debug: only when DL_AUTOSTART=1 env var is set.
+#[tauri::command]
+pub fn is_autostart_available() -> bool {
+    if cfg!(debug_assertions) {
+        std::env::var("DL_AUTOSTART").as_deref() == Ok("1")
+    } else {
+        true
+    }
+}
+
+/// Return the current compute mode: "gpu", "cpu", or "unloaded".
+#[tauri::command]
+pub fn get_compute_mode(engine: tauri::State<'_, Arc<AnyEngine>>) -> Result<String, CommandError> {
+    if engine.is_ready() {
+        Ok(if engine.is_gpu_mode() {
+            "gpu".to_string()
+        } else {
+            "cpu".to_string()
+        })
+    } else {
+        Ok("unloaded".to_string())
+    }
+}
 
 /// Return the current application config to the frontend.
 /// The API key is replaced with a masked marker if set.
