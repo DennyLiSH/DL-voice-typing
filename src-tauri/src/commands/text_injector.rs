@@ -1,18 +1,18 @@
 use crate::clipboard::ClipboardProvider;
-use crate::config::AppConfig;
 use crate::data_saving::SaveResult;
 use crate::perf::PerfMetrics;
 use std::time::Instant;
 use tracing::{error, info, warn};
 
 use super::pipeline_state::PipelineState;
+use super::recording_session::SessionPolicy;
 
 /// Context for a text injection operation.
 pub(crate) struct InjectionContext<'a> {
     pub text: String,
     pub transcription: String,
     pub save_result: Option<SaveResult>,
-    pub config: &'a AppConfig,
+    pub policy: &'a SessionPolicy,
     pub perf: &'a mut PerfMetrics,
     pub t_press_for_e2e: Instant,
 }
@@ -66,7 +66,7 @@ pub(crate) async fn inject_text(ps: &PipelineState, ctx: &mut InjectionContext<'
 
     // Update data_saving JSON with transcription.
     if let Some(sr) = ctx.save_result.take() {
-        let llm_text = if ctx.config.llm_enabled {
+        let llm_text = if ctx.policy.llm_enabled {
             Some(ctx.text.as_str())
         } else {
             None
@@ -126,6 +126,10 @@ mod tests {
         )
     }
 
+    fn build_policy() -> SessionPolicy {
+        SessionPolicy::from_config(&AppConfig::default())
+    }
+
     #[tokio::test]
     async fn test_inject_success() {
         let ps = build_ps();
@@ -138,11 +142,12 @@ mod tests {
         }
 
         let mut perf = PerfMetrics::new(0);
+        let policy = build_policy();
         let mut ctx = InjectionContext {
             text: "hello world".to_string(),
             transcription: "hello world".to_string(),
             save_result: None,
-            config: &AppConfig::default(),
+            policy: &policy,
             perf: &mut perf,
             t_press_for_e2e: Instant::now(),
         };

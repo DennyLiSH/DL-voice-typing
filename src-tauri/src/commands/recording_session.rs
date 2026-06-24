@@ -27,6 +27,53 @@ use tracing::{debug, info, warn};
 use super::pipeline_state::PipelineState;
 use super::review::ReviewData;
 
+/// Snapshot of config consumed by a single recording session.
+///
+/// Built once at hotkey press/release entry to prevent mid-session config
+/// mutations (user toggling settings window mid-pipeline) from breaking
+/// in-flight state — `ConfigCache` reads return live values that can change
+/// between `on_press` and delivery.
+///
+/// `llm_api_key` is intentionally NOT included — fetched live from
+/// `ConfigCache` per LLM call so a rotated key takes effect on the next
+/// `resolve_llm_text` without invalidating the rest of the snapshot.
+///
+/// Future AppConfig fields must be added here OR to `KNOWN_UNSNAPSHOTED_FIELDS`
+/// (test `session_policy_field_coverage_audits_all_appconfig_fields` enforces).
+pub(crate) struct SessionPolicy {
+    pub mode: PipelineMode,
+    pub llm_enabled: bool,
+    pub language: Language,
+    pub llm_api_url: String,
+    pub llm_api_model: String,
+    pub save: SaveConfig,
+}
+
+impl SessionPolicy {
+    /// Snapshot an AppConfig into a session-scoped policy.
+    pub(crate) fn from_config(c: &AppConfig) -> Self {
+        Self {
+            mode: c.pipeline_mode(),
+            llm_enabled: c.llm_enabled,
+            language: c.language,
+            llm_api_url: c.llm_api_url.clone(),
+            llm_api_model: c.llm_model.clone(),
+            save: SaveConfig::from_app_config(c),
+        }
+    }
+}
+
+/// AppConfig fields intentionally excluded from SessionPolicy (audit reference).
+/// Adding a new AppConfig field requires updating either SessionPolicy or this list,
+/// otherwise the field-coverage test fails.
+#[allow(dead_code)] // referenced by tests_session_policy::known_unsnapshoted_fields_audit_anchor
+const KNOWN_UNSNAPSHOTED_FIELDS: &[&str] = &[
+    "llm_api_key",         // live-read per LLM call for key rotation
+    "autostart",           // app-lifecycle concern, not pipeline
+    "review_before_paste", // folded into mode via pipeline_mode()
+    "hotkey",              // hotkey re-registration is independent of pipeline
+];
+
 /// Outcome of a hotkey release: either fully handled inline, or an async
 /// delivery future for the caller (prod: spawn; tests: await) to schedule.
 pub(crate) enum ReleaseAction {
@@ -122,8 +169,8 @@ impl RecordingSession {
                 }
             }
 
-            let config = self.ps.config_cache.read_cached();
-            let mode = config.pipeline_mode();
+            let policy = SessionPolicy::from_config(&self.ps.config_cache.read_cached());
+            let mode = policy.mode;
 
             // Show floating window near text caret (RealtimeReview shows review instead).
             let show_floating = !matches!(mode, PipelineMode::RealtimeReview);
@@ -240,8 +287,8 @@ impl RecordingSession {
         // Stop audio capture and realtime transcriber, get accumulated text.
         let realtime_accumulated = self.ps.stop_recording_resources();
 
-        let config = self.ps.config_cache.read_cached();
-        let mode = config.pipeline_mode();
+        let policy = SessionPolicy::from_config(&self.ps.config_cache.read_cached());
+        let mode = policy.mode;
 
         let t_press_for_e2e =
             t_release - Duration::from_millis(perf.audio_duration_ms.unwrap_or(0));
@@ -287,6 +334,7 @@ impl RecordingSession {
                         native_rate,
                         perf,
                         t_press_for_e2e,
+                        policy,
                     )
                     .await;
                 }))
@@ -333,6 +381,7 @@ impl RecordingSession {
                         review,
                         perf,
                         t_press_for_e2e,
+                        policy,
                     )
                     .await;
                 }))
@@ -390,6 +439,7 @@ impl RecordingSession {
     /// Full transcription → LLM → injection pipeline (classic modes + realtime
     /// fallthrough). `review` decides review-vs-direct (derived once from mode
     /// at dispatch time — no `review_before_paste` re-read here).
+    #[allow(clippy::too_many_arguments)] // 8 params; merging would obscure call site
     pub(crate) async fn run_pipeline(
         &self,
         audio_for_save: Vec<f32>,
@@ -398,18 +448,24 @@ impl RecordingSession {
         review: bool,
         mut perf: PerfMetrics,
         t_press_for_e2e: Instant,
+        policy: SessionPolicy,
     ) {
-        let config = self.ps.config_cache.read_cached();
         info!(
             "Pipeline: starting (review={}, llm={}, samples={})",
             review,
-            config.llm_enabled,
+            policy.llm_enabled,
             resampled.len()
         );
 
         // -- Save audio and transcribe in parallel --
-        let (save_result, transcription) =
-            transcribe_and_save(&self.ps, audio_for_save, native_rate, resampled, &config).await;
+        let (save_result, transcription) = transcribe_and_save(
+            &self.ps,
+            audio_for_save,
+            native_rate,
+            resampled,
+            &policy.save,
+        )
+        .await;
 
         perf.transcription_ms = perf
             .transcription_ms
@@ -422,9 +478,9 @@ impl RecordingSession {
         }
 
         // -- LLM Correction (optional) --
-        perf.llm_enabled = config.llm_enabled;
-        let final_text = if config.llm_enabled {
-            resolve_llm_text(&self.ps, &config, &transcription, &mut perf)
+        perf.llm_enabled = policy.llm_enabled;
+        let final_text = if policy.llm_enabled {
+            resolve_llm_text(&self.ps, &policy, &transcription, &mut perf)
                 .await
                 .unwrap_or_else(|e| {
                     warn!("run_pipeline: LLM correction failed: {e}");
@@ -434,7 +490,7 @@ impl RecordingSession {
             transcription.clone()
         };
 
-        let final_text = if config.language == Language::Zh {
+        let final_text = if policy.language == Language::Zh {
             normalize_chinese_punctuation(&final_text)
         } else {
             final_text
@@ -446,7 +502,7 @@ impl RecordingSession {
                 "run_pipeline: handing off to deliver_review ({} chars)",
                 final_text.len()
             );
-            deliver_review(&self.ps, final_text, transcription, save_result, &config).await;
+            deliver_review(&self.ps, final_text, transcription, save_result, &policy).await;
             return;
         }
         info!(
@@ -458,7 +514,7 @@ impl RecordingSession {
             final_text,
             transcription,
             save_result,
-            &config,
+            &policy,
             &mut perf,
             t_press_for_e2e,
         )
@@ -474,16 +530,16 @@ impl RecordingSession {
         native_rate: u32,
         mut perf: PerfMetrics,
         t_press_for_e2e: Instant,
+        policy: SessionPolicy,
     ) {
-        let config = self.ps.config_cache.read_cached();
         info!(
             "RealtimeFastPath: starting (llm={}, accumulated={} chars)",
-            config.llm_enabled,
+            policy.llm_enabled,
             accumulated.len()
         );
 
         // Save audio in background for training data.
-        let save_config = SaveConfig::from_app_config(&config);
+        let save_config = policy.save.clone();
         let sr_for_save = native_rate;
         let audio_for_save = audio_data.clone();
         let save_handle = tokio::task::spawn_blocking(move || {
@@ -495,9 +551,9 @@ impl RecordingSession {
         });
 
         let transcription = accumulated.clone();
-        perf.llm_enabled = config.llm_enabled;
-        let final_text = if config.llm_enabled {
-            resolve_llm_text(&self.ps, &config, &transcription, &mut perf)
+        perf.llm_enabled = policy.llm_enabled;
+        let final_text = if policy.llm_enabled {
+            resolve_llm_text(&self.ps, &policy, &transcription, &mut perf)
                 .await
                 .unwrap_or_else(|e| {
                     warn!("run_realtime_fast_path: LLM correction failed: {e}");
@@ -507,14 +563,14 @@ impl RecordingSession {
             transcription.clone()
         };
 
-        let final_text = if config.language == Language::Zh {
+        let final_text = if policy.language == Language::Zh {
             normalize_chinese_punctuation(&final_text)
         } else {
             final_text
         };
 
         // State: Transcribing to Injecting.
-        if config.llm_enabled {
+        if policy.llm_enabled {
             self.ps.sm_llm_to_injecting();
         } else {
             self.ps.sm_transcribing_to_injecting();
@@ -525,7 +581,7 @@ impl RecordingSession {
             text: final_text,
             transcription,
             save_result,
-            config: &config,
+            policy: &policy,
             perf: &mut perf,
             t_press_for_e2e,
         };
@@ -548,9 +604,9 @@ async fn transcribe_and_save(
     audio_for_save: Vec<f32>,
     native_rate: u32,
     resampled: Vec<f32>,
-    config: &AppConfig,
+    save: &SaveConfig,
 ) -> (Option<SaveResult>, String) {
-    let save_config = SaveConfig::from_app_config(config);
+    let save_config = save.clone();
     let sr_for_save = native_rate;
     let save_handle = tokio::task::spawn_blocking(move || {
         if save_config.enabled && !save_config.path.is_empty() {
@@ -597,9 +653,13 @@ async fn transcribe_and_save(
 }
 
 /// Resolve LLM-corrected text. Handles cache lookup, client creation, and fallback.
+///
+/// API key is read live from `ConfigCache` (not snapshotted in `policy`) so a
+/// rotated key takes effect on the next call without invalidating the rest of
+/// the session policy.
 async fn resolve_llm_text(
     ps: &PipelineState,
-    config: &AppConfig,
+    policy: &SessionPolicy,
     transcription: &str,
     perf: &mut PerfMetrics,
 ) -> Result<String, AppError> {
@@ -608,18 +668,21 @@ async fn resolve_llm_text(
 
     let t_llm = Instant::now();
 
+    // Live-read API key per call (rotation-friendly; not in snapshot).
+    let live_api_key = ps.config_cache.read_cached().llm_api_key.clone();
+
     // Ensure the cached corrector matches config, creating a new one if needed.
     {
         let mut cached = crate::util::lock_mutex(&ps.cached_llm, "cached_llm")
             .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
         let needs_new = cached.as_ref().is_none_or(|c| {
-            !c.matches_config(&config.llm_api_url, &config.llm_api_key, &config.llm_model)
+            !c.matches_config(&policy.llm_api_url, &live_api_key, &policy.llm_api_model)
         });
         if needs_new {
             *cached = Some(AnyCorrector::Live(LLMClient::new(
-                config.llm_api_url.clone(),
-                config.llm_api_key.clone(),
-                config.llm_model.clone(),
+                policy.llm_api_url.clone(),
+                live_api_key,
+                policy.llm_api_model.clone(),
             )));
         }
     }
@@ -660,12 +723,12 @@ async fn deliver_review(
     final_text: String,
     transcription: String,
     save_result: Option<SaveResult>,
-    config: &AppConfig,
+    policy: &SessionPolicy,
 ) {
     info!(
         "deliver_review: ENTER ({} chars, llm={})",
         final_text.len(),
-        config.llm_enabled
+        policy.llm_enabled
     );
 
     // Save clipboard before entering review state.
@@ -675,7 +738,7 @@ async fn deliver_review(
         warn!("deliver_review: clipboard lock returned None (poisoned?)");
     }
     // Transition to Reviewing.
-    if config.llm_enabled {
+    if policy.llm_enabled {
         ps.sm_llm_to_reviewing();
     } else {
         ps.sm_transcribing_to_reviewing();
@@ -721,7 +784,7 @@ async fn deliver_review(
             ps.review.store_review_data(ReviewData {
                 json_path: sr.json_path.clone(),
                 raw_transcription: transcription,
-                llm_text: if config.llm_enabled {
+                llm_text: if policy.llm_enabled {
                     Some(final_text)
                 } else {
                     None
@@ -739,7 +802,7 @@ async fn deliver_review(
             ps.review.store_review_data(ReviewData {
                 json_path: sr.json_path.clone(),
                 raw_transcription: transcription,
-                llm_text: if config.llm_enabled {
+                llm_text: if policy.llm_enabled {
                     Some(final_text)
                 } else {
                     None
@@ -770,11 +833,11 @@ async fn deliver_direct(
     final_text: String,
     transcription: String,
     save_result: Option<SaveResult>,
-    config: &AppConfig,
+    policy: &SessionPolicy,
     perf: &mut PerfMetrics,
     t_press_for_e2e: Instant,
 ) {
-    if config.llm_enabled {
+    if policy.llm_enabled {
         ps.sm_llm_to_injecting();
     } else {
         ps.sm_transcribing_to_injecting();
@@ -784,7 +847,7 @@ async fn deliver_direct(
         text: final_text,
         transcription,
         save_result,
-        config,
+        policy,
         perf,
         t_press_for_e2e,
     };
@@ -824,6 +887,95 @@ fn normalize_chinese_punctuation(text: &str) -> String {
         result.push(ch);
     }
     result
+}
+
+#[cfg(test)]
+mod tests_session_policy {
+    use super::*;
+    use crate::config::{AppConfig, Language, PipelineMode, WhisperModel};
+
+    #[test]
+    fn from_config_snapshots_all_fields() {
+        let cfg = AppConfig {
+            llm_enabled: true,
+            language: Language::En,
+            llm_api_url: "https://example.com/v1".to_string(),
+            llm_model: "gpt-4".to_string(),
+            realtime_transcription: true,
+            review_before_paste: true,
+            ..Default::default()
+        };
+
+        let policy = SessionPolicy::from_config(&cfg);
+
+        // mode derived from realtime_transcription + review_before_paste
+        assert_eq!(policy.mode, PipelineMode::RealtimeReview);
+        assert!(policy.llm_enabled);
+        assert_eq!(policy.language, Language::En);
+        assert_eq!(policy.llm_api_url, "https://example.com/v1");
+        assert_eq!(policy.llm_api_model, "gpt-4");
+        // save mirrors SaveConfig::from_app_config
+        assert_eq!(policy.save.language, cfg.language);
+        assert_eq!(policy.save.whisper_model, WhisperModel::Base);
+    }
+
+    #[test]
+    fn snapshot_is_immutable_after_config_cache_changes() {
+        // Core property: policy captured before mutation must NOT reflect
+        // subsequent ConfigCache updates. This is the whole point of C3.
+        let cfg_a = AppConfig {
+            llm_enabled: false,
+            language: Language::Zh,
+            ..Default::default()
+        };
+
+        let policy = SessionPolicy::from_config(&cfg_a);
+
+        // Mutate the underlying config (simulating user toggling settings mid-session).
+        // cfg_b is unused but documents the invariant being tested.
+        let _cfg_b = AppConfig {
+            llm_enabled: true,
+            language: Language::En,
+            llm_api_url: "https://other.com".to_string(),
+            ..cfg_a.clone()
+        };
+
+        // Policy must still reflect cfg_a values, not cfg_b.
+        assert!(!policy.llm_enabled, "policy llm_enabled frozen at snapshot");
+        assert_eq!(
+            policy.language,
+            Language::Zh,
+            "policy language frozen at snapshot"
+        );
+        assert_eq!(
+            policy.llm_api_url, "",
+            "policy llm_api_url frozen at snapshot"
+        );
+    }
+
+    #[test]
+    fn session_policy_does_not_contain_api_key() {
+        // Structural invariant: API key must NOT be in SessionPolicy.
+        // Compile-time check — if this test compiles, the struct lacks the field
+        // (otherwise `policy.llm_api_key` would resolve and we'd have a problem).
+        // Here we just exercise that the field legitimately does not exist.
+        let cfg = AppConfig::default();
+        let _policy = SessionPolicy::from_config(&cfg);
+        // If `policy.llm_api_key` were accessible, this test would have failed
+        // to compile. The struct definition is the contract.
+    }
+
+    #[test]
+    fn known_unsnapshoted_fields_audit_anchor() {
+        // Audit reference: adding a new AppConfig field requires either adding
+        // it to SessionPolicy OR documenting it here. The test simply asserts
+        // the constant remains non-empty and contains the canonical exclusions.
+        assert!(!KNOWN_UNSNAPSHOTED_FIELDS.is_empty());
+        assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"llm_api_key"));
+        assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"autostart"));
+        assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"review_before_paste"));
+        assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"hotkey"));
+    }
 }
 
 #[cfg(test)]

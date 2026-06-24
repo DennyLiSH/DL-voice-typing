@@ -9,7 +9,7 @@ use crate::audio::MockAudioCapture;
 use crate::clipboard::{AnyClipboard, ClipboardProvider, MockClipboard};
 use crate::commands::MockEmitter;
 use crate::commands::recording_session::{
-    RecordingSession, ReleaseAction, ReleaseActionKind, decide_release,
+    RecordingSession, ReleaseAction, ReleaseActionKind, SessionPolicy, decide_release,
 };
 use crate::commands::review_provider::MockReviewProvider;
 use crate::commands::window_controller::NoopWindowController;
@@ -149,6 +149,7 @@ async fn run_pipeline_classic_direct_injects() {
     let rig = build_rig(config(false, false, false), "hello world");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, false, false));
     rig.session
         .run_pipeline(
             vec![],
@@ -157,6 +158,7 @@ async fn run_pipeline_classic_direct_injects() {
             false,
             perf,
             Instant::now(),
+            policy,
         )
         .await;
 
@@ -175,6 +177,7 @@ async fn run_pipeline_classic_review_enters_reviewing() {
     let rig = build_rig(config(false, true, false), "review me");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, true, false));
     rig.session
         .run_pipeline(
             vec![],
@@ -183,6 +186,7 @@ async fn run_pipeline_classic_review_enters_reviewing() {
             true,
             perf,
             Instant::now(),
+            policy,
         )
         .await;
 
@@ -203,8 +207,16 @@ async fn run_realtime_fast_path_injects_accumulated() {
     let rig = build_rig(config(true, false, false), "ignored");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(true, false, false));
     rig.session
-        .run_realtime_fast_path("你好".to_string(), vec![], 48000, perf, Instant::now())
+        .run_realtime_fast_path(
+            "你好".to_string(),
+            vec![],
+            48000,
+            perf,
+            Instant::now(),
+            policy,
+        )
         .await;
 
     assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
@@ -224,6 +236,7 @@ async fn run_pipeline_empty_transcription_resets() {
     let rig = build_rig(config(false, false, false), "");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, false, false));
     rig.session
         .run_pipeline(
             vec![],
@@ -232,6 +245,7 @@ async fn run_pipeline_empty_transcription_resets() {
             false,
             perf,
             Instant::now(),
+            policy,
         )
         .await;
 
@@ -250,6 +264,7 @@ async fn run_pipeline_llm_corrects_then_injects() {
     let rig = build_rig(config(false, false, true), "raw transcription");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, false, true));
     rig.session
         .run_pipeline(
             vec![],
@@ -258,6 +273,7 @@ async fn run_pipeline_llm_corrects_then_injects() {
             false,
             perf,
             Instant::now(),
+            policy,
         )
         .await;
 
