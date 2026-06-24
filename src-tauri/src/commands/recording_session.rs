@@ -62,18 +62,6 @@ pub(crate) fn decide_release(mode: PipelineMode, accumulated: Option<&str>) -> R
     }
 }
 
-/// Adapter: bridges `commands::EventEmitter` → `realtime::EventEmitter`.
-struct RealtimeEmitterAdapter(Arc<dyn crate::commands::EventEmitter>);
-
-impl crate::realtime::EventEmitter for RealtimeEmitterAdapter {
-    fn emit_partial(&self, text: &str) {
-        self.0.emit(
-            "transcription-partial",
-            serde_json::to_value(text).unwrap_or_default(),
-        );
-    }
-}
-
 /// Check silence and resample audio to 16kHz for Whisper. Returns `None` if
 /// audio is near-silent (hallucination guard).
 fn preprocess_audio(audio: &[f32], native_rate: u32) -> Option<Vec<f32>> {
@@ -202,11 +190,10 @@ impl RecordingSession {
                         let audio = Arc::new(crate::realtime::AudioRingBufferSource::new(
                             self.ps.audio_ring_buffer.clone(),
                         ));
-                        let emitter = Arc::new(RealtimeEmitterAdapter(self.ps.emitter.clone()));
                         let rt = crate::realtime::RealtimeTranscriber::start(
                             audio,
                             self.ps.engine.clone(),
-                            emitter,
+                            self.ps.emitter.clone(),
                             sr,
                         );
                         if let Some(mut rt_guard) = crate::util::lock_mutex(

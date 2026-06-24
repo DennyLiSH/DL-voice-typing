@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tauri::Emitter;
 use tracing::{debug, warn};
 
 /// Abstract source of audio samples for real-time transcription.
@@ -43,30 +42,6 @@ impl AudioSource for AudioRingBufferSource {
             return Some(Vec::new());
         }
         Some(buf.snapshot_recent(max_samples))
-    }
-}
-
-/// Abstract emitter for partial transcription events.
-/// Decouples the transcriber from Tauri's event system.
-pub trait EventEmitter: Send + Sync {
-    /// Emit accumulated partial text to the frontend.
-    fn emit_partial(&self, text: &str);
-}
-
-/// Adapter: forwards partial events via Tauri's `AppHandle`.
-pub struct TauriEventEmitter {
-    app: tauri::AppHandle,
-}
-
-impl TauriEventEmitter {
-    pub fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-impl EventEmitter for TauriEventEmitter {
-    fn emit_partial(&self, text: &str) {
-        let _ = self.app.emit("transcription-partial", text);
     }
 }
 
@@ -371,7 +346,7 @@ impl RealtimeTranscriber {
     pub fn start(
         audio: Arc<dyn AudioSource + Send + Sync>,
         engine: Arc<AnyEngine>,
-        emitter: Arc<dyn EventEmitter + Send + Sync>,
+        emitter: Arc<dyn crate::commands::EventEmitter + Send + Sync>,
         sample_rate: u32,
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
@@ -449,7 +424,10 @@ impl RealtimeTranscriber {
 
                     // Only emit if still running — avoid late events after stop signal.
                     if running_clone.load(Ordering::Relaxed) {
-                        emitter.emit_partial(&new_accumulated);
+                        emitter.emit(
+                            "transcription-partial",
+                            serde_json::Value::String(new_accumulated.clone()),
+                        );
                     }
                 }
 
@@ -723,9 +701,16 @@ mod tests {
         }
     }
 
-    impl EventEmitter for MockEventEmitter {
-        fn emit_partial(&self, text: &str) {
-            self.events.lock().unwrap().push(text.to_string());
+    impl crate::commands::EventEmitter for MockEventEmitter {
+        fn emit(&self, event: &str, payload: serde_json::Value) {
+            // Only capture partial-transcription events with string payloads.
+            if event == "transcription-partial" {
+                if let serde_json::Value::String(text) = payload {
+                    if let Ok(mut events) = self.events.lock() {
+                        events.push(text);
+                    }
+                }
+            }
         }
     }
 
