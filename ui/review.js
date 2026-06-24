@@ -1,3 +1,5 @@
+import { formatInjectionError } from './review-utils.js';
+
 const { listen } = window.__TAURI__.event;
 const { invoke } = window.__TAURI__.core;
 
@@ -70,6 +72,18 @@ listen('transcription-partial', (event) => {
 listen('speech-error', () => {
     if (!textarea.value && !isClosing) {
         container.classList.remove('visible');
+    }
+});
+
+// Clipboard injection failed (event emitted by text_injector / review backend
+// when confirm_inject's spawned task fails). Show error and re-enable buttons.
+listen('injection-error', (event) => {
+    if (!isClosing) {
+        // textContent (not innerHTML) — payload is backend string, no HTML parsing
+        // length cap (inside formatInjectionError) prevents UI overflow on long error
+        errorMsg.textContent = formatInjectionError(event.payload);
+        isClosing = false;
+        updateButtons();
     }
 });
 
