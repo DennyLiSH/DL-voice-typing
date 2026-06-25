@@ -45,6 +45,12 @@ jobs:
       - name: Frontend test
         run: npm test
 
+      # Regression guard: NSIS installMode must stay perMachine.
+      # Runs before Rust/Vulkan setup so a regression fails in <5s.
+      - name: Assert NSIS installMode is perMachine
+        shell: bash
+        run: bash scripts/check-nsis-installmode.sh
+
       # CI pins a specific version for reproducibility.
       # MSRV is 1.85 — see Cargo.toml rust-version.
       - name: Install Rust toolchain
@@ -112,4 +118,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: C:\t\release\bundle\nsis\*.exe
+          body_path: .github/release-notes/v${{ github.ref_name }}.md
           generate_release_notes: true
