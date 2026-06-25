@@ -328,7 +328,14 @@ btnDownloadModel.addEventListener('click', async () => {
             populateModelSelect();
             updateModelAction();
             updateDirtyState();
-        } catch (_e) {
+        } catch (e) {
+            const message =
+                typeof e === 'object' && e?.message ? e.message : String(e);
+            invoke('log_frontend_error', {
+                message,
+                stack: null,
+                context: 'delete_custom_model',
+            }).catch(() => {});
             showError('删除失败，请重试');
         }
     } else {
@@ -354,9 +361,19 @@ async function startDownload(size) {
         updateDirtyState();
     } catch (e) {
         activeDownload = null;
-        if (e === 'download cancelled') {
+        // F6 fix: defensive check matches both raw string and CommandError-object shapes
+        const isCancel =
+            e === 'download cancelled' || e?.message === 'download cancelled';
+        if (isCancel) {
             updateModelAction();
         } else {
+            const message =
+                typeof e === 'object' && e?.message ? e.message : String(e);
+            invoke('log_frontend_error', {
+                message,
+                stack: null,
+                context: 'download_whisper_model',
+            }).catch(() => {});
             showError('下载失败，请重试');
             updateModelAction();
         }
@@ -542,7 +559,14 @@ testBtn.addEventListener('click', async () => {
     try {
         await invoke('test_llm_connection', { apiUrl, apiKey, model });
         setTestStatus('✓ 连接成功', 'success');
-    } catch (_e) {
+    } catch (e) {
+        const message =
+            typeof e === 'object' && e?.message ? e.message : String(e);
+        invoke('log_frontend_error', {
+            message,
+            stack: null,
+            context: 'test_llm_connection',
+        }).catch(() => {});
         setTestStatus('✗ 连接失败，请检查配置', 'error');
     } finally {
         testBtn.disabled = false;
@@ -675,7 +699,14 @@ saveBtn.addEventListener('click', async () => {
         setTimeout(() => {
             saveStatus.textContent = '';
         }, 1500);
-    } catch (_e) {
+    } catch (e) {
+        const message =
+            typeof e === 'object' && e?.message ? e.message : String(e);
+        invoke('log_frontend_error', {
+            message,
+            stack: null,
+            context: 'save_settings',
+        }).catch(() => {});
         setSaveStatus('✗ 保存失败，请重试', 'error');
         showError('保存失败，请重试');
     } finally {

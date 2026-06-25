@@ -86,6 +86,7 @@ pub fn run() {
             commands::download::cancel_download,
             commands::download::delete_custom_model,
             commands::llm_cmd::test_llm_connection,
+            commands::log_cmd::log_frontend_error,
             commands::perf_cmd::get_perf_history,
             commands::data_management_cmd::list_saved_recordings,
             commands::data_management_cmd::delete_recording,

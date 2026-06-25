@@ -3,6 +3,7 @@ pub mod data_management_cmd;
 pub mod download;
 pub mod hotkey_pipeline;
 pub mod llm_cmd;
+pub mod log_cmd;
 pub mod perf_cmd;
 pub(crate) mod pipeline_state;
 pub(crate) mod recording_session;
@@ -83,6 +84,7 @@ pub use download::{
 };
 pub(crate) use hotkey_pipeline::make_hotkey_callback;
 pub use llm_cmd::test_llm_connection;
+pub use log_cmd::log_frontend_error;
 pub use perf_cmd::get_perf_history;
 pub use review::{PendingReview, cancel_review, confirm_inject, get_review_text};
 pub use window_controller::WindowController;
