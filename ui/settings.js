@@ -5,7 +5,7 @@ import {
     deleteConfirmMessage,
     formatBytes,
     getPageRange,
-} from '../lib/data-management.js';
+} from './lib/data-management.js';
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;

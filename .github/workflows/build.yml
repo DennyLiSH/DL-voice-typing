@@ -35,6 +35,10 @@ jobs:
       - name: Frontend lint
         run: npm run lint
 
+      - name: Frontend ui/ import boundary
+        shell: bash
+        run: bash scripts/check-ui-imports.sh
+
       - name: Frontend audit
         run: npm audit --audit-level=high
 

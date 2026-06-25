@@ -23,7 +23,7 @@ import {
     formatBytes,
     formatStemForDisplay,
     getPageRange,
-} from '../lib/data-management.js';
+} from '../ui/lib/data-management.js';
 
 /**
  * Mock state machine that mirrors the orchestration logic in settings.js.

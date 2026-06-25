@@ -19,8 +19,10 @@ export function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    if (bytes < 1024 * 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (bytes < 1024 * 1024 * 1024)
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    if (bytes < 1024 * 1024 * 1024 * 1024)
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
 }
 
@@ -35,7 +37,8 @@ export function formatBytes(bytes) {
  */
 export function formatDuration(seconds) {
     if (!Number.isFinite(seconds) || seconds < 0) return '0s';
-    if (seconds < 60) return `${seconds % 1 === 0 ? seconds : seconds.toFixed(1)}s`;
+    if (seconds < 60)
+        return `${seconds % 1 === 0 ? seconds : seconds.toFixed(1)}s`;
     const totalSecs = Math.floor(seconds);
     const h = Math.floor(totalSecs / 3600);
     const m = Math.floor((totalSecs % 3600) / 60);
@@ -109,7 +112,10 @@ export function buildRecordingRow(entry, opts = {}) {
     // Duration
     const durSpan = document.createElement('span');
     durSpan.className = 'data-row-dur';
-    durSpan.textContent = entry.duration_seconds != null ? formatDuration(entry.duration_seconds) : '—';
+    durSpan.textContent =
+        entry.duration_seconds != null
+            ? formatDuration(entry.duration_seconds)
+            : '—';
     row.appendChild(durSpan);
 
     // Transcription preview
@@ -221,10 +227,16 @@ export function getPageRange(total, offset, limit) {
  * @param {number} currentOffset - current offset (0-based)
  * @returns {number} - new offset to load
  */
-export function computeOffsetAfterDeletion(oldTotal, deletedCount, limit, currentOffset) {
+export function computeOffsetAfterDeletion(
+    oldTotal,
+    deletedCount,
+    limit,
+    currentOffset,
+) {
     const newTotal = Math.max(0, oldTotal - deletedCount);
     // Last valid offset (start of the last page that has items).
-    const lastValidOffset = newTotal === 0 ? 0 : Math.floor((newTotal - 1) / limit) * limit;
+    const lastValidOffset =
+        newTotal === 0 ? 0 : Math.floor((newTotal - 1) / limit) * limit;
     // If current offset is past the new last page, jump back.
     return Math.min(currentOffset, lastValidOffset);
 }

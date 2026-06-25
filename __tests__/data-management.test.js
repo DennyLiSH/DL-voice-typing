@@ -12,7 +12,7 @@ import {
     formatStemForDisplay,
     getPageRange,
     truncateText,
-} from '../lib/data-management.js';
+} from '../ui/lib/data-management.js';
 
 describe('formatBytes', () => {
     it('returns 0 B for zero', () => {

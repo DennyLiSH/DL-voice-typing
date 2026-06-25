@@ -5,3 +5,6 @@ cd "$(dirname "$0")/.." || exit 1
 cd src-tauri
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cd ..
+echo "[check-ui-imports] scanning..."
+bash scripts/check-ui-imports.sh || { echo "[check-ui-imports] FAILED"; exit 1; }
