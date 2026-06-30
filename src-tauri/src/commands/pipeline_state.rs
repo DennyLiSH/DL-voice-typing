@@ -2,6 +2,7 @@ use crate::audio::{AudioCaptureProvider, AudioRingBuffer};
 use crate::clipboard::AnyClipboard;
 use crate::commands::EventEmitter;
 use crate::commands::TauriEventEmitter;
+use crate::commands::delivery_controller::DeliveryController;
 use crate::commands::review_provider::{ReviewProvider, TauriReviewProvider};
 use crate::commands::window_controller::window_controller_from_app;
 use crate::config::ConfigCache;
@@ -29,6 +30,8 @@ pub struct PipelineState {
     pub(crate) window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
     pub(crate) emitter: Arc<dyn EventEmitter>,
     pub(crate) review: Arc<dyn ReviewProvider>,
+    /// Single authority for post-transcription delivery lifecycle.
+    pub(crate) delivery: Arc<DeliveryController>,
     /// Decoupled audio buffer for lock-free realtime reads.
     /// Capacity: 60 seconds @ 48kHz = 2,880,000 samples.
     pub(crate) audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
@@ -54,6 +57,13 @@ impl PipelineState {
         emitter: Arc<dyn EventEmitter>,
         review: Arc<dyn ReviewProvider>,
     ) -> Self {
+        let delivery = Arc::new(DeliveryController::new(
+            emitter.clone(),
+            window_controller.clone(),
+            clipboard.clone(),
+            review.clone(),
+            perf_history.clone(),
+        ));
         Self {
             sm,
             ac,
@@ -66,6 +76,7 @@ impl PipelineState {
             window_controller,
             emitter,
             review,
+            delivery,
             audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
                 Self::AUDIO_BUFFER_CAPACITY,
             ))),
@@ -74,6 +85,18 @@ impl PipelineState {
 
     /// Extract all pipeline state from Tauri's managed state.
     pub fn from_app(app: &tauri::AppHandle) -> Self {
+        let window_controller = window_controller_from_app(app);
+        let emitter: Arc<dyn EventEmitter> = Arc::new(TauriEventEmitter::new(app.clone()));
+        let review: Arc<dyn ReviewProvider> = Arc::new(TauriReviewProvider::new(app.clone()));
+        let clipboard = app.state::<Arc<Mutex<AnyClipboard>>>().inner().clone();
+        let perf_history = app.state::<Arc<PerfHistory>>().inner().clone();
+        let delivery = Arc::new(DeliveryController::new(
+            emitter.clone(),
+            window_controller.clone(),
+            clipboard.clone(),
+            review.clone(),
+            perf_history.clone(),
+        ));
         Self {
             sm: app.state::<Arc<Mutex<StateMachine>>>().inner().clone(),
             ac: app
@@ -81,8 +104,8 @@ impl PipelineState {
                 .inner()
                 .clone(),
             engine: app.state::<Arc<AnyEngine>>().inner().clone(),
-            clipboard: app.state::<Arc<Mutex<AnyClipboard>>>().inner().clone(),
-            perf_history: app.state::<Arc<PerfHistory>>().inner().clone(),
+            clipboard,
+            perf_history,
             config_cache: app.state::<ConfigCache>().inner().clone(),
             cached_llm: app
                 .state::<Arc<Mutex<Option<AnyCorrector>>>>()
@@ -92,9 +115,10 @@ impl PipelineState {
                 .state::<Arc<Mutex<Option<RealtimeTranscriber>>>>()
                 .inner()
                 .clone(),
-            window_controller: window_controller_from_app(app),
-            emitter: Arc::new(TauriEventEmitter::new(app.clone())),
-            review: Arc::new(TauriReviewProvider::new(app.clone())),
+            window_controller,
+            emitter,
+            review,
+            delivery,
             audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
                 Self::AUDIO_BUFFER_CAPACITY,
             ))),

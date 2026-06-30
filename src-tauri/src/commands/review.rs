@@ -1,11 +1,8 @@
-use crate::clipboard::AnyClipboard;
 use crate::commands::pipeline_state::PipelineState;
 use crate::error::CommandError;
-use crate::state::StateTag;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager};
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Metadata from the transcription pipeline needed for data-saving JSON update.
 pub(crate) struct ReviewData {
@@ -96,126 +93,8 @@ pub fn get_review_text(
 pub async fn confirm_inject(
     text: String,
     ps: tauri::State<'_, PipelineState>,
-    clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
-    app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
-    info!("confirm_inject: start ({} chars)", text.len());
-
-    // 1. Save data before text is consumed (borrows &text)
-    if let Some(pending) = app.try_state::<PendingReview>() {
-        pending.consume_and_save(Some(&text));
-    }
-
-    // 2. Restore focus to target app BEFORE paste.
-    //    Uses AttachThreadInput + SetForegroundWindow for reliable focus change.
-    //    Review window is NOT hidden yet — Tauri's hide() is async-dispatched
-    //    and may not take effect before the paste.
-    let saved_hwnd = app
-        .try_state::<PendingReview>()
-        .and_then(|p| p.take_foreground());
-    info!("confirm_inject: saved_hwnd={:?}", saved_hwnd);
-    if let Some(hwnd_val) = saved_hwnd {
-        crate::win32::restore_foreground_hwnd(hwnd_val);
-        // Wait for OS to fully process the focus change before simulating
-        // keyboard input. Without this delay, SendInput (Ctrl+V) may still
-        // be dispatched to the review window.
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    // 3. Inject text (clipboard + Ctrl+V) in a blocking thread to avoid
-    //    starving the Tokio runtime if clipboard operations hang.
-    let inject_result = {
-        use crate::clipboard::ClipboardProvider;
-        let cb_clone = Arc::clone(&*clipboard);
-        let text_clone = text.clone();
-        match tokio::task::spawn_blocking(move || {
-            let cb = cb_clone.lock().map_err(|e| CommandError {
-                code: "LOCK".to_string(),
-                message: e.to_string(),
-            })?;
-            cb.inject_text(&text_clone).map_err(|e| CommandError {
-                code: "CLIPBOARD".to_string(),
-                message: e.to_string(),
-            })
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                let err_msg = format!("inject task panicked: {e}");
-                let _ = app.emit("injection-error", &err_msg);
-                Err(CommandError {
-                    code: "TASK".to_string(),
-                    message: err_msg,
-                })
-            }
-        }
-    };
-
-    match inject_result {
-        Ok(()) => info!("confirm_inject: inject_text succeeded"),
-        Err(ref e) => {
-            let _ = app.emit("injection-error", e.message.clone());
-            info!("confirm_inject: inject_text failed: {}", e.message);
-        }
-    }
-
-    // 4. State transition — handle both Reviewing (normal) and Recording/Transcribing
-    //    (user confirmed early during realtime+review before pipeline finished).
-    let was_reviewing = match ps.sm_state() {
-        Some(StateTag::Reviewing) => {
-            if ps.sm_reviewing_to_injecting() {
-                true
-            } else {
-                return Err(CommandError {
-                    code: "STATE".to_string(),
-                    message: "reviewing_to_injecting failed".to_string(),
-                });
-            }
-        }
-        Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
-            // Early confirm during recording — stop audio capture and
-            // realtime transcriber, then reset state to Idle.
-            info!("confirm_inject: early confirm during recording/transcribing");
-            ps.stop_recording_resources_graceful();
-            ps.sm_reset();
-            false
-        }
-        _ => {
-            return Err(CommandError {
-                code: "STATE".to_string(),
-                message: "cannot confirm from current state".to_string(),
-            });
-        }
-    };
-
-    // 5. Hide review window AFTER paste (Tauri's hide is async-dispatched
-    //    to main thread, so doing it after ensures paste wasn't affected).
-    if let Some(win) = app.get_webview_window("review") {
-        let _ = win.hide();
-    }
-
-    // 6. Finish state transition (only needed for Reviewing path)
-    if was_reviewing {
-        ps.sm_finish_injecting();
-    }
-
-    // 7. Reset shown_on_press flag
-    if let Some(pending) = app.try_state::<PendingReview>() {
-        if let Some(mut guard) = crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
-        {
-            *guard = false;
-        }
-    }
-
-    // 8. Emit injection-complete + hide floating indicator
-    let _ = app.emit("injection-complete", ());
-    if let Some(win) = app.get_webview_window("floating") {
-        let _ = win.hide();
-    }
-
-    info!("confirm_inject: done");
-    Ok(())
+    ps.delivery.confirm_review(&ps, text).await
 }
 
 /// Cancel the review and return to idle.
@@ -225,74 +104,8 @@ pub async fn confirm_inject(
 ///
 /// Runs async on the Tokio runtime to avoid blocking the main thread.
 #[tauri::command]
-pub async fn cancel_review(
-    ps: tauri::State<'_, PipelineState>,
-    clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
-    app: tauri::AppHandle,
-) -> Result<(), CommandError> {
-    // 1. Cancel: Reviewing/Recording/Transcribing → Idle
-    match ps.sm_state() {
-        Some(StateTag::Reviewing) => {
-            if !ps.sm_cancel_reviewing() {
-                return Err(CommandError {
-                    code: "STATE".to_string(),
-                    message: "cancel_reviewing failed".to_string(),
-                });
-            }
-        }
-        Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
-            // Early cancel during recording — stop audio capture and
-            // realtime transcriber, then reset state to Idle.
-            info!("cancel_review: early cancel during recording/transcribing");
-            ps.stop_recording_resources_graceful();
-            ps.sm_reset();
-        }
-        _ => {
-            return Err(CommandError {
-                code: "STATE".to_string(),
-                message: "cannot cancel from current state".to_string(),
-            });
-        }
-    }
-
-    // 2. Restore clipboard
-    {
-        use crate::clipboard::ClipboardProvider;
-        let mut cb = clipboard.lock().map_err(|e| CommandError {
-            code: "LOCK".to_string(),
-            message: e.to_string(),
-        })?;
-        let _ = cb.restore();
-    }
-
-    // 3. Restore focus to target app, then hide windows.
-    let saved_hwnd = app
-        .try_state::<PendingReview>()
-        .and_then(|p| p.take_foreground());
-    if let Some(hwnd_val) = saved_hwnd {
-        crate::win32::restore_foreground_hwnd(hwnd_val);
-    }
-    if let Some(win) = app.get_webview_window("floating") {
-        let _ = win.hide();
-    }
-    if let Some(win) = app.get_webview_window("review") {
-        let _ = win.hide();
-    }
-
-    // 4. Reset shown_on_press flag
-    if let Some(pending) = app.try_state::<PendingReview>() {
-        if let Some(mut guard) = crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
-        {
-            *guard = false;
-        }
-    }
-
-    // 5. Update data-saving JSON: preserve raw transcription, mark no final text.
-    if let Some(pending) = app.try_state::<PendingReview>() {
-        pending.consume_and_save(None);
-    }
-
-    Ok(())
+pub async fn cancel_review(ps: tauri::State<'_, PipelineState>) -> Result<(), CommandError> {
+    ps.delivery.cancel_review(&ps).await
 }
 
 #[cfg(test)]

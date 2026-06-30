@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use super::pipeline_state::PipelineState;
-use super::review::ReviewData;
 
 /// Snapshot of config consumed by a single recording session.
 ///
@@ -299,18 +298,20 @@ impl RecordingSession {
                 // RealtimeReview handoff: accumulated text already shown on press.
                 info!(
                     "hotkey release: RealtimeReview fast path, {} chars already in textarea",
-                    realtime_accumulated.map(|s| s.len()).unwrap_or(0)
+                    realtime_accumulated.as_ref().map(|s| s.len()).unwrap_or(0)
                 );
-                if let Some(mut cb) = crate::util::lock_mutex(&self.ps.clipboard, "clipboard") {
-                    let _ = cb.save();
-                }
-                self.ps.sm_stop_recording();
-                self.ps.sm_transcribing_to_reviewing();
-                self.ps.window_controller.hide_floating();
+                self.ps
+                    .delivery
+                    .realtime_review_handoff(&self.ps, realtime_accumulated);
                 ReleaseAction::Done
             }
             ReleaseActionKind::DeliverFast => {
-                let accumulated = realtime_accumulated.expect("DeliverFast requires accumulated");
+                let Some(accumulated) = realtime_accumulated else {
+                    warn!("hotkey release: DeliverFast missing accumulated text, resetting");
+                    self.ps.sm_reset();
+                    self.ps.window_controller.hide_floating();
+                    return ReleaseAction::Done;
+                };
                 info!(
                     "hotkey release: RealtimeDirect fast path, {} chars",
                     accumulated.len()
@@ -500,26 +501,41 @@ impl RecordingSession {
         // -- Delivery (review vs direct decided once from mode) --
         if review {
             info!(
-                "run_pipeline: handing off to deliver_review ({} chars)",
+                "run_pipeline: handing off to DeliveryController::show_review ({} chars)",
                 final_text.len()
             );
-            deliver_review(&self.ps, final_text, transcription, save_result, &policy).await;
+            self.ps
+                .delivery
+                .show_review(
+                    &self.ps,
+                    final_text,
+                    transcription,
+                    save_result,
+                    &policy,
+                    perf,
+                    t_press_for_e2e,
+                    policy.llm_enabled,
+                )
+                .await;
             return;
         }
         info!(
-            "run_pipeline: handing off to deliver_direct ({} chars)",
+            "run_pipeline: handing off to DeliveryController::inject_direct ({} chars)",
             final_text.len()
         );
-        deliver_direct(
-            &self.ps,
-            final_text,
-            transcription,
-            save_result,
-            &policy,
-            &mut perf,
-            t_press_for_e2e,
-        )
-        .await;
+        self.ps
+            .delivery
+            .inject_direct(
+                &self.ps,
+                final_text,
+                transcription,
+                save_result,
+                &policy,
+                &mut perf,
+                t_press_for_e2e,
+                policy.llm_enabled,
+            )
+            .await;
     }
 
     /// Fast path for RealtimeDirect mode: uses accumulated realtime text
@@ -570,23 +586,27 @@ impl RecordingSession {
             final_text
         };
 
-        // State: Transcribing to Injecting.
-        if policy.llm_enabled {
-            self.ps.sm_llm_to_injecting();
-        } else {
-            self.ps.sm_transcribing_to_injecting();
-        }
-
-        let save_result = save_handle.await.unwrap_or(None);
-        let mut ctx = super::text_injector::InjectionContext {
-            text: final_text,
-            transcription,
-            save_result,
-            policy: &policy,
-            perf: &mut perf,
-            t_press_for_e2e,
+        let save_result = match save_handle.await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("run_realtime_fast_path: save task failed: {e}");
+                None
+            }
         };
-        super::text_injector::inject_text(&self.ps, &mut ctx).await;
+
+        self.ps
+            .delivery
+            .inject_direct(
+                &self.ps,
+                final_text,
+                transcription,
+                save_result,
+                &policy,
+                &mut perf,
+                t_press_for_e2e,
+                policy.llm_enabled,
+            )
+            .await;
     }
 }
 
@@ -739,143 +759,6 @@ async fn resolve_llm_text(
             Ok(transcription.to_string())
         }
     }
-}
-
-/// Show review window with transcribed text for user editing.
-async fn deliver_review(
-    ps: &PipelineState,
-    final_text: String,
-    transcription: String,
-    save_result: Option<SaveResult>,
-    policy: &SessionPolicy,
-) {
-    info!(
-        "deliver_review: ENTER ({} chars, llm={})",
-        final_text.len(),
-        policy.llm_enabled
-    );
-
-    // Save clipboard before entering review state.
-    if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
-        let _ = cb.save();
-    } else {
-        warn!("deliver_review: clipboard lock returned None (poisoned?)");
-    }
-    // Transition to Reviewing.
-    if policy.llm_enabled {
-        ps.sm_llm_to_reviewing();
-    } else {
-        ps.sm_transcribing_to_reviewing();
-    }
-    // Store text for the review window to fetch on load.
-    ps.review.store_text(final_text.clone());
-    debug!("Review: stored pending text ({} chars)", final_text.len());
-
-    let was_shown_on_press = ps.review.was_shown_on_press();
-
-    if was_shown_on_press {
-        info!(
-            "Review: deliver_review() called, was_shown_on_press=true, final_text={} chars",
-            final_text.len()
-        );
-        let json_text = serde_json::to_string(&final_text).unwrap_or_default();
-        let js = format!(
-            "(function(){{\
-                 var t=document.getElementById('review-text');\
-                 if(t){{t.value={json_text};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
-                 var p=document.getElementById('preview');\
-                 if(p){{p.textContent='';p.classList.remove('visible');}}\
-                 var b=document.getElementById('btn-confirm');\
-                 if(b){{b.disabled=false;}}\
-             }})()"
-        );
-        if ps.window_controller.eval_review_js(&js) {
-            info!(
-                "Review: set final text via eval OK ({} chars)",
-                final_text.len()
-            );
-        } else {
-            warn!("Review: get_webview_window('review') returned None");
-        }
-
-        ps.window_controller.emit_review_final_text(&final_text);
-        info!(
-            "Review: emitted review-final-text OK ({} chars)",
-            final_text.len()
-        );
-
-        if let Some(sr) = save_result.as_ref() {
-            ps.review.store_review_data(ReviewData {
-                json_path: sr.json_path.clone(),
-                raw_transcription: transcription,
-                llm_text: if policy.llm_enabled {
-                    Some(final_text)
-                } else {
-                    None
-                },
-            });
-        }
-        return;
-    }
-
-    ps.review.save_foreground();
-    if ps.window_controller.show_review_near_caret() {
-        debug!("Review: window shown, review-show emitted");
-
-        if let Some(sr) = save_result.as_ref() {
-            ps.review.store_review_data(ReviewData {
-                json_path: sr.json_path.clone(),
-                raw_transcription: transcription,
-                llm_text: if policy.llm_enabled {
-                    Some(final_text)
-                } else {
-                    None
-                },
-            });
-        }
-    } else {
-        warn!("review window not found. Falling back to direct injection.");
-        let cb = ps.clipboard.clone();
-        let text = final_text.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Some(mut cb) = crate::util::lock_mutex(&cb, "clipboard") {
-                let _ = cb.save();
-                let _ = cb.inject_text(&text);
-            }
-        })
-        .await;
-        ps.sm_finish_injecting();
-        ps.emitter
-            .emit("injection-complete", serde_json::Value::Null);
-        ps.window_controller.hide_floating();
-    }
-}
-
-/// Direct clipboard injection path (review disabled).
-async fn deliver_direct(
-    ps: &PipelineState,
-    final_text: String,
-    transcription: String,
-    save_result: Option<SaveResult>,
-    policy: &SessionPolicy,
-    perf: &mut PerfMetrics,
-    t_press_for_e2e: Instant,
-) {
-    if policy.llm_enabled {
-        ps.sm_llm_to_injecting();
-    } else {
-        ps.sm_transcribing_to_injecting();
-    }
-
-    let mut ctx = super::text_injector::InjectionContext {
-        text: final_text,
-        transcription,
-        save_result,
-        policy,
-        perf,
-        t_press_for_e2e,
-    };
-    super::text_injector::inject_text(ps, &mut ctx).await;
 }
 
 /// Reset state machine to Idle and hide floating window.
@@ -1203,7 +1086,10 @@ mod tests_normalize_chinese_punctuation {
         let result = preprocess_audio(&loud, 48000);
         assert!(result.is_some());
         // Resampled from 48000 to 16000 = 1/3 the samples.
-        let resampled = result.unwrap();
+        let resampled = match result {
+            Some(r) => r,
+            None => panic!("preprocess_audio should return Some for loud audio"),
+        };
         assert!(resampled.len() < 4800);
     }
 }

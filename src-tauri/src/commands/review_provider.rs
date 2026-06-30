@@ -1,4 +1,3 @@
-use crate::commands::review::ReviewData;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -17,8 +16,6 @@ pub(crate) trait ReviewProvider: Send + Sync {
     fn was_shown_on_press(&self) -> bool;
     /// Set the shown_on_press flag.
     fn set_shown_on_press(&self, value: bool);
-    /// Store data-saving metadata for confirm/cancel to consume later.
-    fn store_review_data(&self, data: ReviewData);
 }
 
 /// Production implementation that delegates to Tauri's managed `PendingReview`.
@@ -74,14 +71,6 @@ impl ReviewProvider for TauriReviewProvider {
             }
         }
     }
-
-    fn store_review_data(&self, data: ReviewData) {
-        if let Some(pending) = self.app.try_state::<super::review::PendingReview>() {
-            if let Some(mut guard) = crate::util::lock_mutex(&pending.data_saving, "pending_data") {
-                *guard = Some(data);
-            }
-        }
-    }
 }
 
 /// Mock implementation for testing.
@@ -90,7 +79,6 @@ pub(crate) struct MockReviewProvider {
     text: Arc<Mutex<Option<String>>>,
     foreground: Arc<Mutex<Option<isize>>>,
     shown_on_press: Arc<Mutex<bool>>,
-    review_data: Arc<Mutex<Option<ReviewData>>>,
 }
 
 #[cfg(test)]
@@ -100,7 +88,6 @@ impl MockReviewProvider {
             text: Arc::new(Mutex::new(None)),
             foreground: Arc::new(Mutex::new(None)),
             shown_on_press: Arc::new(Mutex::new(false)),
-            review_data: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -151,18 +138,11 @@ impl ReviewProvider for MockReviewProvider {
             *guard = value;
         }
     }
-
-    fn store_review_data(&self, data: ReviewData) {
-        if let Some(mut guard) = crate::util::lock_mutex(&self.review_data, "mock_review_data") {
-            *guard = Some(data);
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_store_and_get_text() {
@@ -188,19 +168,5 @@ mod tests {
         assert!(provider.was_shown_on_press());
         provider.set_shown_on_press(false);
         assert!(!provider.was_shown_on_press());
-    }
-
-    #[test]
-    fn test_store_review_data() {
-        let provider = MockReviewProvider::new();
-        let data = ReviewData {
-            json_path: PathBuf::from("test.json"),
-            raw_transcription: "raw".to_string(),
-            llm_text: Some("corrected".to_string()),
-        };
-        provider.store_review_data(data);
-        let stored = crate::util::lock_mutex(&provider.review_data, "mock_review_data")
-            .and_then(|g| g.as_ref().map(|d| d.raw_transcription.clone()));
-        assert_eq!(stored, Some("raw".to_string()));
     }
 }

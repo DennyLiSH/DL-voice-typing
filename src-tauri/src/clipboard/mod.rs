@@ -145,6 +145,12 @@ pub struct MockClipboard {
     pub saved: bool,
     pub injected: Mutex<Vec<String>>,
     pub restored: bool,
+    /// When set, `save()` returns `AppError::Clipboard(msg)` instead of succeeding.
+    pub save_error: Option<String>,
+    /// When set, `inject_text()` returns `AppError::Clipboard(msg)` instead of succeeding.
+    pub inject_error: Option<String>,
+    /// When set, `restore()` returns `AppError::Clipboard(msg)` instead of succeeding.
+    pub restore_error: Option<String>,
 }
 
 impl MockClipboard {
@@ -154,6 +160,9 @@ impl MockClipboard {
             saved: false,
             injected: Mutex::new(Vec::new()),
             restored: false,
+            save_error: None,
+            inject_error: None,
+            restore_error: None,
         }
     }
 }
@@ -166,11 +175,17 @@ impl Default for MockClipboard {
 
 impl ClipboardProvider for MockClipboard {
     fn save(&mut self) -> Result<(), AppError> {
+        if let Some(ref msg) = self.save_error {
+            return Err(AppError::Clipboard(msg.clone()));
+        }
         self.saved = true;
         Ok(())
     }
 
     fn inject_text(&self, text: &str) -> Result<(), AppError> {
+        if let Some(ref msg) = self.inject_error {
+            return Err(AppError::Clipboard(msg.clone()));
+        }
         if let Some(mut guard) = crate::util::lock_mutex(&self.injected, "MockClipboard::injected")
         {
             guard.push(text.to_string());
@@ -179,6 +194,9 @@ impl ClipboardProvider for MockClipboard {
     }
 
     fn restore(&mut self) -> Result<(), AppError> {
+        if let Some(ref msg) = self.restore_error {
+            return Err(AppError::Clipboard(msg.clone()));
+        }
         self.restored = true;
         Ok(())
     }

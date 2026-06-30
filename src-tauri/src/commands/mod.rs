@@ -1,5 +1,6 @@
 pub mod config_cmd;
 pub mod data_management_cmd;
+pub mod delivery_controller;
 pub mod download;
 pub mod hotkey_pipeline;
 pub mod llm_cmd;
@@ -9,7 +10,6 @@ pub(crate) mod pipeline_state;
 pub(crate) mod recording_session;
 pub mod review;
 pub(crate) mod review_provider;
-pub(crate) mod text_injector;
 pub mod window_controller;
 
 use tauri::Emitter as TauriEmitter;
