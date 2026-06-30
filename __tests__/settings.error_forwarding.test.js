@@ -229,60 +229,78 @@ describe('settings.js error forwarding to log_frontend_error', () => {
         });
     });
 
-    describe('static contract — 4 catch blocks present in settings.js', () => {
+    describe('static contract — 4 catch blocks present in split settings modules', () => {
         // Static source assertions: guarantee the log_frontend_error forwarding
         // exists at all 4 expected catch sites and the F6 fix expression is in place.
-        // Direct DOM-event triggering of save_settings/download_whisper_model
-        // requires complex UI state (isDirty toggling + activeDownload lifecycle);
-        // manual E2E (see plan §验证 2) remains authoritative for end-to-end
-        // coverage of those two paths. These assertions lock the source-level contract.
-        let settingsSrc;
+        // After splitting ui/settings.js, the catch sites live in settings-form.js
+        // and model-manager.js.
+        let settingsFormSrc;
+        let modelManagerSrc;
         beforeAll(async () => {
             const { readFileSync } = await import('node:fs');
             const { fileURLToPath } = await import('node:url');
             const path = await import('node:path');
             const here = fileURLToPath(import.meta.url);
-            settingsSrc = readFileSync(
-                path.resolve(path.dirname(here), '..', 'ui', 'settings.js'),
+            settingsFormSrc = readFileSync(
+                path.resolve(
+                    path.dirname(here),
+                    '..',
+                    'ui',
+                    'settings-form.js',
+                ),
+                'utf8',
+            );
+            modelManagerSrc = readFileSync(
+                path.resolve(
+                    path.dirname(here),
+                    '..',
+                    'ui',
+                    'model-manager.js',
+                ),
                 'utf8',
             );
         });
 
         it('save_settings catch forwards with context=save_settings', () => {
-            const idx = settingsSrc.indexOf("context: 'save_settings'");
+            const idx = settingsFormSrc.indexOf("context: 'save_settings'");
             expect(idx).toBeGreaterThan(-1);
             // Sanity: nearby code must reference the invoke command
-            expect(settingsSrc.substring(idx - 400, idx)).toContain(
+            expect(settingsFormSrc.substring(idx - 400, idx)).toContain(
                 'log_frontend_error',
             );
         });
 
         it('test_llm_connection catch forwards with context=test_llm_connection', () => {
-            const idx = settingsSrc.indexOf("context: 'test_llm_connection'");
+            const idx = settingsFormSrc.indexOf(
+                "context: 'test_llm_connection'",
+            );
             expect(idx).toBeGreaterThan(-1);
         });
 
         it('download_whisper_model catch forwards with context=download_whisper_model', () => {
-            const idx = settingsSrc.indexOf(
+            const idx = modelManagerSrc.indexOf(
                 "context: 'download_whisper_model'",
             );
             expect(idx).toBeGreaterThan(-1);
         });
 
         it('delete_custom_model catch forwards with context=delete_custom_model', () => {
-            const idx = settingsSrc.indexOf("context: 'delete_custom_model'");
+            const idx = modelManagerSrc.indexOf(
+                "context: 'delete_custom_model'",
+            );
             expect(idx).toBeGreaterThan(-1);
         });
 
         it('F6 fix expression present (defensive cancel check)', () => {
             // Match the literal expression: e === 'download cancelled' || e?.message === 'download cancelled'
-            expect(settingsSrc).toContain(
+            expect(modelManagerSrc).toContain(
                 "e === 'download cancelled' || e?.message === 'download cancelled'",
             );
         });
 
         it('all 4 catch blocks use fire-and-forget .catch(() => {})', () => {
-            const matches = settingsSrc.match(/\.catch\(\(\) => \{\}\)/g) || [];
+            const combined = settingsFormSrc + modelManagerSrc;
+            const matches = combined.match(/\.catch\(\(\) => \{\}\)/g) || [];
             // 4 forwarding sites each contribute one fire-and-forget catch.
             expect(matches.length).toBeGreaterThanOrEqual(4);
         });
