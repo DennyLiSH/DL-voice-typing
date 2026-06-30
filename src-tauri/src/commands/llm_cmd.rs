@@ -1,4 +1,4 @@
-use super::MASKED_MARKER;
+use crate::config::ApiKeyMask;
 use crate::error::CommandError;
 use crate::llm::LLMClient;
 
@@ -11,12 +11,7 @@ pub async fn test_llm_connection(
     model: String,
     config_cache: tauri::State<'_, crate::config::ConfigCache>,
 ) -> Result<(), CommandError> {
-    let api_key = if api_key == MASKED_MARKER {
-        let config = config_cache.read_cached();
-        config.llm_api_key.clone()
-    } else {
-        api_key
-    };
+    let api_key = ApiKeyMask::unmask_or_keep(&api_key, &config_cache.read_cached().llm_api_key);
     let client = LLMClient::new(api_url, api_key, model);
     client.test_connection_sync().map_err(CommandError::from)
 }

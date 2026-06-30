@@ -1,17 +1,7 @@
-use crate::crypto;
 use crate::error::AppError;
 use crate::hotkey::parse_key_code;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use arc_swap::ArcSwap;
-
-const APP_DIR_NAME: &str = "dl-voice-typing";
-const CONFIG_FILE_NAME: &str = "config.json";
 
 /// Available languages for speech recognition: (code, display name).
 pub const LANGUAGES: &[(&str, &str)] = &[
@@ -272,21 +262,6 @@ pub enum DownloadMirror {
     HuggingFace,
 }
 
-/// Operational mode of the voice pipeline, derived from realtime_transcription
-/// and review_before_paste config flags. Used for exhaustive dispatch instead of
-/// scattered boolean checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PipelineMode {
-    /// RT=off, REVIEW=off: Classic full Whisper, direct inject.
-    ClassicDirect,
-    /// RT=off, REVIEW=on: Classic full Whisper, review window.
-    ClassicReview,
-    /// RT=on, REVIEW=off: Realtime transcription, direct inject (skip Whisper).
-    RealtimeDirect,
-    /// RT=on, REVIEW=on: Realtime transcription, live review window.
-    RealtimeReview,
-}
-
 impl DownloadMirror {
     /// All variants in order.
     pub fn all() -> &'static [DownloadMirror] {
@@ -310,46 +285,19 @@ impl DownloadMirror {
     }
 }
 
-/// Returns the models directory path.
-pub fn models_dir() -> PathBuf {
-    AppConfig::config_dir()
-        .unwrap_or_else(|_| dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")))
-        .join("models")
-}
-
-/// Returns the model file path for a given model.
-pub fn model_path_for_size(model: &WhisperModel) -> PathBuf {
-    models_dir().join(model.filename().as_ref())
-}
-
-/// Check which Whisper models are present on disk.
-pub fn check_whisper_models() -> HashMap<String, bool> {
-    WhisperModel::all_built_in()
-        .iter()
-        .map(|m| (m.size_str().to_string(), model_path_for_size(m).exists()))
-        .collect()
-}
-
-/// Scan a directory for custom model files (non-built-in .bin files).
-/// Returns sorted filenames.
-pub fn scan_custom_models_in(dir: &std::path::Path) -> Vec<String> {
-    let built_in = WhisperModel::built_in_filenames();
-    let mut customs = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".bin") && !built_in.contains(name.as_str()) {
-                customs.push(name);
-            }
-        }
-    }
-    customs.sort();
-    customs
-}
-
-/// Scan the default models directory for custom model files.
-pub fn scan_custom_models() -> Vec<String> {
-    scan_custom_models_in(&models_dir())
+/// Operational mode of the voice pipeline, derived from realtime_transcription
+/// and review_before_paste config flags. Used for exhaustive dispatch instead of
+/// scattered boolean checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PipelineMode {
+    /// RT=off, REVIEW=off: Classic full Whisper, direct inject.
+    ClassicDirect,
+    /// RT=off, REVIEW=on: Classic full Whisper, review window.
+    ClassicReview,
+    /// RT=on, REVIEW=off: Realtime transcription, direct inject (skip Whisper).
+    RealtimeDirect,
+    /// RT=on, REVIEW=on: Realtime transcription, live review window.
+    RealtimeReview,
 }
 
 /// Application configuration.
@@ -451,65 +399,6 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Returns the config directory path (%APPDATA%/dl-voice-typing).
-    pub fn config_dir() -> Result<PathBuf, AppError> {
-        let dir = dirs::config_dir()
-            .ok_or_else(|| AppError::Config("cannot determine config directory".to_string()))?;
-        Ok(dir.join(APP_DIR_NAME))
-    }
-
-    /// Returns the config file path.
-    pub fn config_path() -> Result<PathBuf, AppError> {
-        Ok(Self::config_dir()?.join(CONFIG_FILE_NAME))
-    }
-
-    /// Load config from disk. Returns default if file doesn't exist.
-    /// Returns default + logs warning if file is corrupt.
-    /// Automatically decrypts DPAPI-encrypted API keys; plaintext keys
-    /// are left as-is (migrated to encrypted on next save).
-    pub fn load() -> Result<Self, AppError> {
-        let path = Self::config_path()?;
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let content = fs::read_to_string(&path)?;
-        let mut config: AppConfig = serde_json::from_str(&content)?;
-
-        // Decrypt API key if encrypted; plaintext keys stay as-is (auto-migrate on next save).
-        if !config.llm_api_key.is_empty() && crypto::is_encrypted(&config.llm_api_key) {
-            config.llm_api_key = crypto::decrypt(&config.llm_api_key)?;
-        }
-
-        Ok(config)
-    }
-
-    /// Load config and return the raw (possibly encrypted) API key without decrypting.
-    /// Used when the frontend sends a masked marker and we need to preserve the existing key.
-    pub fn load_raw_api_key() -> Result<String, AppError> {
-        let path = Self::config_path()?;
-        if !path.exists() {
-            return Ok(String::new());
-        }
-        let content = fs::read_to_string(&path)?;
-        let config: AppConfig = serde_json::from_str(&content)?;
-        Ok(config.llm_api_key)
-    }
-
-    /// Save config to disk. The API key is encrypted via DPAPI before writing.
-    pub fn save(&self) -> Result<(), AppError> {
-        let dir = Self::config_dir()?;
-        fs::create_dir_all(&dir)?;
-
-        let mut for_disk = self.clone();
-        if !for_disk.llm_api_key.is_empty() {
-            for_disk.llm_api_key = crypto::encrypt(&for_disk.llm_api_key)?;
-        }
-
-        let content = serde_json::to_string_pretty(&for_disk)?;
-        fs::write(Self::config_path()?, content)?;
-        Ok(())
-    }
-
     /// Validate config fields.
     /// Model, language, and mirror are enforced by the type system (enums).
     pub fn validate(&self) -> Result<(), AppError> {
@@ -533,39 +422,7 @@ impl AppConfig {
         }
         Ok(())
     }
-}
 
-/// In-memory config cache using wait-free atomic pointer swaps.
-/// Optimized for "very frequent reads, very rare writes" pattern.
-#[derive(Clone)]
-pub struct ConfigCache {
-    snapshot: Arc<ArcSwap<AppConfig>>,
-}
-
-impl ConfigCache {
-    /// Create a new cache with the given initial config.
-    pub fn new(initial: AppConfig) -> Self {
-        Self {
-            snapshot: Arc::new(ArcSwap::new(Arc::new(initial))),
-        }
-    }
-
-    /// Read from the in-memory cache.
-    /// Returns an `Arc<AppConfig>` — callers can clone the Arc (atomic refcount bump)
-    /// or deref to `&AppConfig` for read-only access.
-    pub fn read_cached(&self) -> Arc<AppConfig> {
-        self.snapshot.load_full()
-    }
-
-    /// Save to disk AND atomically update the in-memory cache.
-    pub fn save_cached(&self, config: &AppConfig) -> Result<(), AppError> {
-        config.save()?;
-        self.snapshot.store(Arc::new(config.clone()));
-        Ok(())
-    }
-}
-
-impl AppConfig {
     /// Derive the pipeline mode from realtime_transcription and review_before_paste.
     pub fn pipeline_mode(&self) -> PipelineMode {
         match (self.realtime_transcription, self.review_before_paste) {
@@ -580,7 +437,6 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn test_default_values() {
@@ -594,48 +450,43 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_deserialize() {
+    fn test_serialize_deserialize() -> Result<(), Box<dyn std::error::Error>> {
         let config = AppConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config)?;
+        let parsed: AppConfig = serde_json::from_str(&json)?;
         assert_eq!(config.hotkey, parsed.hotkey);
         assert_eq!(config.language, parsed.language);
+        Ok(())
     }
 
     #[test]
-    fn test_enum_serialization_format() {
-        // Verify serde(rename_all = "lowercase") produces the expected strings.
-        assert_eq!(serde_json::to_string(&Language::Zh).unwrap(), r#""zh""#);
-        assert_eq!(serde_json::to_string(&Language::En).unwrap(), r#""en""#);
+    fn test_enum_serialization_format() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(serde_json::to_string(&Language::Zh)?, r#""zh""#);
+        assert_eq!(serde_json::to_string(&Language::En)?, r#""en""#);
+        assert_eq!(serde_json::to_string(&WhisperModel::Base)?, r#""base""#);
         assert_eq!(
-            serde_json::to_string(&WhisperModel::Base).unwrap(),
-            r#""base""#
-        );
-        assert_eq!(
-            serde_json::to_string(&DownloadMirror::HfMirror).unwrap(),
+            serde_json::to_string(&DownloadMirror::HfMirror)?,
             r#""hf-mirror""#
         );
         assert_eq!(
-            serde_json::to_string(&DownloadMirror::HuggingFace).unwrap(),
+            serde_json::to_string(&DownloadMirror::HuggingFace)?,
             r#""huggingface""#
         );
+        Ok(())
     }
 
     #[test]
-    fn test_enum_deserialization_from_string() {
-        // Verify old JSON string values can be parsed back into enums.
+    fn test_enum_deserialization_from_string() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
-            serde_json::from_str::<WhisperModel>(r#""tiny""#).unwrap(),
+            serde_json::from_str::<WhisperModel>(r#""tiny""#)?,
             WhisperModel::Tiny
         );
+        assert_eq!(serde_json::from_str::<Language>(r#""ja""#)?, Language::Ja);
         assert_eq!(
-            serde_json::from_str::<Language>(r#""ja""#).unwrap(),
-            Language::Ja
-        );
-        assert_eq!(
-            serde_json::from_str::<DownloadMirror>(r#""huggingface""#).unwrap(),
+            serde_json::from_str::<DownloadMirror>(r#""huggingface""#)?,
             DownloadMirror::HuggingFace
         );
+        Ok(())
     }
 
     #[test]
@@ -695,68 +546,34 @@ mod tests {
     }
 
     #[test]
-    fn test_model_path_for_size() {
-        let path = model_path_for_size(&WhisperModel::Base);
-        assert!(path.to_string_lossy().contains("ggml-base.bin"));
-    }
-
-    #[test]
-    fn test_check_whisper_models() {
-        let models = check_whisper_models();
-        assert_eq!(models.len(), 8);
-        assert!(models.contains_key("tiny"));
-        assert!(models.contains_key("base"));
-        assert!(models.contains_key("small"));
-        assert!(models.contains_key("medium"));
-    }
-
-    #[test]
-    fn test_save_and_load() {
-        let dir = std::env::temp_dir().join("dl-voice-typing-test-config");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
+    fn test_validate_rejects_invalid_hotkey() {
         let config = AppConfig {
-            hotkey: "F9".to_string(),
-            language: Language::En,
-            ..Default::default()
-        };
-
-        // Manually save/load from the temp dir
-        let path = dir.join(CONFIG_FILE_NAME);
-        let content = serde_json::to_string_pretty(&config).unwrap();
-        fs::write(&path, &content).unwrap();
-
-        let loaded: AppConfig = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(loaded.hotkey, "F9");
-        assert_eq!(loaded.language, Language::En);
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_load_missing_file_returns_default() {
-        // Ensure the config_path won't collide with real config
-        let result = AppConfig::load();
-        // Should succeed (either loads existing or returns default)
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_rejects_data_saving_without_path() {
-        let config = AppConfig {
-            data_saving_enabled: true,
-            data_saving_path: String::new(),
+            hotkey: "NoSuchKey".to_string(),
             ..Default::default()
         };
         assert!(config.validate().is_err());
     }
 
     #[test]
-    fn test_validate_accepts_data_saving_with_path() {
+    fn test_validate_rejects_empty_llm_when_enabled() {
         let config = AppConfig {
-            data_saving_enabled: true,
-            data_saving_path: "/tmp/training-data".to_string(),
+            llm_enabled: true,
+            llm_api_url: String::new(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_config() {
+        let config = AppConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_accepts_llm_disabled_with_empty_fields() {
+        let config = AppConfig {
+            llm_enabled: false,
             ..Default::default()
         };
         assert!(config.validate().is_ok());
@@ -773,79 +590,13 @@ mod tests {
     }
 
     #[test]
-    fn test_new_fields_default_values() {
-        let config = AppConfig::default();
-        assert!(!config.data_saving_enabled);
-        assert!(config.data_saving_path.is_empty());
-    }
-
-    #[test]
-    fn test_new_fields_serialize_deserialize() {
+    fn test_validate_rejects_data_saving_without_path() {
         let config = AppConfig {
             data_saving_enabled: true,
-            data_saving_path: "/some/path".to_string(),
+            data_saving_path: String::new(),
             ..Default::default()
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
-        assert!(parsed.data_saving_enabled);
-        assert_eq!(parsed.data_saving_path, "/some/path");
-    }
-
-    #[test]
-    fn test_save_encrypts_api_key() {
-        // save() encrypts the key via DPAPI before writing to JSON.
-        let config = AppConfig {
-            llm_api_key: "sk-test-secret-key".to_string(),
-            ..Default::default()
-        };
-        // Clone config and encrypt key manually (same logic as save()).
-        let mut for_disk = config.clone();
-        for_disk.llm_api_key = crate::crypto::encrypt(&for_disk.llm_api_key).unwrap();
-        let json = serde_json::to_string(&for_disk).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let stored_key = parsed["llm_api_key"].as_str().unwrap();
-        assert!(stored_key.starts_with("DPAPI:"));
-        assert_ne!(stored_key, "sk-test-secret-key");
-    }
-
-    #[test]
-    fn test_save_empty_key_not_encrypted() {
-        let config = AppConfig {
-            llm_api_key: String::new(),
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["llm_api_key"].as_str().unwrap(), "");
-    }
-
-    #[test]
-    fn test_load_decrypts_encrypted_key() {
-        let encrypted = crate::crypto::encrypt("sk-test-key").unwrap();
-        let config = AppConfig {
-            llm_api_key: encrypted,
-            ..Default::default()
-        };
-        let json = serde_json::to_string_pretty(&config).unwrap();
-
-        // Parse it back as if loading from disk — but we need to parse
-        // without the save() encryption step.
-        // The key in json is still DPAPI:... because we bypassed save()
-        // Simulate load behavior manually:
-        let mut loaded: AppConfig = serde_json::from_str(&json).unwrap();
-        if !loaded.llm_api_key.is_empty() && crate::crypto::is_encrypted(&loaded.llm_api_key) {
-            loaded.llm_api_key = crate::crypto::decrypt(&loaded.llm_api_key).unwrap();
-        }
-        assert_eq!(loaded.llm_api_key, "sk-test-key");
-    }
-
-    #[test]
-    fn test_load_preserves_plaintext_key() {
-        // Plaintext key should remain as-is (auto-migrate on next save).
-        let json = r#"{"hotkey":"RightCtrl","language":"zh","whisper_model":"base","llm_enabled":false,"llm_api_url":"","llm_api_key":"sk-plaintext-legacy","llm_model":"","download_mirror":"hf-mirror","data_saving_enabled":false,"data_saving_path":"","review_before_paste":false,"autostart":false}"#;
-        let config: AppConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.llm_api_key, "sk-plaintext-legacy");
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -869,27 +620,29 @@ mod tests {
     }
 
     #[test]
-    fn test_whisper_model_custom_serde_roundtrip() {
+    fn test_whisper_model_custom_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         let model = WhisperModel::Custom("my-model.bin".to_string());
-        let json = serde_json::to_string(&model).unwrap();
+        let json = serde_json::to_string(&model)?;
         assert_eq!(json, r#""custom:my-model.bin""#);
-        let parsed: WhisperModel = serde_json::from_str(&json).unwrap();
+        let parsed: WhisperModel = serde_json::from_str(&json)?;
         assert_eq!(parsed, model);
+        Ok(())
     }
 
     #[test]
-    fn test_whisper_model_custom_in_config() {
+    fn test_whisper_model_custom_in_config() -> Result<(), Box<dyn std::error::Error>> {
         let config = AppConfig {
             whisper_model: WhisperModel::Custom("my-model.bin".to_string()),
             ..Default::default()
         };
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config)?;
         assert!(json.contains(r#""whisper_model":"custom:my-model.bin""#));
-        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
+        let parsed: AppConfig = serde_json::from_str(&json)?;
         assert_eq!(
             parsed.whisper_model,
             WhisperModel::Custom("my-model.bin".to_string())
         );
+        Ok(())
     }
 
     #[test]
@@ -911,34 +664,18 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_custom_models() {
-        let dir = std::env::temp_dir().join("dl-voice-typing-test-models-scan");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        fs::write(dir.join("ggml-base.bin"), b"fake").unwrap();
-        fs::write(dir.join("my-custom.bin"), b"fake").unwrap();
-        fs::write(dir.join("other-model.bin"), b"fake").unwrap();
-        fs::write(dir.join("readme.txt"), b"ignore").unwrap();
-
-        let customs = scan_custom_models_in(&dir);
-        assert_eq!(customs, vec!["my-custom.bin", "other-model.bin"]);
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_whisper_model_q8_serde_roundtrip() {
+    fn test_whisper_model_q8_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         for model in [
             WhisperModel::TinyQ8,
             WhisperModel::BaseQ8,
             WhisperModel::SmallQ8,
             WhisperModel::MediumQ8,
         ] {
-            let json = serde_json::to_string(&model).unwrap();
-            let parsed: WhisperModel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&model)?;
+            let parsed: WhisperModel = serde_json::from_str(&json)?;
             assert_eq!(parsed, model);
         }
+        Ok(())
     }
 
     #[test]

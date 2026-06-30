@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isConfigDirty, validateSettings } from '../lib/settings-utils.js';
+import { MASKED_MARKER } from '../ui/lib/api-key-mask.js';
+import { isConfigDirty, validateSettings } from '../ui/lib/settings-utils.js';
 
 const baseConfig = {
     language: 'zh',
@@ -42,13 +43,13 @@ describe('isConfigDirty', () => {
     });
 
     it('returns false when API key is masked', () => {
-        const loaded = { ...baseConfig, llm_api_key: '__MASKED__' };
-        const current = { ...baseConfig, llm_api_key: '__MASKED__' };
+        const loaded = { ...baseConfig, llm_api_key: MASKED_MARKER };
+        const current = { ...baseConfig, llm_api_key: MASKED_MARKER };
         expect(isConfigDirty(current, loaded)).toBe(false);
     });
 
     it('returns true when API key is a new value', () => {
-        const loaded = { ...baseConfig, llm_api_key: '__MASKED__' };
+        const loaded = { ...baseConfig, llm_api_key: MASKED_MARKER };
         const current = { ...baseConfig, llm_api_key: 'sk-new-key' };
         expect(isConfigDirty(current, loaded)).toBe(true);
     });

@@ -1,3 +1,4 @@
+import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { hideError, showError } from './lib/ui-utils.js';
 import { getModelStatus, getSelectedModel } from './model-manager.js';
 
@@ -43,7 +44,7 @@ export function populateFields(config) {
     apiUrlInput.value = config.llm_api_url || '';
     modelInput.value = config.llm_model || '';
     // Handle masked API key: clear input, show placeholder
-    if (config.llm_api_key === '__MASKED__') {
+    if (config.llm_api_key === MASKED_MARKER) {
         apiKeyInput.value = '';
         apiKeyInput.placeholder = 'API Key 已设置';
     } else {
@@ -224,8 +225,8 @@ testBtn.addEventListener('click', async () => {
     // If key input is empty and a key was previously set, use masked marker.
     // Otherwise, require the user to enter a key.
     const hasExistingKey =
-        loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
-    const apiKey = apiKeyRaw || (hasExistingKey ? '__MASKED__' : '');
+        loadedConfig && loadedConfig.llm_api_key === MASKED_MARKER;
+    const apiKey = apiKeyRaw || (hasExistingKey ? MASKED_MARKER : '');
 
     if (!apiUrl || !apiKey || !model) {
         setTestStatus('请填写所有字段', 'error');
@@ -266,9 +267,9 @@ export function updateDirtyState() {
 
     const current = getCurrentConfig();
     // API key dirty check: only dirty if user typed a new key (non-empty, non-masked)
-    const hasExistingKey = loadedConfig.llm_api_key === '__MASKED__';
+    const hasExistingKey = loadedConfig.llm_api_key === MASKED_MARKER;
     const apiKeyDirty = hasExistingKey
-        ? current.llm_api_key !== '__MASKED__'
+        ? current.llm_api_key !== MASKED_MARKER
         : current.llm_api_key !== loadedConfig.llm_api_key;
     isDirty =
         current.language !== loadedConfig.language ||
@@ -294,14 +295,14 @@ export function getCurrentConfig() {
     const apiKeyValue = apiKeyInput.value.trim();
     // Send masked marker only if user hasn't typed anything AND a key was previously set
     const hasExistingKey =
-        loadedConfig && loadedConfig.llm_api_key === '__MASKED__';
+        loadedConfig && loadedConfig.llm_api_key === MASKED_MARKER;
     return {
         language: languageSelect.value,
         hotkey: hotkeySelect.value,
         whisper_model: getSelectedModel(),
         llm_enabled: llmToggle.classList.contains('active'),
         llm_api_url: apiUrlInput.value.trim(),
-        llm_api_key: apiKeyValue || (hasExistingKey ? '__MASKED__' : ''),
+        llm_api_key: apiKeyValue || (hasExistingKey ? MASKED_MARKER : ''),
         llm_model: modelInput.value.trim(),
         download_mirror: downloadMirrorSelect.value,
         data_saving_enabled: dataSavingToggle.classList.contains('active'),

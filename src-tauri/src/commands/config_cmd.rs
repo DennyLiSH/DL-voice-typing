@@ -1,7 +1,6 @@
-use super::MASKED_MARKER;
 use super::hotkey_pipeline::make_hotkey_callback;
 use super::pipeline_state::PipelineState;
-use crate::config::AppConfig;
+use crate::config::{ApiKeyMask, AppConfig};
 use crate::error::CommandError;
 use crate::hotkey::HotkeyManager;
 use crate::hotkey::windows::WindowsHotkeyManager;
@@ -45,9 +44,7 @@ pub fn get_config(
     config_cache: tauri::State<'_, crate::config::ConfigCache>,
 ) -> Result<AppConfig, CommandError> {
     let mut config: AppConfig = (*config_cache.read_cached()).clone();
-    if !config.llm_api_key.is_empty() {
-        config.llm_api_key = MASKED_MARKER.to_string();
-    }
+    config.llm_api_key = ApiKeyMask::mask(&config.llm_api_key);
     Ok(config)
 }
 
@@ -68,11 +65,7 @@ pub fn save_settings(
 
     // If the frontend sent the masked marker, preserve the existing decrypted key.
     let mut config = config;
-    if config.llm_api_key == MASKED_MARKER
-        || (config.llm_api_key.is_empty() && !old_config.llm_api_key.is_empty())
-    {
-        config.llm_api_key = old_config.llm_api_key.clone();
-    }
+    config.llm_api_key = ApiKeyMask::unmask_or_keep(&config.llm_api_key, &old_config.llm_api_key);
 
     // Save new config to disk and update cache (save_cached encrypts the API key).
     config_cache

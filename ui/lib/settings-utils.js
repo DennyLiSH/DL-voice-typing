@@ -1,9 +1,13 @@
+import { MASKED_MARKER } from './api-key-mask.js';
+
 /**
  * Compare current config against loaded config to determine dirty state.
  * Special handling: masked API key is never considered dirty.
  */
 export function isConfigDirty(current, loaded) {
-    const apiKeyDirty = current.llm_api_key !== '__MASKED__' && current.llm_api_key !== loaded.llm_api_key;
+    const apiKeyDirty =
+        current.llm_api_key !== MASKED_MARKER &&
+        current.llm_api_key !== loaded.llm_api_key;
     return (
         current.language !== loaded.language ||
         current.hotkey !== loaded.hotkey ||
@@ -26,10 +30,16 @@ export function isConfigDirty(current, loaded) {
  * Returns { valid: boolean, error: string|null }.
  */
 export function validateSettings(config, modelStatus) {
-    if (config.llm_enabled && (!config.llm_api_url || !config.llm_api_key || !config.llm_model)) {
-        return { valid: false, error: '启用 LLM 时，API 地址、密钥和模型名称不能为空' };
+    if (
+        config.llm_enabled &&
+        (!config.llm_api_url || !config.llm_api_key || !config.llm_model)
+    ) {
+        return {
+            valid: false,
+            error: '启用 LLM 时，API 地址、密钥和模型名称不能为空',
+        };
     }
-    const isCustomModel = config.whisper_model && config.whisper_model.startsWith('custom:');
+    const isCustomModel = config.whisper_model?.startsWith('custom:');
     if (!isCustomModel && !modelStatus[config.whisper_model]) {
         return { valid: false, error: '请先下载所选的 Whisper 模型' };
     }

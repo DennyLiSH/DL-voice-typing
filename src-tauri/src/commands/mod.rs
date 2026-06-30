@@ -73,9 +73,6 @@ impl EventEmitter for MockEmitter {
     }
 }
 
-/// Sentinel value returned to frontend when an API key exists but should not be exposed.
-pub const MASKED_MARKER: &str = "__MASKED__";
-
 // Re-export all public items so `lib.rs` requires no changes.
 pub use config_cmd::{get_compute_mode, get_config, is_autostart_available, save_settings};
 pub use download::{
