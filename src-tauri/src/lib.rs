@@ -295,6 +295,9 @@ fn manage_pipeline_state(
     app.manage(shutting_down);
     app.manage(cached_llm);
     app.manage(Arc::new(Mutex::new(None::<realtime::RealtimeTranscriber>)));
+    // Register PipelineState as the canonical command-facing aggregate so that
+    // review commands and future commands no longer lock StateMachine directly.
+    app.manage(commands::pipeline_state::PipelineState::from_app(app));
 }
 
 /// Register the global hotkey from config. Warns but does not fail on error.

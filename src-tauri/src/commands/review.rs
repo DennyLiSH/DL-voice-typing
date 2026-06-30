@@ -1,7 +1,7 @@
 use crate::clipboard::AnyClipboard;
 use crate::commands::pipeline_state::PipelineState;
 use crate::error::CommandError;
-use crate::state::StateMachine;
+use crate::state::StateTag;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
@@ -95,7 +95,7 @@ pub fn get_review_text(
 #[tauri::command]
 pub async fn confirm_inject(
     text: String,
-    state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
+    ps: tauri::State<'_, PipelineState>,
     clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
@@ -162,34 +162,30 @@ pub async fn confirm_inject(
 
     // 4. State transition — handle both Reviewing (normal) and Recording/Transcribing
     //    (user confirmed early during realtime+review before pipeline finished).
-    let was_reviewing = {
-        let mut sm = state_machine.lock().map_err(|e| CommandError {
-            code: "LOCK".to_string(),
-            message: e.to_string(),
-        })?;
-        match sm.state() {
-            crate::state::StateTag::Reviewing => {
-                sm.reviewing_to_injecting().map_err(|e| CommandError {
-                    code: "STATE".to_string(),
-                    message: e.to_string(),
-                })?;
+    let was_reviewing = match ps.sm_state() {
+        Some(StateTag::Reviewing) => {
+            if ps.sm_reviewing_to_injecting() {
                 true
-            }
-            crate::state::StateTag::Recording | crate::state::StateTag::Transcribing => {
-                // Early confirm during recording — stop audio capture and
-                // realtime transcriber, then reset state to Idle.
-                info!("confirm_inject: early confirm during recording/transcribing");
-                let ps = PipelineState::from_app(&app);
-                ps.stop_recording_resources_graceful();
-                sm.reset();
-                false
-            }
-            _ => {
+            } else {
                 return Err(CommandError {
                     code: "STATE".to_string(),
-                    message: "cannot confirm from current state".to_string(),
+                    message: "reviewing_to_injecting failed".to_string(),
                 });
             }
+        }
+        Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
+            // Early confirm during recording — stop audio capture and
+            // realtime transcriber, then reset state to Idle.
+            info!("confirm_inject: early confirm during recording/transcribing");
+            ps.stop_recording_resources_graceful();
+            ps.sm_reset();
+            false
+        }
+        _ => {
+            return Err(CommandError {
+                code: "STATE".to_string(),
+                message: "cannot confirm from current state".to_string(),
+            });
         }
     };
 
@@ -201,11 +197,7 @@ pub async fn confirm_inject(
 
     // 6. Finish state transition (only needed for Reviewing path)
     if was_reviewing {
-        let mut sm = state_machine.lock().map_err(|e| CommandError {
-            code: "LOCK".to_string(),
-            message: e.to_string(),
-        })?;
-        let _ = sm.finish_injecting();
+        ps.sm_finish_injecting();
     }
 
     // 7. Reset shown_on_press flag
@@ -234,37 +226,32 @@ pub async fn confirm_inject(
 /// Runs async on the Tokio runtime to avoid blocking the main thread.
 #[tauri::command]
 pub async fn cancel_review(
-    state_machine: tauri::State<'_, Arc<Mutex<StateMachine>>>,
+    ps: tauri::State<'_, PipelineState>,
     clipboard: tauri::State<'_, Arc<Mutex<AnyClipboard>>>,
     app: tauri::AppHandle,
 ) -> Result<(), CommandError> {
     // 1. Cancel: Reviewing/Recording/Transcribing → Idle
-    {
-        let mut sm = state_machine.lock().map_err(|e| CommandError {
-            code: "LOCK".to_string(),
-            message: e.to_string(),
-        })?;
-        match sm.state() {
-            crate::state::StateTag::Reviewing => {
-                sm.cancel_reviewing().map_err(|e| CommandError {
-                    code: "STATE".to_string(),
-                    message: e.to_string(),
-                })?;
-            }
-            crate::state::StateTag::Recording | crate::state::StateTag::Transcribing => {
-                // Early cancel during recording — stop audio capture and
-                // realtime transcriber, then reset state to Idle.
-                info!("cancel_review: early cancel during recording/transcribing");
-                let ps = PipelineState::from_app(&app);
-                ps.stop_recording_resources_graceful();
-                sm.reset();
-            }
-            _ => {
+    match ps.sm_state() {
+        Some(StateTag::Reviewing) => {
+            if !ps.sm_cancel_reviewing() {
                 return Err(CommandError {
                     code: "STATE".to_string(),
-                    message: "cannot cancel from current state".to_string(),
+                    message: "cancel_reviewing failed".to_string(),
                 });
             }
+        }
+        Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
+            // Early cancel during recording — stop audio capture and
+            // realtime transcriber, then reset state to Idle.
+            info!("cancel_review: early cancel during recording/transcribing");
+            ps.stop_recording_resources_graceful();
+            ps.sm_reset();
+        }
+        _ => {
+            return Err(CommandError {
+                code: "STATE".to_string(),
+                message: "cannot cancel from current state".to_string(),
+            });
         }
     }
 

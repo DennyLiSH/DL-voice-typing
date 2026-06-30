@@ -17,21 +17,21 @@ use tracing::{info, warn};
 /// Aggregated shared state for the hotkey pipeline.
 /// Eliminates the need to pass 8 individual `Arc` references to `make_hotkey_callback`.
 #[derive(Clone)]
-pub(crate) struct PipelineState {
+pub struct PipelineState {
     pub(crate) sm: Arc<Mutex<StateMachine>>,
-    pub ac: Arc<Mutex<dyn AudioCaptureProvider>>,
-    pub engine: Arc<AnyEngine>,
-    pub clipboard: Arc<Mutex<AnyClipboard>>,
-    pub perf_history: Arc<PerfHistory>,
-    pub config_cache: ConfigCache,
-    pub cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
-    pub realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
-    pub window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
-    pub emitter: Arc<dyn EventEmitter>,
-    pub review: Arc<dyn ReviewProvider>,
+    pub(crate) ac: Arc<Mutex<dyn AudioCaptureProvider>>,
+    pub(crate) engine: Arc<AnyEngine>,
+    pub(crate) clipboard: Arc<Mutex<AnyClipboard>>,
+    pub(crate) perf_history: Arc<PerfHistory>,
+    pub(crate) config_cache: ConfigCache,
+    pub(crate) cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
+    pub(crate) realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
+    pub(crate) window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
+    pub(crate) emitter: Arc<dyn EventEmitter>,
+    pub(crate) review: Arc<dyn ReviewProvider>,
     /// Decoupled audio buffer for lock-free realtime reads.
     /// Capacity: 60 seconds @ 48kHz = 2,880,000 samples.
-    pub audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
+    pub(crate) audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
 }
 
 impl PipelineState {
@@ -41,7 +41,7 @@ impl PipelineState {
 
     /// Direct constructor for testing. Each component is injectable.
     #[allow(dead_code, clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         sm: Arc<Mutex<StateMachine>>,
         ac: Arc<Mutex<dyn AudioCaptureProvider>>,
         engine: Arc<AnyEngine>,
