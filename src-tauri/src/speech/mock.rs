@@ -16,7 +16,7 @@ impl MockEngine {
         }
     }
 
-    /// Change the fixed response returned by `transcribe` / `transcribe_sync`.
+    /// Change the fixed response returned by `transcribe_sync`.
     pub fn set_response(&mut self, response: impl Into<String>) {
         self.response = response.into();
     }
@@ -28,13 +28,6 @@ impl MockEngine {
 }
 
 impl SpeechEngine for MockEngine {
-    async fn transcribe(&self, _samples: &[f32]) -> Result<String, AppError> {
-        if !self.ready {
-            return Err(AppError::Speech("mock engine not ready".to_string()));
-        }
-        Ok(self.response.clone())
-    }
-
     fn transcribe_sync(&self, _samples: &[f32]) -> Result<String, AppError> {
         if !self.ready {
             return Err(AppError::Speech("mock engine not ready".to_string()));
@@ -51,27 +44,44 @@ impl SpeechEngine for MockEngine {
     }
 }
 
-#[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_mock_transcribe() {
+    #[test]
+    fn test_mock_transcribe_sync() {
         let engine = MockEngine::new("hello world");
-        let result = engine.transcribe(&[0.0]).await.unwrap();
-        assert_eq!(result, "hello world");
+        let result = engine.transcribe_sync(&[0.0]);
+        assert!(result.is_ok(), "transcribe_sync should succeed");
+        assert_eq!(result.unwrap_or_default(), "hello world");
     }
 
-    #[tokio::test]
-    async fn test_mock_not_ready() {
+    #[test]
+    fn test_mock_not_ready() {
         let mut engine = MockEngine::new("test");
         engine.set_ready(false);
-        assert!(engine.transcribe(&[0.0]).await.is_err());
+        let result = engine.transcribe_sync(&[0.0]);
+        assert!(
+            result.is_err(),
+            "transcribe_sync should fail when not ready"
+        );
     }
 
     #[test]
     fn test_mock_name() {
         let engine = MockEngine::new("test");
         assert_eq!(engine.name(), "Mock");
+    }
+
+    #[test]
+    fn test_mock_transcribe_sync_with_context_ignores_context() {
+        let engine = MockEngine::new("hello");
+        let with_ctx = engine.transcribe_sync_with_context(&[0.5f32; 100], Some("ignored context"));
+        let without_ctx = engine.transcribe_sync(&[0.5f32; 100]);
+        assert!(
+            with_ctx.is_ok(),
+            "transcribe_sync_with_context should succeed"
+        );
+        assert_eq!(with_ctx.unwrap_or_default(), "hello");
+        assert_eq!(without_ctx.unwrap_or_default(), "hello");
     }
 }

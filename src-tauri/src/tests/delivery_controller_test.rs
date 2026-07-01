@@ -14,7 +14,7 @@ use crate::commands::window_controller::{NoopWindowController, WindowController}
 use crate::config::{AppConfig, ConfigCache};
 use crate::llm::{AnyCorrector, MockCorrector};
 use crate::perf::PerfHistory;
-use crate::speech::{AnyEngine, mock::MockEngine};
+use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -22,7 +22,7 @@ use std::time::Instant;
 fn build_ps() -> (PipelineState, Arc<MockEmitter>) {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let engine = Arc::new(AnyEngine::Mock(MockEngine::new("test")));
+    let engine = Arc::new(MockEngine::new("test"));
     let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
     let emitter = Arc::new(MockEmitter::new());
     let ps = PipelineState::new(

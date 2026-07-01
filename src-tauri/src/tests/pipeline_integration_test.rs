@@ -9,7 +9,7 @@ use crate::clipboard::{AnyClipboard, ClipboardProvider, MockClipboard};
 use crate::commands::{EventEmitter, MockEmitter};
 use crate::config::AppConfig;
 use crate::llm::{AnyCorrector, MockCorrector, TextCorrector};
-use crate::speech::{AnyEngine, SpeechEngine};
+use crate::speech::{SpeechEngine, mock::MockEngine};
 use crate::state::StateMachine;
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 #[test]
 fn test_mock_engine_transcribes() {
-    let engine = AnyEngine::new_mock("test transcription");
+    let engine = MockEngine::new("test transcription");
     let result = engine.transcribe_sync(&[0.5f32; 1600]);
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "test transcription");
@@ -27,7 +27,7 @@ fn test_mock_engine_transcribes() {
 
 #[test]
 fn test_mock_engine_is_ready() {
-    let engine = AnyEngine::new_mock("test");
+    let engine = MockEngine::new("test");
     assert!(engine.is_ready());
 }
 
@@ -79,7 +79,7 @@ fn test_state_machine_with_mock_engine() {
     sm.start_recording().unwrap();
     sm.stop_recording().unwrap();
 
-    let engine = AnyEngine::new_mock("hello world");
+    let engine = MockEngine::new("hello world");
     let audio = vec![0.5f32; 1600];
     let text = engine.transcribe_sync(&audio).unwrap();
 

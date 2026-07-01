@@ -24,12 +24,16 @@ use config::{AppConfig, ConfigCache};
 use hotkey::HotkeyManager;
 use hotkey::windows::WindowsHotkeyManager;
 use perf::PerfHistory;
-use speech::AnyEngine;
+use speech::SpeechEngine;
+#[cfg(feature = "whisper")]
+use speech::whisper_factory::WhisperEngineFactory;
 use state::StateMachine;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager};
+#[cfg(feature = "whisper")]
+use tauri::Emitter;
+use tauri::Manager;
 use time::UtcOffset;
 use time::format_description::well_known::Rfc3339;
 use tracing::{info, warn};
@@ -57,8 +61,7 @@ pub fn run() {
         .setup(move |app| {
             setup_tray_and_plugins(app)?;
             let config = load_and_manage_config(app.handle());
-            let engine = init_and_manage_engine(app.handle(), &config);
-            spawn_model_loading(engine, app.handle().clone());
+            let _engine = init_and_manage_engine(app.handle(), &config);
             create_overlay_windows(app)?;
             manage_pipeline_state(
                 app.handle(),
@@ -208,25 +211,31 @@ fn load_and_manage_config(app: &tauri::AppHandle) -> AppConfig {
 }
 
 /// Create the speech engine, manage it in Tauri state, and return it.
-fn init_and_manage_engine(app: &tauri::AppHandle, config: &AppConfig) -> Arc<AnyEngine> {
-    let engine = {
-        #[cfg(feature = "whisper")]
-        {
-            let model_path = config::model_path_for_size(&config.whisper_model);
-            AnyEngine::new_whisper(model_path, config.language)
-        }
-        #[cfg(not(feature = "whisper"))]
-        {
-            AnyEngine::new_mock("[mock transcription]")
-        }
-    };
-    let engine = Arc::new(engine);
-    app.manage(engine.clone());
-    engine
+fn init_and_manage_engine(app: &tauri::AppHandle, _config: &AppConfig) -> Arc<dyn SpeechEngine> {
+    #[cfg(feature = "whisper")]
+    {
+        let config = _config;
+        let model_path = config::model_path_for_size(&config.whisper_model);
+        let whisper_engine = WhisperEngineFactory::create(model_path, config.language);
+        let engine: Arc<dyn SpeechEngine> = whisper_engine.clone();
+        app.manage(engine.clone());
+        spawn_model_loading(whisper_engine, app.clone());
+        engine
+    }
+    #[cfg(not(feature = "whisper"))]
+    {
+        let engine: Arc<dyn SpeechEngine> = Arc::new(speech::noop::NoopEngine::new());
+        app.manage(engine.clone());
+        engine
+    }
 }
 
 /// Load the Whisper model in a background thread so the UI stays responsive.
-fn spawn_model_loading(engine: Arc<AnyEngine>, app_handle: tauri::AppHandle) {
+#[cfg(feature = "whisper")]
+fn spawn_model_loading(
+    engine: Arc<crate::speech::whisper::WhisperEngine>,
+    app_handle: tauri::AppHandle,
+) {
     tauri::async_runtime::spawn_blocking(move || {
         info!("background model loading started");
         if let Err(e) = engine.load_model() {

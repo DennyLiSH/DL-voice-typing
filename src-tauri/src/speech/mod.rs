@@ -1,120 +1,41 @@
+#[cfg(test)]
 pub mod mock;
+#[cfg(not(feature = "whisper"))]
+pub mod noop;
 #[cfg(feature = "whisper")]
 pub mod whisper;
+#[cfg(feature = "whisper")]
+pub mod whisper_factory;
 
-use crate::config::Language;
 use crate::error::AppError;
 
 /// Trait for speech-to-text engines.
 ///
 /// Allows swapping backends (Whisper.cpp, cloud APIs) without changing consumers.
-/// Uses native async fn in traits (Rust 1.75+).
-#[allow(async_fn_in_trait)]
-pub trait SpeechEngine: Send + Sync {
-    /// Transcribe audio samples to text.
-    /// `samples` is 16kHz mono f32 audio.
-    async fn transcribe(&self, samples: &[f32]) -> Result<String, AppError>;
-
+/// Dyn-compatible: uses only `&self` methods, no generic parameters, no async methods.
+pub trait SpeechEngine: Send + Sync + 'static {
     /// Synchronous transcription (blocking). Use via `spawn_blocking` from async contexts.
     fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError>;
 
     /// Check if the engine's model is loaded and ready.
     fn is_ready(&self) -> bool;
 
-    /// Check if the engine is running on GPU (vs CPU fallback).
-    fn is_gpu_mode(&self) -> bool {
-        false
-    }
-
     /// Get the engine name for display.
     fn name(&self) -> &str;
-}
 
-/// Enum-based dispatch for speech engines (dyn-safe alternative).
-///
-/// Native `async fn` in traits is not dyn-compatible, so we use an enum
-/// to dispatch between concrete engine types.
-pub enum AnyEngine {
-    #[cfg(feature = "whisper")]
-    Whisper(whisper::WhisperEngine),
-    Mock(mock::MockEngine),
-}
-
-impl AnyEngine {
-    /// Create the appropriate engine based on the active feature flag.
-    #[cfg(feature = "whisper")]
-    pub fn new_whisper(model_path: std::path::PathBuf, language: Language) -> Self {
-        Self::Whisper(whisper::WhisperEngine::new(model_path, language))
-    }
-
-    /// Create a mock engine variant that always returns the given response.
-    pub fn new_mock(response: &str) -> Self {
-        Self::Mock(mock::MockEngine::new(response))
-    }
-
-    /// Load the model (only meaningful for Whisper).
-    pub fn load_model(&self) -> Result<(), AppError> {
-        match self {
-            #[cfg(feature = "whisper")]
-            Self::Whisper(e) => e.load_model(),
-            Self::Mock(_) => Ok(()),
-        }
+    /// Return the compute mode badge string for the UI.
+    /// Default is "unloaded"; WhisperEngine returns "gpu", "cpu", or "unloaded".
+    fn compute_mode(&self) -> &'static str {
+        "unloaded"
     }
 
     /// Transcribe with prior context for stabilizing overlapping regions.
-    /// For Whisper: appends `context` to the language anchor in `initial_prompt`.
-    /// For Mock/other engines: ignores context, delegates to `transcribe_sync`.
-    pub fn transcribe_sync_with_context(
+    /// Default implementation ignores context and delegates to `transcribe_sync`.
+    fn transcribe_sync_with_context(
         &self,
         samples: &[f32],
-        context: Option<&str>,
+        _context: Option<&str>,
     ) -> Result<String, AppError> {
-        match self {
-            #[cfg(feature = "whisper")]
-            Self::Whisper(e) => e.transcribe_with_context(samples, context),
-            Self::Mock(e) => e.transcribe_sync(samples),
-        }
-    }
-}
-
-impl SpeechEngine for AnyEngine {
-    async fn transcribe(&self, samples: &[f32]) -> Result<String, AppError> {
-        match self {
-            #[cfg(feature = "whisper")]
-            Self::Whisper(e) => e.transcribe(samples).await,
-            Self::Mock(e) => e.transcribe(samples).await,
-        }
-    }
-
-    fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
-        match self {
-            #[cfg(feature = "whisper")]
-            Self::Whisper(e) => e.transcribe_sync(samples),
-            Self::Mock(e) => e.transcribe_sync(samples),
-        }
-    }
-
-    fn is_ready(&self) -> bool {
-        match self {
-            #[cfg(feature = "whisper")]
-            Self::Whisper(e) => e.is_ready(),
-            Self::Mock(e) => e.is_ready(),
-        }
-    }
-
-    fn is_gpu_mode(&self) -> bool {
-        match self {
-            #[cfg(feature = "whisper")]
-            Self::Whisper(e) => e.is_gpu_mode(),
-            Self::Mock(_) => false,
-        }
-    }
-
-    fn name(&self) -> &str {
-        match self {
-            #[cfg(feature = "whisper")]
-            Self::Whisper(e) => e.name(),
-            Self::Mock(e) => e.name(),
-        }
+        self.transcribe_sync(samples)
     }
 }

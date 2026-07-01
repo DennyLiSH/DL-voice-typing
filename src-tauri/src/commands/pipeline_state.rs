@@ -9,7 +9,7 @@ use crate::config::ConfigCache;
 use crate::llm::AnyCorrector;
 use crate::perf::PerfHistory;
 use crate::realtime::RealtimeTranscriber;
-use crate::speech::AnyEngine;
+use crate::speech::SpeechEngine;
 use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -21,7 +21,7 @@ use tracing::{info, warn};
 pub struct PipelineState {
     pub(crate) sm: Arc<Mutex<StateMachine>>,
     pub(crate) ac: Arc<Mutex<dyn AudioCaptureProvider>>,
-    pub(crate) engine: Arc<AnyEngine>,
+    pub(crate) engine: Arc<dyn SpeechEngine>,
     pub(crate) clipboard: Arc<Mutex<AnyClipboard>>,
     pub(crate) perf_history: Arc<PerfHistory>,
     pub(crate) config_cache: ConfigCache,
@@ -47,7 +47,7 @@ impl PipelineState {
     pub(crate) fn new(
         sm: Arc<Mutex<StateMachine>>,
         ac: Arc<Mutex<dyn AudioCaptureProvider>>,
-        engine: Arc<AnyEngine>,
+        engine: Arc<dyn SpeechEngine>,
         clipboard: Arc<Mutex<AnyClipboard>>,
         perf_history: Arc<PerfHistory>,
         config_cache: ConfigCache,
@@ -103,7 +103,7 @@ impl PipelineState {
                 .state::<Arc<Mutex<dyn AudioCaptureProvider>>>()
                 .inner()
                 .clone(),
-            engine: app.state::<Arc<AnyEngine>>().inner().clone(),
+            engine: app.state::<Arc<dyn SpeechEngine>>().inner().clone(),
             clipboard,
             perf_history,
             config_cache: app.state::<ConfigCache>().inner().clone(),
@@ -348,7 +348,7 @@ mod sm_verb_tests {
     use crate::config::{AppConfig, ConfigCache};
     use crate::llm::{AnyCorrector, MockCorrector};
     use crate::perf::PerfHistory;
-    use crate::speech::{AnyEngine, mock::MockEngine};
+    use crate::speech::mock::MockEngine;
     use crate::state::StateTag;
 
     /// Minimal PipelineState for state-machine verb tests.
@@ -358,7 +358,7 @@ mod sm_verb_tests {
         PipelineState::new(
             Arc::new(Mutex::new(StateMachine::new())),
             Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(AnyEngine::Mock(MockEngine::new("test"))),
+            Arc::new(MockEngine::new("test")),
             Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new()))),
             Arc::new(PerfHistory::new()),
             ConfigCache::new(AppConfig::default()),

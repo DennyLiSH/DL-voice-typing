@@ -42,7 +42,7 @@ pub struct WhisperEngine {
 
 impl WhisperEngine {
     /// Create a new WhisperEngine with the given model path and language.
-    pub fn new(model_path: PathBuf, language: Language) -> Self {
+    pub(crate) fn new(model_path: PathBuf, language: Language) -> Self {
         Self {
             ctx: Mutex::new(None),
             state_pool: Mutex::new(Vec::new()),
@@ -241,13 +241,16 @@ impl WhisperEngine {
             .rev()
             .collect()
     }
+
+    /// Return whether the engine is currently running on GPU.
+    /// This is a Whisper-specific capability and not part of the generic `SpeechEngine` trait.
+    pub fn is_gpu_mode(&self) -> bool {
+        self.gpu_mode.load(std::sync::atomic::Ordering::Relaxed)
+            && self.ctx.lock().is_ok_and(|guard| guard.is_some())
+    }
 }
 
 impl SpeechEngine for WhisperEngine {
-    async fn transcribe(&self, samples: &[f32]) -> Result<String, AppError> {
-        self.transcribe_sync(samples)
-    }
-
     fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
         let mut params = self.build_base_params();
         if let Some(prompt) = initial_prompt_for_lang(self.language) {
@@ -257,16 +260,25 @@ impl SpeechEngine for WhisperEngine {
     }
 
     fn is_ready(&self) -> bool {
-        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
-        // shared across panic-capable boundaries. Lock poisoning is impossible here.
-        self.ctx.lock().unwrap().is_some()
+        self.ctx.lock().is_ok_and(|guard| guard.is_some())
     }
 
-    fn is_gpu_mode(&self) -> bool {
-        // SAFETY: WhisperEngine is a single-owner struct; its internal Mutex is never
-        // shared across panic-capable boundaries. Lock poisoning is impossible here.
-        self.gpu_mode.load(std::sync::atomic::Ordering::Relaxed)
-            && self.ctx.lock().unwrap().is_some()
+    fn compute_mode(&self) -> &'static str {
+        if !self.is_ready() {
+            "unloaded"
+        } else if self.is_gpu_mode() {
+            "gpu"
+        } else {
+            "cpu"
+        }
+    }
+
+    fn transcribe_sync_with_context(
+        &self,
+        samples: &[f32],
+        context: Option<&str>,
+    ) -> Result<String, AppError> {
+        self.transcribe_with_context(samples, context)
     }
 
     fn name(&self) -> &str {

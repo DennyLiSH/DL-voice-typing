@@ -17,7 +17,6 @@ use crate::data_saving::{SaveConfig, SaveResult};
 use crate::error::AppError;
 use crate::llm::{AnyCorrector, LLMClient, TextCorrector};
 use crate::perf::PerfMetrics;
-use crate::speech::SpeechEngine;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};

@@ -16,7 +16,7 @@ use crate::commands::window_controller::NoopWindowController;
 use crate::config::{AppConfig, PipelineMode};
 use crate::llm::{AnyCorrector, MockCorrector};
 use crate::perf::PerfMetrics;
-use crate::speech::{AnyEngine, mock::MockEngine};
+use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -42,7 +42,7 @@ fn config(realtime: bool, review: bool, llm: bool) -> AppConfig {
 fn build_rig(cfg: AppConfig, engine_text: &str) -> Rig {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let engine = Arc::new(AnyEngine::Mock(MockEngine::new(engine_text)));
+    let engine = Arc::new(MockEngine::new(engine_text));
     let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
     let emitter = Arc::new(MockEmitter::new());
     let ps = crate::commands::pipeline_state::PipelineState::new(

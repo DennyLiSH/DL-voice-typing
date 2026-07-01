@@ -10,14 +10,14 @@ use crate::commands::{EventEmitter, MockEmitter};
 use crate::config::AppConfig;
 use crate::llm::{AnyCorrector, MockCorrector};
 use crate::perf::PerfHistory;
-use crate::speech::{AnyEngine, mock::MockEngine};
+use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
 
 fn build_ps() -> PipelineState {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let engine = Arc::new(AnyEngine::Mock(MockEngine::new("test transcription")));
+    let engine = Arc::new(MockEngine::new("test transcription"));
     let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
     let emitter: Arc<dyn EventEmitter> = Arc::new(MockEmitter::new());
 

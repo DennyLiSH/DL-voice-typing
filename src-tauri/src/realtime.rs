@@ -8,7 +8,7 @@
 /// Each new transcription is diffed against the previous one to extract
 /// only the new content, which is appended to a running accumulated string.
 use crate::audio::{Resampler, TARGET_SAMPLE_RATE, rms};
-use crate::speech::AnyEngine;
+use crate::speech::SpeechEngine;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -340,12 +340,12 @@ fn accumulate(accumulated: &str, prev_partial: &str, new_partial: &str) -> Strin
 impl RealtimeTranscriber {
     /// Start the background transcription loop.
     ///
-    /// The `engine` parameter uses `AnyEngine` enum dispatch (not a trait object) for
-    /// consistency with the project's enum-dispatch pattern (`AnyClipboard`, `AnyCorrector`).
-    /// Tests use `AnyEngine::new_mock()` — see the 20+ tests in this module.
+    /// The `engine` parameter uses `Arc<dyn SpeechEngine>` trait-object dispatch,
+    /// consistent with the project's other trait-object abstractions (`AnyClipboard`,
+    /// `AnyCorrector`, `AudioCaptureProvider`). Tests use `MockEngine::new()`.
     pub fn start(
         audio: Arc<dyn AudioSource + Send + Sync>,
-        engine: Arc<AnyEngine>,
+        engine: Arc<dyn SpeechEngine>,
         emitter: Arc<dyn crate::commands::EventEmitter + Send + Sync>,
         sample_rate: u32,
     ) -> Self {
@@ -487,6 +487,7 @@ impl Drop for RealtimeTranscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::speech::mock::MockEngine;
 
     #[test]
     fn test_extract_last_5s_from_buffer() {
@@ -722,7 +723,7 @@ mod tests {
     #[test]
     fn test_realtime_loop_emits_partial_events() {
         let audio = Arc::new(MockAudioSource::new(loud_audio_5s()));
-        let engine = Arc::new(AnyEngine::new_mock("Hello world"));
+        let engine = Arc::new(MockEngine::new("Hello world"));
         let emitter = Arc::new(MockEventEmitter::new());
 
         let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
@@ -731,16 +732,18 @@ mod tests {
         thread::sleep(Duration::from_millis(800));
         rt.stop_and_wait();
 
-        let events = emitter.events.lock().unwrap();
-        assert!(!events.is_empty(), "expected at least one partial event");
-        assert_eq!(events.last().unwrap(), "Hello world");
+        let last = emitter.events.lock().map_or(String::new(), |events| {
+            events.last().cloned().unwrap_or_default()
+        });
+        assert!(!last.is_empty(), "expected at least one partial event");
+        assert_eq!(last, "Hello world");
     }
 
     #[test]
     fn test_realtime_loop_silent_audio_no_events() {
         // All zeros → RMS = 0, below VAD_THRESHOLD → no transcription
         let audio = Arc::new(MockAudioSource::new(vec![0.0f32; 16_000 * 5]));
-        let engine = Arc::new(AnyEngine::new_mock("should not emit"));
+        let engine = Arc::new(MockEngine::new("should not emit"));
         let emitter = Arc::new(MockEventEmitter::new());
 
         let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
@@ -748,8 +751,11 @@ mod tests {
         thread::sleep(Duration::from_millis(800));
         rt.stop_and_wait();
 
-        let events = emitter.events.lock().unwrap();
-        assert!(events.is_empty(), "silent audio should not produce events");
+        let is_empty = emitter
+            .events
+            .lock()
+            .map_or(true, |events| events.is_empty());
+        assert!(is_empty, "silent audio should not produce events");
     }
 
     #[test]
@@ -758,7 +764,7 @@ mod tests {
         // We simulate this by using a single response; the accumulate logic
         // deduplicates identical consecutive partials, so we only see one event.
         let audio = Arc::new(MockAudioSource::new(loud_audio_5s()));
-        let engine = Arc::new(AnyEngine::new_mock("First"));
+        let engine = Arc::new(MockEngine::new("First"));
         let emitter = Arc::new(MockEventEmitter::new());
 
         let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
@@ -767,7 +773,10 @@ mod tests {
         thread::sleep(Duration::from_millis(1_200));
         rt.stop_and_wait();
 
-        let events = emitter.events.lock().unwrap();
+        let events = emitter
+            .events
+            .lock()
+            .map_or(Vec::new(), |events| events.clone());
         // First cycle emits "First", second cycle sees overlap and emits "First" again
         // because the engine always returns the same text.
         assert!(!events.is_empty());
@@ -863,23 +872,26 @@ mod tests {
     // last_n_chars tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_last_n_chars_shorter_than_n() {
-        let result = crate::speech::whisper::WhisperEngine::last_n_chars("你好", 50);
-        assert_eq!(result, "你好");
-    }
+    #[cfg(feature = "whisper")]
+    mod last_n_chars_tests {
+        #[test]
+        fn test_last_n_chars_shorter_than_n() {
+            let result = crate::speech::whisper::WhisperEngine::last_n_chars("你好", 50);
+            assert_eq!(result, "你好");
+        }
 
-    #[test]
-    fn test_last_n_chars_truncation() {
-        let result =
-            crate::speech::whisper::WhisperEngine::last_n_chars("你好我是小明今年二十岁", 5);
-        assert_eq!(result, "今年二十岁");
-    }
+        #[test]
+        fn test_last_n_chars_truncation() {
+            let result =
+                crate::speech::whisper::WhisperEngine::last_n_chars("你好我是小明今年二十岁", 5);
+            assert_eq!(result, "今年二十岁");
+        }
 
-    #[test]
-    fn test_last_n_chars_exact() {
-        let result = crate::speech::whisper::WhisperEngine::last_n_chars("一二三四五", 5);
-        assert_eq!(result, "一二三四五");
+        #[test]
+        fn test_last_n_chars_exact() {
+            let result = crate::speech::whisper::WhisperEngine::last_n_chars("一二三四五", 5);
+            assert_eq!(result, "一二三四五");
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -888,15 +900,15 @@ mod tests {
 
     #[test]
     fn test_transcribe_with_context_mock_ignores_context() {
-        let engine = AnyEngine::new_mock("hello");
+        let engine = MockEngine::new("hello");
         let result = engine.transcribe_sync_with_context(&[0.5f32; 100], Some("ignored context"));
-        assert_eq!(result.unwrap(), "hello");
+        assert_eq!(result.map_or(String::new(), |s| s), "hello");
     }
 
     #[test]
     fn test_transcribe_with_context_none_works() {
-        let engine = AnyEngine::new_mock("test");
+        let engine = MockEngine::new("test");
         let result = engine.transcribe_sync_with_context(&[0.5f32; 100], None);
-        assert_eq!(result.unwrap(), "test");
+        assert_eq!(result.map_or(String::new(), |s| s), "test");
     }
 }

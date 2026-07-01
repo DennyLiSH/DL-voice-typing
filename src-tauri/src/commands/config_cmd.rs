@@ -4,7 +4,6 @@ use crate::config::{ApiKeyMask, AppConfig};
 use crate::error::CommandError;
 use crate::hotkey::HotkeyManager;
 use crate::hotkey::windows::WindowsHotkeyManager;
-use crate::speech::AnyEngine;
 use crate::speech::SpeechEngine;
 use std::sync::Arc;
 use std::sync::{Mutex, mpsc};
@@ -25,16 +24,10 @@ pub fn is_autostart_available() -> bool {
 
 /// Return the current compute mode: "gpu", "cpu", or "unloaded".
 #[tauri::command]
-pub fn get_compute_mode(engine: tauri::State<'_, Arc<AnyEngine>>) -> Result<String, CommandError> {
-    if engine.is_ready() {
-        Ok(if engine.is_gpu_mode() {
-            "gpu".to_string()
-        } else {
-            "cpu".to_string()
-        })
-    } else {
-        Ok("unloaded".to_string())
-    }
+pub fn get_compute_mode(
+    engine: tauri::State<'_, Arc<dyn SpeechEngine>>,
+) -> Result<String, CommandError> {
+    Ok(engine.compute_mode().to_string())
 }
 
 /// Return the current application config to the frontend.
