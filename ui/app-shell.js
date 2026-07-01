@@ -29,6 +29,14 @@ let currentPage = 'general';
 // --- Sidebar Navigation ---
 
 export function switchPage(pageName) {
+    // Dirty state check: warn user about unsaved changes before switching.
+    // Must run before the data-leave hook so cancel also skips side effects
+    // (semantics: not leaving = not cleaning). isDirtyState is imported above.
+    if (currentPage !== pageName && isDirtyState()) {
+        if (!window.confirm('有未保存的更改，确定要离开此页吗？')) {
+            return; // user cancelled or confirm disabled — stay on current page
+        }
+    }
     // Page leave hook: pause audio + clear audio state when leaving data sub-page.
     if (currentPage === 'data' && pageName !== 'data') {
         onDataPageLeave();
