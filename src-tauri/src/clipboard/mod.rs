@@ -43,10 +43,9 @@ pub trait ClipboardProvider: Send + Sync {
 /// Selects between the real Win32 clipboard and a mock at compile time.
 ///
 /// TODO(architecture): Consider replacing with `Arc<Mutex<dyn ClipboardProvider>>`
-/// to match AudioCaptureProvider/EventEmitter/ReviewProvider pattern. AnyClipboard
-/// is a shallow 1:1 passthrough with no domain-specific dispatch logic; the dyn
-/// pattern is already proven in this codebase. Only AnyEngine needs enum dispatch
-/// (async fn in traits is not dyn-safe).
+/// to match AudioCaptureProvider/EventEmitter/ReviewProvider/SpeechEngine pattern.
+/// AnyClipboard is a shallow 1:1 passthrough with no domain-specific dispatch logic;
+/// the dyn pattern is now used consistently across the pipeline.
 pub enum AnyClipboard {
     Windows(ClipboardManager),
     Mock(MockClipboard),
