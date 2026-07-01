@@ -3,7 +3,8 @@ use crate::error::AppError;
 use crate::speech::SpeechEngine;
 
 /// No-op speech engine used when the `whisper` feature is disabled.
-/// Always reports not-ready and returns empty transcription.
+/// Always reports not-ready and returns Err on transcribe (semantic alignment
+/// with `is_ready()=false`: callers must check readiness before invoking).
 pub struct NoopEngine;
 
 impl NoopEngine {
@@ -14,7 +15,9 @@ impl NoopEngine {
 
 impl SpeechEngine for NoopEngine {
     fn transcribe_sync(&self, _samples: &[f32]) -> Result<String, AppError> {
-        Ok(String::new())
+        Err(AppError::Speech(
+            "Speech engine not available in this build (whisper feature disabled)".to_string(),
+        ))
     }
 
     fn is_ready(&self) -> bool {
@@ -31,11 +34,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_noop_returns_empty_string() {
+    fn test_noop_returns_error_when_whisper_disabled() {
         let engine = NoopEngine::new();
         let result = engine.transcribe_sync(&[0.5f32; 100]);
-        assert!(result.is_ok(), "transcribe_sync should succeed");
-        assert_eq!(result.unwrap_or_default(), "");
+        assert!(
+            result.is_err(),
+            "transcribe_sync should return Err when whisper feature disabled"
+        );
     }
 
     #[test]
