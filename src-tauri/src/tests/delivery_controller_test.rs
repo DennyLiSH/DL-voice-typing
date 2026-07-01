@@ -165,6 +165,63 @@ async fn test_show_review_fallback_injects_when_window_missing() {
 }
 
 #[tokio::test]
+async fn show_review_fallback_clears_context() {
+    // Regression for M1 fix: fallback path must clear DeliveryContext to prevent
+    // residual foreground_hwnd from polluting the next review cycle's focus
+    // restoration (stale HWND → data delivery target confusion security channel).
+    let (ps, _emitter) = build_ps();
+    to_transcribing(&ps);
+    let perf = crate::perf::PerfMetrics::new(0);
+    let policy = build_policy();
+
+    // Swap to a window controller that pretends the review window is missing,
+    // forcing show_review into the fallback direct-injection branch.
+    let ps = PipelineState::new(
+        ps.sm.clone(),
+        ps.ac.clone(),
+        ps.engine.clone(),
+        ps.clipboard.clone(),
+        ps.perf_history.clone(),
+        ps.config_cache.clone(),
+        ps.cached_llm.clone(),
+        ps.realtime_transcriber.clone(),
+        Arc::new(HiddenReviewWindowController),
+        ps.emitter.clone(),
+        ps.review.clone(),
+    );
+
+    ps.delivery
+        .show_review(
+            &ps,
+            "fallback text".to_string(),
+            "fallback text".to_string(),
+            None,
+            &policy,
+            perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+
+    // After M1 fix, fallback path calls take_context() to clear residual state.
+    // show_review's classic-review prefix (save_foreground + take_foreground +
+    // store_foreground at delivery_controller.rs:243-246) runs before the
+    // fallback branch, so without the fix foreground_hwnd would leak a sentinel
+    // value (MockReviewProvider uses 42) into the next review cycle. This
+    // indirectly guarantees stale HWND cannot hijack the next inject_text path.
+    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    assert!(
+        hwnd.is_none(),
+        "foreground_hwnd must be cleared after fallback (got {hwnd:?})"
+    );
+    assert!(data.is_none(), "review_data must be cleared after fallback");
+    assert!(
+        t_press.is_none(),
+        "t_press_for_e2e must be cleared after fallback"
+    );
+}
+
+#[tokio::test]
 async fn test_confirm_review_injects_and_returns_idle() {
     let (ps, emitter) = build_ps();
     to_reviewing(&ps);

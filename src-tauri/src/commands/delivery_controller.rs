@@ -259,6 +259,12 @@ impl DeliveryController {
             self.store_context(review_data, perf, t_press_for_e2e);
         } else {
             warn!("show_review: review window not found. Falling back to direct injection.");
+            // Clear residual context: foreground never left the original app in fallback
+            // path, so no restoration needed. Without this, the stored hwnd would leak
+            // into the next confirm/cancel cycle and restore focus to a stale window.
+            // take_context() returns a tuple (no Result); Option::take is infallible.
+            // On mutex poison, lock_mutex logs and unwrap_or returns defaults.
+            let _ = self.take_context();
             // Reviewing -> Injecting, then inject.
             ps.sm_reviewing_to_injecting();
             let llm_text = if policy.llm_enabled {
@@ -393,12 +399,17 @@ impl DeliveryController {
 
         // Update data-saving JSON: preserve raw transcription, mark no final text.
         if let Some(review_data) = data_saving {
-            let _ = crate::data_saving::update_json_with_text(
+            if let Err(e) = crate::data_saving::update_json_with_text(
                 &review_data.json_path,
                 &review_data.raw_transcription,
                 review_data.llm_text.as_deref(),
                 None,
-            );
+            ) {
+                warn!(
+                    "cancel_review: failed to update JSON {}: {e}",
+                    review_data.json_path.display()
+                );
+            }
         }
 
         info!("cancel_review: done");
@@ -414,12 +425,17 @@ impl DeliveryController {
 
         // 1. Save data before text is consumed.
         if let Some(review_data) = data_saving {
-            let _ = crate::data_saving::update_json_with_text(
+            if let Err(e) = crate::data_saving::update_json_with_text(
                 &review_data.json_path,
                 &review_data.raw_transcription,
                 review_data.llm_text.as_deref(),
                 Some(&text),
-            );
+            ) {
+                warn!(
+                    "confirm_from_reviewing: failed to update JSON {}: {e}",
+                    review_data.json_path.display()
+                );
+            }
         }
 
         // 2. Restore focus to target app BEFORE paste.
@@ -535,12 +551,17 @@ impl DeliveryController {
 
         if let Some(sr) = save_result {
             if let Some(raw) = raw_transcription {
-                let _ = crate::data_saving::update_json_with_text(
+                if let Err(e) = crate::data_saving::update_json_with_text(
                     &sr.json_path,
                     raw,
                     llm_text.as_deref(),
                     Some(&text),
-                );
+                ) {
+                    warn!(
+                        "inject_and_finish: failed to update JSON {}: {e}",
+                        sr.json_path.display()
+                    );
+                }
             }
         }
 
@@ -602,7 +623,7 @@ impl DeliveryController {
         }
     }
 
-    fn take_context(
+    pub(crate) fn take_context(
         &self,
     ) -> (
         Option<isize>,
