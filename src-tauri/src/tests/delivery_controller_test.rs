@@ -387,3 +387,136 @@ impl WindowController for HiddenReviewWindowController {
     fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
 }
+
+// -----------------------------------------------------------------------------
+// M2 regression: confirm_review / cancel_review early-exception paths must
+// clear DeliveryContext so residual foreground_hwnd cannot hijack the next
+// cycle's restore_foreground_hwnd (same root cause as M1 commit 72cb57e).
+// -----------------------------------------------------------------------------
+
+/// Drive show_review through the classic-review path to populate
+/// DeliveryContext.foreground_hwnd with the MockReviewProvider sentinel (42),
+/// plus perf and t_press_for_e2e.
+async fn populate_context_via_show_review(ps: &PipelineState) {
+    to_transcribing(ps);
+    let perf = crate::perf::PerfMetrics::new(0);
+    let policy = build_policy();
+    ps.delivery
+        .show_review(
+            ps,
+            "review me".to_string(),
+            "review me".to_string(),
+            None,
+            &policy,
+            perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+    // Sanity: show_review entered Reviewing and populated context.
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
+    let (hwnd, _data, _perf, _t_press) = ps.delivery.take_context();
+    assert_eq!(
+        hwnd,
+        Some(42),
+        "test setup invariant: show_review must populate foreground_hwnd before disturbance"
+    );
+    // Re-populate because the sanity check above just took it.
+    to_transcribing(ps);
+    let perf = crate::perf::PerfMetrics::new(0);
+    ps.delivery
+        .show_review(
+            ps,
+            "review me".to_string(),
+            "review me".to_string(),
+            None,
+            &policy,
+            perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+}
+
+#[tokio::test]
+async fn confirm_review_recording_branch_clears_context() {
+    let (ps, _emitter) = build_ps();
+    populate_context_via_show_review(&ps).await;
+
+    // Disturb state machine back to Recording (e.g., user pressed hotkey again
+    // while review window was visible).
+    ps.sm_reset();
+    ps.sm_start_recording();
+    assert_eq!(ps.sm_state(), Some(StateTag::Recording));
+
+    let result = ps.delivery.confirm_review(&ps, "text".to_string()).await;
+    assert!(result.is_err());
+
+    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    assert!(
+        hwnd.is_none(),
+        "foreground_hwnd must be cleared after Recording branch (got {hwnd:?})"
+    );
+    assert!(data.is_none(), "review_data must be cleared");
+    assert!(t_press.is_none(), "t_press_for_e2e must be cleared");
+}
+
+#[tokio::test]
+async fn confirm_review_catchall_branch_clears_context() {
+    let (ps, _emitter) = build_ps();
+    populate_context_via_show_review(&ps).await;
+
+    // Reset to Idle so confirm_review falls through to the catch-all arm.
+    ps.sm_reset();
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+    let result = ps.delivery.confirm_review(&ps, "text".to_string()).await;
+    assert!(result.is_err());
+
+    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    assert!(
+        hwnd.is_none(),
+        "foreground_hwnd must be cleared after catch-all branch (got {hwnd:?})"
+    );
+    assert!(data.is_none(), "review_data must be cleared");
+    assert!(t_press.is_none(), "t_press_for_e2e must be cleared");
+}
+
+/// Placeholder for the TOCTOU branch (cancel_review 行 360-365,
+/// `sm_cancel_reviewing()` failure). Cannot be constructed in unit test
+/// without a test-only `force_state_tag` helper or race detector (loom).
+/// Replace this test once such infrastructure lands (see plan §后续步骤 ticket).
+#[tokio::test]
+#[ignore = "placeholder: replace with TOCTOU branch test once force_state_tag helper added (see plan §后续步骤 ticket)"]
+async fn cancel_review_sm_cancel_failure_branch_placeholder() {
+    // Intentionally mirrors cancel_review_catchall_branch_clears_context's
+    // execution path; marked #[ignore] so CI does not credit this name as
+    // coverage for line 360-365.
+    let (ps, _emitter) = build_ps();
+    populate_context_via_show_review(&ps).await;
+    ps.sm_reset();
+    let _ = ps.delivery.cancel_review(&ps).await;
+    let (hwnd, _data, _perf, _t_press) = ps.delivery.take_context();
+    assert!(hwnd.is_none());
+}
+
+#[tokio::test]
+async fn cancel_review_catchall_branch_clears_context() {
+    let (ps, _emitter) = build_ps();
+    populate_context_via_show_review(&ps).await;
+
+    // Reset to Idle so cancel_review falls through to the catch-all arm.
+    ps.sm_reset();
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+    let result = ps.delivery.cancel_review(&ps).await;
+    assert!(result.is_err());
+
+    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    assert!(
+        hwnd.is_none(),
+        "foreground_hwnd must be cleared after catch-all branch (got {hwnd:?})"
+    );
+    assert!(data.is_none(), "review_data must be cleared");
+    assert!(t_press.is_none(), "t_press_for_e2e must be cleared");
+}

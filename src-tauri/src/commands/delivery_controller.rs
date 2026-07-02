@@ -336,6 +336,11 @@ impl DeliveryController {
             }
             Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
                 info!("confirm_review: early confirm during recording/transcribing");
+                let _ = self.take_context();
+                debug!(
+                    target: "delivery",
+                    "take_context cleared on confirm_review recording/transcribing branch"
+                );
                 ps.stop_recording_resources_graceful();
                 ps.sm_reset();
                 self.cleanup_review_ui(ps).await;
@@ -344,10 +349,17 @@ impl DeliveryController {
                     message: "cannot confirm from current state".to_string(),
                 })
             }
-            _ => Err(CommandError {
-                code: "STATE".to_string(),
-                message: "cannot confirm from current state".to_string(),
-            }),
+            _ => {
+                let _ = self.take_context();
+                debug!(
+                    target: "delivery",
+                    "take_context cleared on confirm_review catch-all branch"
+                );
+                Err(CommandError {
+                    code: "STATE".to_string(),
+                    message: "cannot confirm from current state".to_string(),
+                })
+            }
         }
     }
 
@@ -358,6 +370,11 @@ impl DeliveryController {
         match ps.sm_state() {
             Some(StateTag::Reviewing) => {
                 if !ps.sm_cancel_reviewing() {
+                    let _ = self.take_context();
+                    debug!(
+                        target: "delivery",
+                        "take_context cleared on cancel_review sm_cancel_reviewing failure branch"
+                    );
                     return Err(CommandError {
                         code: "STATE".to_string(),
                         message: "cancel_reviewing failed".to_string(),
@@ -370,6 +387,11 @@ impl DeliveryController {
                 ps.sm_reset();
             }
             _ => {
+                let _ = self.take_context();
+                debug!(
+                    target: "delivery",
+                    "take_context cleared on cancel_review catch-all branch"
+                );
                 return Err(CommandError {
                     code: "STATE".to_string(),
                     message: "cannot cancel from current state".to_string(),
