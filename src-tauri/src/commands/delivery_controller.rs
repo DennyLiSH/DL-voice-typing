@@ -411,7 +411,7 @@ impl DeliveryController {
 
         // Restore focus and hide windows.
         if let Some(hwnd_val) = foreground_hwnd {
-            crate::win32::restore_foreground_hwnd(hwnd_val);
+            self.window_controller.restore_foreground_hwnd(hwnd_val);
         }
         self.window_controller.hide_floating();
         self.window_controller.hide_review();
@@ -463,7 +463,7 @@ impl DeliveryController {
         // 2. Restore focus to target app BEFORE paste.
         info!("confirm_from_reviewing: saved_hwnd={:?}", foreground_hwnd);
         if let Some(hwnd_val) = foreground_hwnd {
-            crate::win32::restore_foreground_hwnd(hwnd_val);
+            self.window_controller.restore_foreground_hwnd(hwnd_val);
             // Wait for OS to fully process the focus change before simulating
             // keyboard input. Without this delay, SendInput (Ctrl+V) may still
             // be dispatched to the review window.
@@ -486,8 +486,15 @@ impl DeliveryController {
                 "injection-error",
                 serde_json::to_value(e).unwrap_or_default(),
             );
-            // Best-effort cleanup: restore clipboard, hide windows, reset state.
+            // Best-effort cleanup: restore clipboard, restore focus, hide windows, reset state.
             let _ = self.restore_clipboard();
+            if let Some(hwnd_val) = foreground_hwnd {
+                debug!(
+                    target: "delivery",
+                    "confirm_from_reviewing: restoring foreground on inject failure, hwnd={hwnd_val}"
+                );
+                self.window_controller.restore_foreground_hwnd(hwnd_val);
+            }
             self.window_controller.hide_review();
             self.window_controller.hide_floating();
             ps.sm_reset();

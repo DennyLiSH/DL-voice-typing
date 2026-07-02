@@ -20,6 +20,8 @@ use tracing::{info, warn};
 #[derive(Clone)]
 pub struct PipelineState {
     pub(crate) sm: Arc<Mutex<StateMachine>>,
+    #[cfg(test)]
+    forced_sm_state: Arc<Mutex<Option<StateTag>>>,
     pub(crate) ac: Arc<Mutex<dyn AudioCaptureProvider>>,
     pub(crate) engine: Arc<dyn SpeechEngine>,
     pub(crate) clipboard: Arc<Mutex<AnyClipboard>>,
@@ -66,6 +68,8 @@ impl PipelineState {
         ));
         Self {
             sm,
+            #[cfg(test)]
+            forced_sm_state: Arc::new(Mutex::new(None)),
             ac,
             engine,
             clipboard,
@@ -99,6 +103,8 @@ impl PipelineState {
         ));
         Self {
             sm: app.state::<Arc<Mutex<StateMachine>>>().inner().clone(),
+            #[cfg(test)]
+            forced_sm_state: Arc::new(Mutex::new(None)),
             ac: app
                 .state::<Arc<Mutex<dyn AudioCaptureProvider>>>()
                 .inner()
@@ -188,6 +194,14 @@ impl PipelineState {
     /// Used by sm_verb_tests; kept for future query-style callers.
     #[allow(dead_code)]
     pub(crate) fn sm_state(&self) -> Option<StateTag> {
+        #[cfg(test)]
+        {
+            if let Some(guard) = crate::util::lock_mutex(&self.forced_sm_state, "forced_sm_state") {
+                if let Some(tag) = *guard {
+                    return Some(tag);
+                }
+            }
+        }
         crate::util::lock_mutex(&self.sm, "state_machine").map(|s| s.state())
     }
 
@@ -333,6 +347,24 @@ impl PipelineState {
     pub(crate) fn sm_reset(&self) {
         if let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") {
             s.reset();
+        }
+    }
+}
+
+#[cfg(test)]
+impl PipelineState {
+    /// Test-only: force the real state-machine tag.
+    pub(crate) fn force_state_tag(&self, tag: StateTag) {
+        if let Some(mut guard) = crate::util::lock_mutex(&self.sm, "state_machine") {
+            guard.force_state_tag(tag);
+        }
+    }
+
+    /// Test-only: override the value returned by `sm_state()` without changing
+    /// the real state machine. Used to deterministically simulate TOCTOU races.
+    pub(crate) fn force_sm_state(&self, tag: StateTag) {
+        if let Some(mut guard) = crate::util::lock_mutex(&self.forced_sm_state, "forced_sm_state") {
+            *guard = Some(tag);
         }
     }
 }

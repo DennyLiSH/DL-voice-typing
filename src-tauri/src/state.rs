@@ -216,6 +216,14 @@ impl StateMachine {
     }
 }
 
+#[cfg(test)]
+impl StateMachine {
+    /// Test-only: set the actual state tag directly.
+    pub(crate) fn force_state_tag(&mut self, tag: StateTag) {
+        self.tag = tag;
+    }
+}
+
 impl Default for StateMachine {
     fn default() -> Self {
         Self::new()

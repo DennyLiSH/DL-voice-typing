@@ -24,6 +24,8 @@ pub trait WindowController: Send + Sync {
     fn emit_review_show(&self);
     /// Emit a review-final-text event.
     fn emit_review_final_text(&self, text: &str);
+    /// Restore focus to the saved foreground window handle.
+    fn restore_foreground_hwnd(&self, hwnd: isize);
 }
 
 /// Tauri-based implementation of window operations.
@@ -114,6 +116,10 @@ impl WindowController for TauriWindowController {
     fn emit_review_final_text(&self, text: &str) {
         let _ = self.app.emit("review-final-text", text);
     }
+
+    fn restore_foreground_hwnd(&self, hwnd: isize) {
+        crate::win32::restore_foreground_hwnd(hwnd);
+    }
 }
 
 /// No-op window controller for tests or headless environments.
@@ -136,6 +142,7 @@ impl WindowController for NoopWindowController {
     }
     fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
+    fn restore_foreground_hwnd(&self, _hwnd: isize) {}
 }
 
 /// Helper to create the appropriate window controller from an AppHandle.

@@ -386,6 +386,130 @@ impl WindowController for HiddenReviewWindowController {
     }
     fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
+    fn restore_foreground_hwnd(&self, _hwnd: isize) {}
+}
+
+// -----------------------------------------------------------------------------
+// Task 2 regression: confirm_from_reviewing must restore foreground focus again
+// when injection fails, so the user is not left in the review window.
+// -----------------------------------------------------------------------------
+
+/// Window controller that records restore_foreground_hwnd calls for verification.
+struct RecordingWindowController {
+    calls: Mutex<Vec<(String, Option<isize>)>>,
+}
+
+impl RecordingWindowController {
+    fn new() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn record(&self, name: &str, hwnd: Option<isize>) {
+        if let Ok(mut guard) = self.calls.lock() {
+            guard.push((name.to_string(), hwnd));
+        }
+    }
+
+    fn take_calls(&self) -> Vec<(String, Option<isize>)> {
+        crate::util::lock_mutex(&self.calls, "RecordingWindowController::calls")
+            .map(|mut guard| guard.drain(..).collect())
+            .unwrap_or_default()
+    }
+}
+
+impl WindowController for RecordingWindowController {
+    fn show_floating_near_caret(&self) -> bool {
+        true
+    }
+    fn hide_floating(&self) {}
+    fn show_review_near_caret(&self) -> bool {
+        true
+    }
+    fn hide_review(&self) {
+        self.record("hide_review", None);
+    }
+    fn focus_review(&self) -> bool {
+        true
+    }
+    fn eval_review_js(&self, _js: &str) -> bool {
+        true
+    }
+    fn emit_review_show(&self) {}
+    fn emit_review_final_text(&self, _text: &str) {}
+    fn restore_foreground_hwnd(&self, hwnd: isize) {
+        self.record("restore_foreground_hwnd", Some(hwnd));
+    }
+}
+
+#[tokio::test]
+async fn confirm_review_error_branch_restores_focus() {
+    // Clipboard that succeeds at save() but fails at inject_text().
+    let mut mock = MockClipboard::new();
+    mock.inject_error = Some("inject failed".to_string());
+    let failing_clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(mock)));
+
+    let recording = Arc::new(RecordingWindowController::new());
+
+    let (base_ps, _emitter) = build_ps();
+    let ps = PipelineState::new(
+        base_ps.sm.clone(),
+        base_ps.ac.clone(),
+        base_ps.engine.clone(),
+        failing_clipboard,
+        base_ps.perf_history.clone(),
+        base_ps.config_cache.clone(),
+        base_ps.cached_llm.clone(),
+        base_ps.realtime_transcriber.clone(),
+        recording.clone(),
+        base_ps.emitter.clone(),
+        base_ps.review.clone(),
+    );
+
+    to_transcribing(&ps);
+    let perf = crate::perf::PerfMetrics::new(0);
+    let policy = build_policy();
+
+    ps.delivery
+        .show_review(
+            &ps,
+            "review me".to_string(),
+            "review me".to_string(),
+            None,
+            &policy,
+            perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
+
+    let result = ps
+        .delivery
+        .confirm_review(&ps, "confirmed text".to_string())
+        .await;
+    assert!(
+        result.is_ok(),
+        "confirm_review returns Ok even on inject failure"
+    );
+
+    let restore_calls: Vec<_> = recording
+        .take_calls()
+        .into_iter()
+        .filter(|(name, _)| name == "restore_foreground_hwnd")
+        .collect();
+
+    assert_eq!(
+        restore_calls.len(),
+        2,
+        "focus must be restored before inject and again on inject failure"
+    );
+    assert_eq!(restore_calls[0].1, Some(42));
+    assert_eq!(restore_calls[1].1, Some(42));
+
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
 
 // -----------------------------------------------------------------------------
@@ -482,22 +606,32 @@ async fn confirm_review_catchall_branch_clears_context() {
     assert!(t_press.is_none(), "t_press_for_e2e must be cleared");
 }
 
-/// Placeholder for the TOCTOU branch (cancel_review 行 360-365,
-/// `sm_cancel_reviewing()` failure). Cannot be constructed in unit test
-/// without a test-only `force_state_tag` helper or race detector (loom).
-/// Replace this test once such infrastructure lands (see plan §后续步骤 ticket).
 #[tokio::test]
-#[ignore = "placeholder: replace with TOCTOU branch test once force_state_tag helper added (see plan §后续步骤 ticket)"]
-async fn cancel_review_sm_cancel_failure_branch_placeholder() {
-    // Intentionally mirrors cancel_review_catchall_branch_clears_context's
-    // execution path; marked #[ignore] so CI does not credit this name as
-    // coverage for line 360-365.
+async fn cancel_review_sm_cancel_failure_branch_clears_context() {
     let (ps, _emitter) = build_ps();
     populate_context_via_show_review(&ps).await;
-    ps.sm_reset();
-    let _ = ps.delivery.cancel_review(&ps).await;
-    let (hwnd, _data, _perf, _t_press) = ps.delivery.take_context();
-    assert!(hwnd.is_none());
+
+    // Simulate the TOCTOU outcome: sm_state() observes Reviewing, but the
+    // real state has already left Reviewing, so sm_cancel_reviewing() fails.
+    ps.force_state_tag(StateTag::Idle); // real tag
+    ps.force_sm_state(StateTag::Reviewing); // reported tag
+
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
+
+    let result = ps.delivery.cancel_review(&ps).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code, "STATE");
+    assert_eq!(err.message, "cancel_reviewing failed");
+
+    // The failure branch must clear the leaked DeliveryContext.
+    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    assert!(
+        hwnd.is_none(),
+        "foreground_hwnd must be cleared after sm_cancel_reviewing failure (got {hwnd:?})"
+    );
+    assert!(data.is_none(), "review_data must be cleared");
+    assert!(t_press.is_none(), "t_press_for_e2e must be cleared");
 }
 
 #[tokio::test]
