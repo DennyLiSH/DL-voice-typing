@@ -158,7 +158,7 @@ impl DeliveryController {
         );
 
         // Save clipboard before entering review state.
-        if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
+        if let Some(mut cb) = crate::util::lock_mutex(&self.clipboard, "clipboard") {
             if let Err(e) = cb.save() {
                 warn!("show_review: clipboard save failed: {e}");
             }
@@ -174,13 +174,13 @@ impl DeliveryController {
         }
 
         // Store text for the review window to fetch on load.
-        ps.review.store_text(final_text.clone());
+        self.review.store_text(final_text.clone());
         debug!(
             "show_review: stored pending text ({} chars)",
             final_text.len()
         );
 
-        let was_shown_on_press = ps.review.was_shown_on_press();
+        let was_shown_on_press = self.review.was_shown_on_press();
 
         if was_shown_on_press {
             info!(
@@ -189,7 +189,7 @@ impl DeliveryController {
             );
 
             // Migrate foreground ownership from PendingReview to DeliveryController.
-            if let Some(hwnd) = ps.review.take_foreground() {
+            if let Some(hwnd) = self.review.take_foreground() {
                 self.store_foreground(hwnd);
             }
 
@@ -299,7 +299,7 @@ impl DeliveryController {
             accumulated.as_ref().map(|s| s.len()).unwrap_or(0)
         );
 
-        if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
+        if let Some(mut cb) = crate::util::lock_mutex(&self.clipboard, "clipboard") {
             if let Err(e) = cb.save() {
                 warn!("realtime_review_handoff: clipboard save failed: {e}");
             }
@@ -312,10 +312,10 @@ impl DeliveryController {
         self.window_controller.hide_floating();
 
         if let Some(text) = accumulated {
-            ps.review.store_text(text);
+            self.review.store_text(text);
         }
 
-        if let Some(hwnd) = ps.review.take_foreground() {
+        if let Some(hwnd) = self.review.take_foreground() {
             self.store_foreground(hwnd);
         }
     }
@@ -343,7 +343,7 @@ impl DeliveryController {
                 );
                 ps.stop_recording_resources_graceful();
                 ps.sm_reset();
-                self.cleanup_review_ui(ps).await;
+                self.cleanup_review_ui().await;
                 Err(CommandError {
                     code: "STATE".to_string(),
                     message: "cannot confirm from current state".to_string(),
@@ -403,7 +403,7 @@ impl DeliveryController {
         let (foreground_hwnd, data_saving, _perf, _t_press) = self.take_context();
 
         // Restore clipboard.
-        if let Some(mut cb) = crate::util::lock_mutex(&ps.clipboard, "clipboard") {
+        if let Some(mut cb) = crate::util::lock_mutex(&self.clipboard, "clipboard") {
             if let Err(e) = cb.restore() {
                 warn!("cancel_review: clipboard restore failed: {e}");
             }
@@ -417,7 +417,7 @@ impl DeliveryController {
         self.window_controller.hide_review();
 
         // Reset shown_on_press flag.
-        ps.review.set_shown_on_press(false);
+        self.review.set_shown_on_press(false);
 
         // Update data-saving JSON: preserve raw transcription, mark no final text.
         if let Some(review_data) = data_saving {
@@ -508,7 +508,7 @@ impl DeliveryController {
         self.window_controller.hide_floating();
 
         // 6. Reset shown_on_press flag.
-        ps.review.set_shown_on_press(false);
+        self.review.set_shown_on_press(false);
 
         // 7. Record perf.
         self.perf_history.record(perf.clone());
@@ -668,9 +668,9 @@ impl DeliveryController {
         (hwnd, data, perf, t_press)
     }
 
-    async fn cleanup_review_ui(&self, ps: &PipelineState) {
+    async fn cleanup_review_ui(&self) {
         self.window_controller.hide_floating();
         self.window_controller.hide_review();
-        ps.review.set_shown_on_press(false);
+        self.review.set_shown_on_press(false);
     }
 }
