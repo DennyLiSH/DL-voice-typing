@@ -155,5 +155,10 @@ async function doCancel() {
     updateButtons();
     try {
         await invoke('cancel_review');
-    } catch (_) {}
+    } catch (e) {
+        errorMsg.textContent =
+            typeof e === 'string' ? e : '取消失败，请重试';
+        isClosing = false;
+        updateButtons();
+    }
 }

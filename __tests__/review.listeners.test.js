@@ -160,6 +160,37 @@ describe('injection-error listener', () => {
     });
 });
 
+describe('doCancel error recovery', () => {
+    it('re-enables buttons and shows error when cancel_review fails', async () => {
+        invokeMock.mockImplementation(async (cmd) => {
+            if (cmd === 'cancel_review') {
+                throw new Error('state machine race');
+            }
+            return cmd === 'get_review_text' ? '' : null;
+        });
+
+        const btnCancel = get('btn-cancel');
+        const btnConfirm = get('btn-confirm');
+        // Seed textarea so btnConfirm would be enabled were it not for isClosing.
+        get('review-text').value = 'hello';
+
+        expect(btnCancel.disabled).toBe(false);
+
+        btnCancel.click(); // fires doCancel() async
+        // After sync portion: isClosing=true, buttons disabled.
+        expect(btnCancel.disabled).toBe(true);
+        expect(btnConfirm.disabled).toBe(true);
+
+        // Let the rejected invoke settle so catch block runs.
+        await new Promise((r) => setTimeout(r, 0));
+
+        // Failure recovery: isClosing reset, error shown.
+        expect(btnCancel.disabled).toBe(false);
+        expect(btnConfirm.disabled).toBe(false);
+        expect(get('error-msg').textContent).toBe('取消失败，请重试');
+    });
+});
+
 // Note: the `isClosing === true` branch inside injection-error is not exercised
 // here. isClosing is a closure-local mutable flag in review.js with no external
 // setter; reaching it requires driving doConfirm (which sets isClosing = true
