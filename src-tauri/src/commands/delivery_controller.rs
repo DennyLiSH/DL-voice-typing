@@ -105,10 +105,17 @@ impl DeliveryController {
         t_press_for_e2e: Instant,
         llm_transition: bool,
     ) {
-        if llm_transition {
-            ps.sm_llm_to_injecting();
+        let transitioned = if llm_transition {
+            ps.sm_llm_to_injecting()
         } else {
-            ps.sm_transcribing_to_injecting();
+            ps.sm_transcribing_to_injecting()
+        };
+        if !transitioned {
+            warn!(
+                "inject_direct: sm entry transition failed (llm_transition={llm_transition}); aborting inject"
+            );
+            ps.sm_reset();
+            return;
         }
 
         let llm_text = if policy.llm_enabled {
@@ -167,10 +174,20 @@ impl DeliveryController {
         }
 
         // Transition to Reviewing.
-        if llm_transition {
-            ps.sm_llm_to_reviewing();
+        let transitioned = if llm_transition {
+            ps.sm_llm_to_reviewing()
         } else {
-            ps.sm_transcribing_to_reviewing();
+            ps.sm_transcribing_to_reviewing()
+        };
+        if !transitioned {
+            warn!(
+                "show_review: sm entry transition failed (llm_transition={llm_transition}); restoring clipboard and aborting"
+            );
+            if let Err(e) = self.restore_clipboard() {
+                warn!("show_review: clipboard restore failed on transition-failure path: {e}");
+            }
+            ps.sm_reset();
+            return;
         }
 
         // Store text for the review window to fetch on load.

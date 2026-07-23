@@ -58,12 +58,6 @@ fn to_transcribing(ps: &PipelineState) {
     ps.sm_stop_recording();
 }
 
-fn to_injecting(ps: &PipelineState) {
-    ps.sm_start_recording();
-    ps.sm_stop_recording();
-    ps.sm_transcribing_to_injecting();
-}
-
 fn event_names(emitter: &MockEmitter) -> Vec<String> {
     emitter
         .take_events()
@@ -75,7 +69,9 @@ fn event_names(emitter: &MockEmitter) -> Vec<String> {
 #[tokio::test]
 async fn test_inject_direct_succeeds() {
     let (ps, emitter) = build_ps();
-    to_injecting(&ps);
+    // inject_direct's entry transition moves Transcribing -> Injecting, so the
+    // state must be Transcribing (not pre-advanced to Injecting) when called.
+    to_transcribing(&ps);
     let mut perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
 
@@ -319,7 +315,8 @@ async fn test_cancel_review_clipboard_restore_failure_still_returns_idle() {
 #[tokio::test]
 async fn test_clipboard_restore_on_inject_failure() {
     let (ps, _emitter) = build_ps();
-    to_injecting(&ps);
+    // inject_direct's entry transition expects Transcribing, not Injecting.
+    to_transcribing(&ps);
 
     let mut mock = MockClipboard::new();
     mock.inject_error = Some("inject failed".to_string());
@@ -653,4 +650,98 @@ async fn cancel_review_catchall_branch_clears_context() {
     );
     assert!(data.is_none(), "review_data must be cleared");
     assert!(t_press.is_none(), "t_press_for_e2e must be cleared");
+}
+
+// P1-1 regression: inject_direct / show_review must abort cleanly when the
+// entry state-machine transition returns false (TOCTOU — real state already
+// moved away from Transcribing/LLMRefining, e.g. watchdog reset or concurrent
+// cancel_review won the lock). Pre-fix: bool return was dropped, inject
+// proceeded anyway and the subsequent sm_finish_injecting also failed
+// silently, leaving the state machine tag inconsistent with reality.
+
+#[tokio::test]
+async fn inject_direct_aborts_when_entry_transition_fails() {
+    let (ps, emitter) = build_ps();
+    // Real state stays Idle (default) — sm_transcribing_to_injecting() will
+    // return false because the state machine is not in Transcribing.
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+    let mut perf = crate::perf::PerfMetrics::new(0);
+    let policy = build_policy();
+
+    ps.delivery
+        .inject_direct(
+            &ps,
+            "hello".to_string(),
+            "hello".to_string(),
+            None,
+            &policy,
+            &mut perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+
+    let names = event_names(&emitter);
+    assert!(
+        !names.contains(&"injection-complete".to_string()),
+        "inject_direct must not emit injection-complete when entry transition fails (got {names:?})"
+    );
+    assert_eq!(
+        ps.sm_state(),
+        Some(StateTag::Idle),
+        "inject_direct must leave state at Idle after guard fires"
+    );
+}
+
+#[tokio::test]
+async fn show_review_aborts_when_entry_transition_fails() {
+    let (ps, emitter) = build_ps();
+    // Real state stays Idle — sm_transcribing_to_reviewing() will return false.
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+    let perf = crate::perf::PerfMetrics::new(0);
+    let policy = build_policy();
+
+    ps.delivery
+        .show_review(
+            &ps,
+            "hello".to_string(),
+            "hello".to_string(),
+            None,
+            &policy,
+            perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+
+    let names = event_names(&emitter);
+    assert!(
+        !names.contains(&"injection-complete".to_string()),
+        "show_review must not fall through to inject on entry transition failure (got {names:?})"
+    );
+    assert_eq!(
+        ps.sm_state(),
+        Some(StateTag::Idle),
+        "show_review must leave state at Idle after guard fires"
+    );
+
+    // Clipboard must have been saved (pre-transition) then restored (guard
+    // recovery). Inspect the underlying MockClipboard through the AnyClipboard
+    // enum to confirm the save/restore round-trip.
+    let cb_guard = crate::util::lock_mutex(&ps.clipboard, "clipboard").unwrap();
+    match &*cb_guard {
+        AnyClipboard::Mock(m) => {
+            assert!(
+                m.saved,
+                "clipboard must be saved before attempting transition"
+            );
+            assert!(
+                m.restored,
+                "clipboard must be restored when entry transition fails (else user's clipboard is silently held)"
+            );
+        }
+        AnyClipboard::Windows(_) => panic!("test harness must use MockClipboard"),
+    }
 }
