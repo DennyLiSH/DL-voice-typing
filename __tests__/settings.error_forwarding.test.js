@@ -66,6 +66,21 @@ const MINIMAL_DOM = `
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
   <div id="data-error-bar"></div>
+  <!-- Data manager DOM — required so wireDataListEvents() in data-manager.js
+       does not silently skip event binding when settings.js transitively
+       imports it. Missing these elements caused real bugs to slip through
+       (data-manager orchestration layer had zero integration coverage). -->
+  <button id="btn-refresh-data"></button>
+  <input id="data-search-input" />
+  <div id="data-list"></div>
+  <button id="btn-batch-delete"></button>
+  <input type="checkbox" id="data-select-all-cb" />
+  <button id="btn-prev-page"></button>
+  <button id="btn-next-page"></button>
+  <span id="data-total-count"></span>
+  <span id="data-total-size"></span>
+  <span id="data-range-start"></span>
+  <span id="data-range-end"></span>
 `;
 
 async function loadFresh() {
@@ -303,6 +318,34 @@ describe('settings.js error forwarding to log_frontend_error', () => {
             const matches = combined.match(/\.catch\(\(\) => \{\}\)/g) || [];
             // 4 forwarding sites each contribute one fire-and-forget catch.
             expect(matches.length).toBeGreaterThanOrEqual(4);
+        });
+    });
+
+    describe('data-manager event binding smoke test', () => {
+        // Regression for the MINIMAL_DOM extension above: pre-extension,
+        // wireDataListEvents() silently skipped binding because the data
+        // elements were missing. With the elements present, a click on
+        // btn-refresh-data must trigger an invoke('list_saved_recordings').
+        it('clicking #btn-refresh-data triggers list_saved_recordings invoke', async () => {
+            // Reset mock to clear init() noise.
+            invokeMock.mockClear();
+            // Provide a plausible response so the load does not error out.
+            invokeMock.mockImplementation(async (cmd) => {
+                if (cmd === 'list_saved_recordings') {
+                    return { items: [], total: 0, total_bytes: 0 };
+                }
+                return null;
+            });
+
+            document
+                .getElementById('btn-refresh-data')
+                .dispatchEvent(new Event('click'));
+
+            // loadRecordingsPage is async; let the invoke promise settle.
+            await new Promise((r) => setTimeout(r, 10));
+
+            const calls = invokeMock.mock.calls.map((c) => c[0]);
+            expect(calls).toContain('list_saved_recordings');
         });
     });
 });
