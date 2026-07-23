@@ -1,6 +1,5 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import {
-    getActiveDownload,
     loadComputeMode,
     populateModelSelect,
     setCustomModels,
@@ -94,9 +93,15 @@ export function hideError() {
 
 // --- Window Close ---
 
+// Closing the settings window hides it to tray (lib.rs:on_window_event
+// prevents CloseRequested and calls window.hide). The app keeps running,
+// so an in-flight model download must NOT be cancelled here — that would
+// destroy progress just because the user clicked the X. Audio playback,
+// however, should stop: a hidden window playing audio is wasted resources
+// and contradicts switchPage's onDataPageLeave contract.
 window.addEventListener('beforeunload', (e) => {
-    if (getActiveDownload()) {
-        invoke('cancel_download');
+    if (currentPage === 'data') {
+        onDataPageLeave();
     }
     if (isDirtyState()) {
         e.preventDefault();
