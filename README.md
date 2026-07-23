@@ -158,7 +158,7 @@ Idle → Recording → Transcribing → [LLMRefining →] Injecting → Idle
 
 ## 🧠 关键设计决策
 
-1. **枚举派发替代 dyn trait** — `AnyEngine`/`AnyClipboard`/`AnyCorrector` 枚举实现对应 trait，避免 `dyn` + `Box<dyn Future>` 的性能开销。每个枚举都有 `Mock` 变体用于测试。
+1. **枚举派发与 trait 对象的混用** — `AnyClipboard` / `AnyCorrector` 枚举替代对应 trait 的 dyn 派发（性能 + Mock 变体）。`SpeechEngine` 则相反：用 `Arc<dyn SpeechEngine>` trait 对象，以便 Whisper 与未来云端后端共享同一调用 surface。每条路径都有 `Mock` 变体注入测试。
 
 2. **剪贴板 + Ctrl+V 文本注入** — 写入剪贴板 → 模拟 Ctrl+V → 恢复原剪贴板内容。未使用 SendInput 直接文本输入，因 Windows IME 兼容性不可靠。剪贴板操作有 2 秒超时，防止其他进程持有剪贴板时死锁。
 
@@ -223,7 +223,7 @@ src-tauri/src/
 │   ├── mod.rs                 # AudioCaptureProvider trait, cpal 采集, 重采样
 │   └── rms.rs                 # RMS 音量计算
 ├── speech/
-│   ├── mod.rs                 # SpeechEngine trait + AnyEngine 枚举派发
+│   ├── mod.rs                 # SpeechEngine trait (dyn-compatible) + 默认 compute_mode 实现
 │   ├── whisper.rs             # Whisper.cpp 引擎 (GPU fallback, no_speech filter)
 │   └── mock.rs                # 测试用 MockEngine
 ├── clipboard/
