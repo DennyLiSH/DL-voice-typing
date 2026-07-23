@@ -881,6 +881,7 @@ mod tests_session_policy {
         assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"autostart"));
         assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"review_before_paste"));
         assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"hotkey"));
+        assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"download_mirror"));
     }
 
     #[test]
