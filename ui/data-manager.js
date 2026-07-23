@@ -188,6 +188,13 @@ function onAudioError(filename) {
             setTimeout(() => badge.remove(), 3000);
         }
     }
+    // Revoke the blob URL before nulling the element — otherwise the URL
+    // stays in memory until the next page load. Each failed playback would
+    // leak one URL across long-running settings sessions.
+    if (dataState.audioElement?.dataset?.blobUrl) {
+        URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
+        delete dataState.audioElement.dataset.blobUrl;
+    }
     // Collapse the player.
     dataState.audioPlayerRowId = null;
     dataState.audioElement = null;

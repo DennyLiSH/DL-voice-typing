@@ -245,7 +245,7 @@ testBtn.addEventListener('click', async () => {
             typeof e === 'object' && e?.message ? e.message : String(e);
         invoke('log_frontend_error', {
             message,
-            stack: null,
+            stack: e instanceof Error ? e.stack : null,
             context: 'test_llm_connection',
         }).catch(() => {});
         setTestStatus('✗ 连接失败，请检查配置', 'error');
@@ -385,7 +385,7 @@ saveBtn.addEventListener('click', async () => {
             typeof e === 'object' && e?.message ? e.message : String(e);
         invoke('log_frontend_error', {
             message,
-            stack: null,
+            stack: e instanceof Error ? e.stack : null,
             context: 'save_settings',
         }).catch(() => {});
         setSaveStatus('✗ 保存失败，请重试', 'error');

@@ -88,10 +88,12 @@ listen('injection-error', (event) => {
 });
 
 // First-load fallback: WebView2 may defer JS init for hidden windows.
+// Guard against overwrite so a slow IIFE does not erase text the user
+// has already typed (or that review-show has already populated).
 (async () => {
     try {
         const text = await invoke('get_review_text');
-        if (text) {
+        if (text && !userEdited && !textarea.value) {
             textarea.value = text;
             errorMsg.textContent = '';
             isClosing = false;

@@ -161,7 +161,7 @@ btnDownloadModel.addEventListener('click', async () => {
                 typeof e === 'object' && e?.message ? e.message : String(e);
             invoke('log_frontend_error', {
                 message,
-                stack: null,
+                stack: e instanceof Error ? e.stack : null,
                 context: 'delete_custom_model',
             }).catch(() => {});
             showError('删除失败，请重试');
@@ -199,7 +199,7 @@ async function startDownload(size) {
                 typeof e === 'object' && e?.message ? e.message : String(e);
             invoke('log_frontend_error', {
                 message,
-                stack: null,
+                stack: e instanceof Error ? e.stack : null,
                 context: 'download_whisper_model',
             }).catch(() => {});
             showError('下载失败，请重试');
