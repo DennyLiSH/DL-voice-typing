@@ -296,10 +296,7 @@ impl PipelineState {
         }
     }
 
-    /// Used by review.rs's `confirm_inject` path today via Tauri State (not
-    /// PipelineState); kept here so the state-machine mirror is complete for
-    /// future migration of review commands onto PipelineState.
-    #[allow(dead_code)]
+    /// Review → Injecting transition. Called by DeliveryController::confirm_from_reviewing.
     pub(crate) fn sm_reviewing_to_injecting(&self) -> bool {
         let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
             return false;
@@ -313,9 +310,7 @@ impl PipelineState {
         }
     }
 
-    /// Used by review.rs's `cancel_review` path today via Tauri State (not
-    /// PipelineState); kept here for mirror completeness and future migration.
-    #[allow(dead_code)]
+    /// Review → Idle (cancel) transition. Called by DeliveryController::cancel_review.
     pub(crate) fn sm_cancel_reviewing(&self) -> bool {
         let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
             return false;
@@ -365,6 +360,17 @@ impl PipelineState {
     pub(crate) fn force_sm_state(&self, tag: StateTag) {
         if let Some(mut guard) = crate::util::lock_mutex(&self.forced_sm_state, "forced_sm_state") {
             *guard = Some(tag);
+        }
+    }
+
+    /// Test-only: clear a previously set `force_sm_state` override. Call this
+    /// in afterEach / drop guards to prevent state leakage between tests that
+    /// share a PipelineState. Failing to clear turns the override into a
+    /// silent test-time bomb — later tests' sm_state() reads return the stale
+    /// forced value instead of the real tag.
+    pub(crate) fn clear_forced_sm_state(&self) {
+        if let Some(mut guard) = crate::util::lock_mutex(&self.forced_sm_state, "forced_sm_state") {
+            *guard = None;
         }
     }
 }

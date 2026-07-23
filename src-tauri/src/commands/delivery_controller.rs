@@ -526,7 +526,15 @@ impl DeliveryController {
 
         // 5. Hide review window AFTER paste, then finish.
         self.window_controller.hide_review();
-        ps.sm_finish_injecting();
+        // sm_finish_injecting returns false on TOCTOU (state already moved on
+        // via watchdog reset or concurrent cancel). We log but still emit
+        // injection-complete so the UI hides the overlay — silently dropping
+        // the event would leave the user staring at a "still injecting" state.
+        if !ps.sm_finish_injecting() {
+            warn!(
+                "confirm_from_reviewing: sm_finish_injecting returned false (TOCTOU or watchdog reset) — emitting injection-complete anyway for UI consistency"
+            );
+        }
         self.emitter
             .emit("injection-complete", serde_json::Value::Null);
         self.window_controller.hide_floating();
@@ -586,7 +594,11 @@ impl DeliveryController {
             }
         }
 
-        ps.sm_finish_injecting();
+        if !ps.sm_finish_injecting() {
+            warn!(
+                "inject_and_finish: sm_finish_injecting returned false (TOCTOU or watchdog reset) — emitting injection-complete anyway for UI consistency"
+            );
+        }
         self.emitter
             .emit("injection-complete", serde_json::Value::Null);
 

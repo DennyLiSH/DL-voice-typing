@@ -629,6 +629,16 @@ async fn cancel_review_sm_cancel_failure_branch_clears_context() {
     );
     assert!(data.is_none(), "review_data must be cleared");
     assert!(t_press.is_none(), "t_press_for_e2e must be cleared");
+
+    // Demonstrate the clear_forced_sm_state hygiene helper. After clearing,
+    // sm_state() must reflect the real tag (Idle, set above by force_state_tag)
+    // rather than the previously-forced Reviewing override.
+    ps.clear_forced_sm_state();
+    assert_eq!(
+        ps.sm_state(),
+        Some(StateTag::Idle),
+        "clear_forced_sm_state must drop the override so sm_state reads the real tag"
+    );
 }
 
 #[tokio::test]
