@@ -1,5 +1,5 @@
 use crate::audio::{AudioCaptureProvider, AudioRingBuffer};
-use crate::clipboard::AnyClipboard;
+use crate::clipboard::ClipboardProvider;
 use crate::commands::EventEmitter;
 use crate::commands::TauriEventEmitter;
 use crate::commands::delivery_controller::DeliveryController;
@@ -24,7 +24,7 @@ pub struct PipelineState {
     forced_sm_state: Arc<Mutex<Option<StateTag>>>,
     pub(crate) ac: Arc<Mutex<dyn AudioCaptureProvider>>,
     pub(crate) engine: Arc<dyn SpeechEngine>,
-    pub(crate) clipboard: Arc<Mutex<AnyClipboard>>,
+    pub(crate) clipboard: Arc<dyn ClipboardProvider>,
     pub(crate) perf_history: Arc<PerfHistory>,
     pub(crate) config_cache: ConfigCache,
     pub(crate) cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
@@ -50,7 +50,7 @@ impl PipelineState {
         sm: Arc<Mutex<StateMachine>>,
         ac: Arc<Mutex<dyn AudioCaptureProvider>>,
         engine: Arc<dyn SpeechEngine>,
-        clipboard: Arc<Mutex<AnyClipboard>>,
+        clipboard: Arc<dyn ClipboardProvider>,
         perf_history: Arc<PerfHistory>,
         config_cache: ConfigCache,
         cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
@@ -92,7 +92,7 @@ impl PipelineState {
         let window_controller = window_controller_from_app(app);
         let emitter: Arc<dyn EventEmitter> = Arc::new(TauriEventEmitter::new(app.clone()));
         let review: Arc<dyn ReviewProvider> = Arc::new(TauriReviewProvider::new(app.clone()));
-        let clipboard = app.state::<Arc<Mutex<AnyClipboard>>>().inner().clone();
+        let clipboard = app.state::<Arc<dyn ClipboardProvider>>().inner().clone();
         let perf_history = app.state::<Arc<PerfHistory>>().inner().clone();
         let delivery = Arc::new(DeliveryController::new(
             emitter.clone(),
@@ -379,7 +379,7 @@ impl PipelineState {
 mod sm_verb_tests {
     use super::*;
     use crate::audio::MockAudioCapture;
-    use crate::clipboard::{AnyClipboard, MockClipboard};
+    use crate::clipboard::MockClipboard;
     use crate::commands::MockEmitter;
     use crate::commands::review_provider::MockReviewProvider;
     use crate::commands::window_controller::NoopWindowController;
@@ -397,7 +397,7 @@ mod sm_verb_tests {
             Arc::new(Mutex::new(StateMachine::new())),
             Arc::new(Mutex::new(MockAudioCapture::new())),
             Arc::new(MockEngine::new("test")),
-            Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new()))),
+            Arc::new(MockClipboard::new()),
             Arc::new(PerfHistory::new()),
             ConfigCache::new(AppConfig::default()),
             Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new(

@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,80 +29,58 @@ where
 }
 
 /// Trait for clipboard operations, enabling test seams.
+/// All methods take `&self`; implementations use interior mutability so the
+/// canonical handle is `Arc<dyn ClipboardProvider>` (matches `Arc<dyn SpeechEngine>`).
+///
+/// `save_and_inject` is the atomic delivery unit: implementations hold an
+/// internal op lock spanning save → inject → self-restore, preserving the
+/// cross-call atomicity the old outer `Mutex<AnyClipboard>` provided. Without
+/// it, a Tray Reset `restore()` could interleave mid-injection and leak
+/// transcription text into the user's clipboard.
 pub trait ClipboardProvider: Send + Sync {
-    fn save(&mut self) -> Result<(), AppError>;
+    fn save(&self) -> Result<(), AppError>;
     fn inject_text(&self, text: &str) -> Result<(), AppError>;
-    fn restore(&mut self) -> Result<(), AppError>;
+    /// Save current clipboard, inject `text` via paste, restore saved content —
+    /// serialized against every other operation.
+    fn save_and_inject(&self, text: &str) -> Result<(), AppError>;
+    fn restore(&self) -> Result<(), AppError>;
     /// Whether `save()` has been called and not yet cleared by `restore()`.
-    /// Used by panic-recovery to decide whether restoring the old clipboard
-    /// is meaningful (Maj-γ conditional restore).
+    /// Used by panic-recovery (`RecordingSession::recover`) to decide whether
+    /// restoring the old clipboard is meaningful: restore only when a save
+    /// happened this cycle. A racing `restore()` between `was_saved()` and a
+    /// subsequent `restore()` is benign: the second `restore()` finds
+    /// `saved_content` already taken and no-ops.
     fn was_saved(&self) -> bool;
-}
-
-/// Enum-based dispatch for clipboard providers (avoids `dyn` overhead).
-///
-/// Selects between the real Win32 clipboard and a mock at compile time.
-///
-/// TODO(architecture): Consider replacing with `Arc<Mutex<dyn ClipboardProvider>>`
-/// to match AudioCaptureProvider/EventEmitter/ReviewProvider/SpeechEngine pattern.
-/// AnyClipboard is a shallow 1:1 passthrough with no domain-specific dispatch logic;
-/// the dyn pattern is now used consistently across the pipeline.
-pub enum AnyClipboard {
-    Windows(ClipboardManager),
-    Mock(MockClipboard),
-}
-
-impl ClipboardProvider for AnyClipboard {
-    fn save(&mut self) -> Result<(), AppError> {
-        match self {
-            AnyClipboard::Windows(m) => m.save(),
-            AnyClipboard::Mock(m) => m.save(),
-        }
-    }
-
-    fn inject_text(&self, text: &str) -> Result<(), AppError> {
-        match self {
-            AnyClipboard::Windows(m) => m.inject_text(text),
-            AnyClipboard::Mock(m) => m.inject_text(text),
-        }
-    }
-
-    fn restore(&mut self) -> Result<(), AppError> {
-        match self {
-            AnyClipboard::Windows(m) => m.restore(),
-            AnyClipboard::Mock(m) => m.restore(),
-        }
-    }
-
-    fn was_saved(&self) -> bool {
-        match self {
-            AnyClipboard::Windows(m) => m.was_saved(),
-            AnyClipboard::Mock(m) => m.was_saved(),
-        }
-    }
 }
 
 /// Clipboard manager for save/restore + Ctrl+V simulation.
 pub struct ClipboardManager {
-    saved_content: Option<String>,
+    saved_content: Mutex<Option<String>>,
+    /// Serializes whole clipboard operations (save / inject / restore /
+    /// save_and_inject) against each other — replaces the old outer mutex.
+    op: Mutex<()>,
 }
 
 impl ClipboardManager {
     /// Create a new clipboard manager with no saved content.
     pub fn new() -> Self {
         Self {
-            saved_content: None,
+            saved_content: Mutex::new(None),
+            op: Mutex::new(()),
         }
     }
-}
 
-impl ClipboardProvider for ClipboardManager {
-    fn save(&mut self) -> Result<(), AppError> {
-        self.saved_content = read_clipboard().ok();
+    fn save_inner(&self) -> Result<(), AppError> {
+        let content = read_clipboard().ok();
+        if let Some(mut guard) =
+            crate::util::lock_mutex(&self.saved_content, "ClipboardManager::saved_content")
+        {
+            *guard = content;
+        }
         Ok(())
     }
 
-    fn inject_text(&self, text: &str) -> Result<(), AppError> {
+    fn inject_inner(&self, text: &str) -> Result<(), AppError> {
         write_clipboard_with_retry(text)?;
         simulate_paste()?;
         // Wait for target application to process the paste.
@@ -114,22 +93,54 @@ impl ClipboardProvider for ClipboardManager {
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        if let Some(ref saved) = self.saved_content {
-            let _ = write_clipboard_with_retry(saved);
+        let saved = crate::util::lock_mutex(&self.saved_content, "ClipboardManager::saved_content")
+            .and_then(|guard| guard.clone());
+        if let Some(saved) = saved {
+            let _ = write_clipboard_with_retry(&saved);
         }
         Ok(())
     }
 
-    fn restore(&mut self) -> Result<(), AppError> {
-        if let Some(ref saved) = self.saved_content {
-            write_clipboard_with_retry(saved)?;
+    fn restore_inner(&self) -> Result<(), AppError> {
+        let saved = crate::util::lock_mutex(&self.saved_content, "ClipboardManager::saved_content")
+            .and_then(|mut guard| guard.take());
+        if let Some(saved) = saved {
+            write_clipboard_with_retry(&saved)?;
         }
-        self.saved_content = None;
         Ok(())
+    }
+
+    fn lock_op(&self) -> Result<std::sync::MutexGuard<'_, ()>, AppError> {
+        crate::util::lock_mutex(&self.op, "ClipboardManager::op")
+            .ok_or_else(|| AppError::Clipboard("op lock poisoned".to_string()))
+    }
+}
+
+impl ClipboardProvider for ClipboardManager {
+    fn save(&self) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        self.save_inner()
+    }
+
+    fn inject_text(&self, text: &str) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        self.inject_inner(text)
+    }
+
+    fn save_and_inject(&self, text: &str) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        self.save_inner()?;
+        self.inject_inner(text)
+    }
+
+    fn restore(&self) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        self.restore_inner()
     }
 
     fn was_saved(&self) -> bool {
-        self.saved_content.is_some()
+        crate::util::lock_mutex(&self.saved_content, "ClipboardManager::saved_content")
+            .is_some_and(|guard| guard.is_some())
     }
 }
 
@@ -140,29 +151,105 @@ impl Default for ClipboardManager {
 }
 
 /// Mock clipboard for testing pipeline phases.
+/// Interior-mutable so tests can share `Arc<MockClipboard>` with the pipeline
+/// (as `Arc<dyn ClipboardProvider>`) and still assert through the concrete handle.
 pub struct MockClipboard {
-    pub saved: bool,
-    pub injected: Mutex<Vec<String>>,
-    pub restored: bool,
-    /// When set, `save()` returns `AppError::Clipboard(msg)` instead of succeeding.
-    pub save_error: Option<String>,
-    /// When set, `inject_text()` returns `AppError::Clipboard(msg)` instead of succeeding.
-    pub inject_error: Option<String>,
-    /// When set, `restore()` returns `AppError::Clipboard(msg)` instead of succeeding.
-    pub restore_error: Option<String>,
+    saved: AtomicBool,
+    injected: Mutex<Vec<String>>,
+    restored: AtomicBool,
+    save_error: Mutex<Option<String>>,
+    inject_error: Mutex<Option<String>>,
+    restore_error: Mutex<Option<String>>,
+    op: Mutex<()>,
 }
 
 impl MockClipboard {
     /// Create a new mock clipboard in the initial (no save/inject/restore) state.
     pub fn new() -> Self {
         Self {
-            saved: false,
+            saved: AtomicBool::new(false),
             injected: Mutex::new(Vec::new()),
-            restored: false,
-            save_error: None,
-            inject_error: None,
-            restore_error: None,
+            restored: AtomicBool::new(false),
+            save_error: Mutex::new(None),
+            inject_error: Mutex::new(None),
+            restore_error: Mutex::new(None),
+            op: Mutex::new(()),
         }
+    }
+
+    /// `save()` returns `AppError::Clipboard(msg)` instead of succeeding.
+    pub fn with_save_error(self, msg: &str) -> Self {
+        if let Ok(mut guard) = self.save_error.lock() {
+            *guard = Some(msg.to_string());
+        }
+        self
+    }
+
+    /// `inject_text()` returns `AppError::Clipboard(msg)` instead of succeeding.
+    pub fn with_inject_error(self, msg: &str) -> Self {
+        if let Ok(mut guard) = self.inject_error.lock() {
+            *guard = Some(msg.to_string());
+        }
+        self
+    }
+
+    /// `restore()` returns `AppError::Clipboard(msg)` instead of succeeding.
+    pub fn with_restore_error(self, msg: &str) -> Self {
+        if let Ok(mut guard) = self.restore_error.lock() {
+            *guard = Some(msg.to_string());
+        }
+        self
+    }
+
+    pub fn saved(&self) -> bool {
+        self.saved.load(Ordering::SeqCst)
+    }
+
+    pub fn restored(&self) -> bool {
+        self.restored.load(Ordering::SeqCst)
+    }
+
+    pub fn injected(&self) -> Vec<String> {
+        self.injected.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    fn save_inner(&self) -> Result<(), AppError> {
+        if let Ok(guard) = self.save_error.lock() {
+            if let Some(msg) = guard.as_ref() {
+                return Err(AppError::Clipboard(msg.clone()));
+            }
+        }
+        self.saved.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn inject_inner(&self, text: &str) -> Result<(), AppError> {
+        if let Ok(guard) = self.inject_error.lock() {
+            if let Some(msg) = guard.as_ref() {
+                return Err(AppError::Clipboard(msg.clone()));
+            }
+        }
+        if let Some(mut guard) = crate::util::lock_mutex(&self.injected, "MockClipboard::injected")
+        {
+            guard.push(text.to_string());
+        }
+        Ok(())
+    }
+
+    fn restore_inner(&self) -> Result<(), AppError> {
+        if let Ok(guard) = self.restore_error.lock() {
+            if let Some(msg) = guard.as_ref() {
+                return Err(AppError::Clipboard(msg.clone()));
+            }
+        }
+        self.restored.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Same poison behaviour as production: surfaces an Err instead of panicking.
+    fn lock_op(&self) -> Result<std::sync::MutexGuard<'_, ()>, AppError> {
+        crate::util::lock_mutex(&self.op, "MockClipboard::op")
+            .ok_or_else(|| AppError::Clipboard("op lock poisoned".to_string()))
     }
 }
 
@@ -173,35 +260,29 @@ impl Default for MockClipboard {
 }
 
 impl ClipboardProvider for MockClipboard {
-    fn save(&mut self) -> Result<(), AppError> {
-        if let Some(ref msg) = self.save_error {
-            return Err(AppError::Clipboard(msg.clone()));
-        }
-        self.saved = true;
-        Ok(())
+    fn save(&self) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        self.save_inner()
     }
 
     fn inject_text(&self, text: &str) -> Result<(), AppError> {
-        if let Some(ref msg) = self.inject_error {
-            return Err(AppError::Clipboard(msg.clone()));
-        }
-        if let Some(mut guard) = crate::util::lock_mutex(&self.injected, "MockClipboard::injected")
-        {
-            guard.push(text.to_string());
-        }
-        Ok(())
+        let _op = self.lock_op()?;
+        self.inject_inner(text)
     }
 
-    fn restore(&mut self) -> Result<(), AppError> {
-        if let Some(ref msg) = self.restore_error {
-            return Err(AppError::Clipboard(msg.clone()));
-        }
-        self.restored = true;
-        Ok(())
+    fn save_and_inject(&self, text: &str) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        self.save_inner()?;
+        self.inject_inner(text)
+    }
+
+    fn restore(&self) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        self.restore_inner()
     }
 
     fn was_saved(&self) -> bool {
-        self.saved
+        self.saved.load(Ordering::SeqCst)
     }
 }
 
@@ -360,7 +441,10 @@ mod tests {
     fn test_with_clipboard_timeout_success() {
         let result =
             with_clipboard_timeout(|| Ok::<_, AppError>(42), Duration::from_secs(5), "test");
-        assert_eq!(result.unwrap(), 42);
+        match result {
+            Ok(v) => assert_eq!(v, 42),
+            Err(e) => panic!("expected Ok, got Err: {e}"),
+        }
     }
 
     #[test]
@@ -373,8 +457,10 @@ mod tests {
             Duration::from_millis(100),
             "test_op",
         );
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = match result {
+            Ok(v) => panic!("expected Err, got Ok({v})"),
+            Err(e) => e.to_string(),
+        };
         assert!(
             err.contains("timed out"),
             "error should mention timeout: {err}"
@@ -386,46 +472,34 @@ mod tests {
     }
 
     #[test]
-    fn test_new_clipboard_manager() {
+    fn test_clipboard_manager_save() {
         let manager = ClipboardManager::new();
-        assert!(manager.saved_content.is_none());
-    }
-
-    #[test]
-    fn test_save_and_restore_cycle() {
-        let mut manager = ClipboardManager::new();
         assert!(manager.save().is_ok());
     }
 
     #[test]
     fn test_mock_clipboard() {
-        let mut mock = MockClipboard::new();
-        mock.save().unwrap();
-        assert!(mock.saved);
-        mock.inject_text("hello").unwrap();
-        assert_eq!(*mock.injected.lock().unwrap(), vec!["hello"]);
-        mock.restore().unwrap();
-        assert!(mock.restored);
+        let mock = MockClipboard::new();
+        assert!(mock.save().is_ok());
+        assert!(mock.saved());
+        assert!(mock.inject_text("hello").is_ok());
+        assert_eq!(mock.injected(), vec!["hello"]);
+        assert!(mock.restore().is_ok());
+        assert!(mock.restored());
     }
 
     #[test]
-    fn test_any_clipboard_windows() {
-        let mut cb = AnyClipboard::Windows(ClipboardManager::new());
-        assert!(cb.save().is_ok());
+    fn test_mock_clipboard_save_and_inject() {
+        let mock = MockClipboard::new();
+        assert!(mock.save_and_inject("hi").is_ok());
+        assert!(mock.saved());
+        assert_eq!(mock.injected(), vec!["hi"]);
     }
 
     #[test]
-    fn test_any_clipboard_mock() {
-        let mut cb = AnyClipboard::Mock(MockClipboard::new());
-        cb.save().unwrap();
-        cb.inject_text("test").unwrap();
-        cb.restore().unwrap();
-        let mock = match &cb {
-            AnyClipboard::Mock(m) => m,
-            _ => panic!("expected mock"),
-        };
-        assert!(mock.saved);
-        assert_eq!(*mock.injected.lock().unwrap(), vec!["test"]);
-        assert!(mock.restored);
+    fn test_mock_clipboard_error_injection() {
+        let mock = MockClipboard::new().with_inject_error("boom");
+        assert!(mock.inject_text("x").is_err());
+        assert!(mock.injected().is_empty());
     }
 }

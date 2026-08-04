@@ -1,4 +1,3 @@
-use crate::clipboard::ClipboardProvider;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
@@ -66,10 +65,8 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                     let _ = win.hide();
                 }
                 // Restore clipboard if needed
-                if let Some(cb) = app.try_state::<Arc<Mutex<crate::clipboard::AnyClipboard>>>() {
-                    if let Some(mut guard) = crate::util::lock_mutex(&cb, "clipboard_tray_reset") {
-                        let _ = guard.restore();
-                    }
+                if let Some(cb) = app.try_state::<Arc<dyn crate::clipboard::ClipboardProvider>>() {
+                    let _ = cb.restore();
                 }
                 // Emit event
                 let _ = app.emit("tray-reset", ());

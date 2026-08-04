@@ -5,7 +5,7 @@
 //! and clipboard restore on failure.
 
 use crate::audio::MockAudioCapture;
-use crate::clipboard::{AnyClipboard, MockClipboard};
+use crate::clipboard::MockClipboard;
 use crate::commands::MockEmitter;
 use crate::commands::pipeline_state::PipelineState;
 use crate::commands::recording_session::SessionPolicy;
@@ -20,10 +20,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 fn build_ps() -> (PipelineState, Arc<MockEmitter>) {
+    build_ps_with_clipboard(Arc::new(MockClipboard::new()))
+}
+
+fn build_ps_with_clipboard(clipboard: Arc<MockClipboard>) -> (PipelineState, Arc<MockEmitter>) {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
     let engine = Arc::new(MockEngine::new("test"));
-    let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
     let emitter = Arc::new(MockEmitter::new());
     let ps = PipelineState::new(
         sm,
@@ -284,9 +287,7 @@ async fn test_cancel_review_clipboard_restore_failure_still_returns_idle() {
     let (ps, _emitter) = build_ps();
     to_reviewing(&ps);
 
-    let mut mock = MockClipboard::new();
-    mock.restore_error = Some("restore failed".to_string());
-    let failing_clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(mock)));
+    let failing_clipboard = Arc::new(MockClipboard::new().with_restore_error("restore failed"));
     let ps_with_failing = PipelineState::new(
         ps.sm.clone(),
         ps.ac.clone(),
@@ -318,14 +319,13 @@ async fn test_clipboard_restore_on_inject_failure() {
     // inject_direct's entry transition expects Transcribing, not Injecting.
     to_transcribing(&ps);
 
-    let mut mock = MockClipboard::new();
-    mock.inject_error = Some("inject failed".to_string());
-    let failing_clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(mock)));
+    let mock = Arc::new(MockClipboard::new().with_inject_error("inject failed"));
+    let failing_clipboard = mock.clone();
     let ps_with_failing = PipelineState::new(
         ps.sm.clone(),
         ps.ac.clone(),
         ps.engine.clone(),
-        failing_clipboard.clone(),
+        failing_clipboard,
         ps.perf_history.clone(),
         ps.config_cache.clone(),
         ps.cached_llm.clone(),
@@ -352,14 +352,10 @@ async fn test_clipboard_restore_on_inject_failure() {
         .await;
 
     assert_eq!(ps_with_failing.sm_state(), Some(StateTag::Idle));
-    let restored = match failing_clipboard.lock() {
-        Ok(guard) => match &*guard {
-            AnyClipboard::Mock(m) => m.restored,
-            _ => panic!("expected mock clipboard"),
-        },
-        Err(_) => panic!("clipboard lock poisoned"),
-    };
-    assert!(restored, "clipboard should be restored on inject failure");
+    assert!(
+        mock.restored(),
+        "clipboard should be restored on inject failure"
+    );
 }
 
 /// Window controller that simulates a missing review window so the fallback
@@ -443,9 +439,7 @@ impl WindowController for RecordingWindowController {
 #[tokio::test]
 async fn confirm_review_error_branch_restores_focus() {
     // Clipboard that succeeds at save() but fails at inject_text().
-    let mut mock = MockClipboard::new();
-    mock.inject_error = Some("inject failed".to_string());
-    let failing_clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(mock)));
+    let failing_clipboard = Arc::new(MockClipboard::new().with_inject_error("inject failed"));
 
     let recording = Arc::new(RecordingWindowController::new());
 
@@ -706,7 +700,8 @@ async fn inject_direct_aborts_when_entry_transition_fails() {
 
 #[tokio::test]
 async fn show_review_aborts_when_entry_transition_fails() {
-    let (ps, emitter) = build_ps();
+    let mock_cb = Arc::new(MockClipboard::new());
+    let (ps, emitter) = build_ps_with_clipboard(mock_cb.clone());
     // Real state stays Idle — sm_transcribing_to_reviewing() will return false.
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 
@@ -738,20 +733,13 @@ async fn show_review_aborts_when_entry_transition_fails() {
     );
 
     // Clipboard must have been saved (pre-transition) then restored (guard
-    // recovery). Inspect the underlying MockClipboard through the AnyClipboard
-    // enum to confirm the save/restore round-trip.
-    let cb_guard = crate::util::lock_mutex(&ps.clipboard, "clipboard").unwrap();
-    match &*cb_guard {
-        AnyClipboard::Mock(m) => {
-            assert!(
-                m.saved,
-                "clipboard must be saved before attempting transition"
-            );
-            assert!(
-                m.restored,
-                "clipboard must be restored when entry transition fails (else user's clipboard is silently held)"
-            );
-        }
-        AnyClipboard::Windows(_) => panic!("test harness must use MockClipboard"),
-    }
+    // recovery). Assert through the concrete MockClipboard handle.
+    assert!(
+        mock_cb.saved(),
+        "clipboard must be saved before attempting transition"
+    );
+    assert!(
+        mock_cb.restored(),
+        "clipboard must be restored when entry transition fails (else user's clipboard is silently held)"
+    );
 }

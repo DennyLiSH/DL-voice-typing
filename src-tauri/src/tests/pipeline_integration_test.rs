@@ -5,7 +5,7 @@
 //! and its win32 DLL dependencies at link time).
 
 use crate::audio::{AudioCaptureProvider, MockAudioCapture};
-use crate::clipboard::{AnyClipboard, ClipboardProvider, MockClipboard};
+use crate::clipboard::{ClipboardProvider, MockClipboard};
 use crate::commands::{EventEmitter, MockEmitter};
 use crate::config::AppConfig;
 use crate::llm::{AnyCorrector, MockCorrector, TextCorrector};
@@ -33,7 +33,7 @@ fn test_mock_engine_is_ready() {
 
 #[test]
 fn test_mock_clipboard_cycle() {
-    let mut cb = AnyClipboard::Mock(MockClipboard::new());
+    let cb = MockClipboard::new();
     assert!(cb.save().is_ok());
     assert!(cb.inject_text("hello").is_ok());
     assert!(cb.restore().is_ok());
@@ -85,7 +85,7 @@ fn test_state_machine_with_mock_engine() {
 
     sm.transcribing_to_injecting().unwrap();
 
-    let mut cb = AnyClipboard::Mock(MockClipboard::new());
+    let cb = MockClipboard::new();
     cb.save().unwrap();
     cb.inject_text(&text).unwrap();
 

@@ -1,4 +1,4 @@
-use crate::clipboard::{AnyClipboard, ClipboardProvider};
+use crate::clipboard::ClipboardProvider;
 use crate::commands::EventEmitter;
 use crate::commands::pipeline_state::PipelineState;
 use crate::commands::review::ReviewData;
@@ -59,7 +59,7 @@ impl DeliveryContext {
 pub(crate) struct DeliveryController {
     emitter: Arc<dyn EventEmitter>,
     window_controller: Arc<dyn WindowController>,
-    clipboard: Arc<Mutex<AnyClipboard>>,
+    clipboard: Arc<dyn ClipboardProvider>,
     review: Arc<dyn crate::commands::review_provider::ReviewProvider>,
     perf_history: Arc<crate::perf::PerfHistory>,
     context: Mutex<DeliveryContext>,
@@ -69,7 +69,7 @@ impl DeliveryController {
     pub(crate) fn new(
         emitter: Arc<dyn EventEmitter>,
         window_controller: Arc<dyn WindowController>,
-        clipboard: Arc<Mutex<AnyClipboard>>,
+        clipboard: Arc<dyn ClipboardProvider>,
         review: Arc<dyn crate::commands::review_provider::ReviewProvider>,
         perf_history: Arc<crate::perf::PerfHistory>,
     ) -> Self {
@@ -165,12 +165,8 @@ impl DeliveryController {
         );
 
         // Save clipboard before entering review state.
-        if let Some(mut cb) = crate::util::lock_mutex(&self.clipboard, "clipboard") {
-            if let Err(e) = cb.save() {
-                warn!("show_review: clipboard save failed: {e}");
-            }
-        } else {
-            warn!("show_review: clipboard lock poisoned");
+        if let Err(e) = self.clipboard.save() {
+            warn!("show_review: clipboard save failed: {e}");
         }
 
         // Transition to Reviewing.
@@ -316,12 +312,8 @@ impl DeliveryController {
             accumulated.as_ref().map(|s| s.len()).unwrap_or(0)
         );
 
-        if let Some(mut cb) = crate::util::lock_mutex(&self.clipboard, "clipboard") {
-            if let Err(e) = cb.save() {
-                warn!("realtime_review_handoff: clipboard save failed: {e}");
-            }
-        } else {
-            warn!("realtime_review_handoff: clipboard lock poisoned");
+        if let Err(e) = self.clipboard.save() {
+            warn!("realtime_review_handoff: clipboard save failed: {e}");
         }
 
         ps.sm_stop_recording();
@@ -420,10 +412,8 @@ impl DeliveryController {
         let (foreground_hwnd, data_saving, _perf, _t_press) = self.take_context();
 
         // Restore clipboard.
-        if let Some(mut cb) = crate::util::lock_mutex(&self.clipboard, "clipboard") {
-            if let Err(e) = cb.restore() {
-                warn!("cancel_review: clipboard restore failed: {e}");
-            }
+        if let Err(e) = self.clipboard.restore() {
+            warn!("cancel_review: clipboard restore failed: {e}");
         }
 
         // Restore focus and hide windows.
@@ -637,10 +627,8 @@ impl DeliveryController {
         let cb = self.clipboard.clone();
         let text_for_inject = text.to_string();
         match tokio::task::spawn_blocking(move || {
-            let mut cb = crate::util::lock_mutex(&cb, "delivery::clipboard")
-                .ok_or_else(|| "clipboard lock poisoned".to_string())?;
-            cb.save().map_err(|e| e.to_string())?;
-            cb.inject_text(&text_for_inject).map_err(|e| e.to_string())
+            cb.save_and_inject(&text_for_inject)
+                .map_err(|e| e.to_string())
         })
         .await
         {
@@ -655,11 +643,7 @@ impl DeliveryController {
     }
 
     fn restore_clipboard(&self) -> Result<(), String> {
-        if let Some(mut cb) = crate::util::lock_mutex(&self.clipboard, "clipboard") {
-            cb.restore().map_err(|e| e.to_string())
-        } else {
-            Err("clipboard lock poisoned".to_string())
-        }
+        self.clipboard.restore().map_err(|e| e.to_string())
     }
 
     fn store_foreground(&self, hwnd: isize) {

@@ -17,7 +17,7 @@ pub mod watchdog;
 pub mod win32;
 
 use audio::{AudioCapture, AudioCaptureProvider};
-use clipboard::AnyClipboard;
+use clipboard::{ClipboardManager, ClipboardProvider};
 use commands::DownloadState;
 use config::{AppConfig, ConfigCache};
 use hotkey::HotkeyManager;
@@ -48,9 +48,7 @@ pub fn run() {
     let state_machine = Arc::new(Mutex::new(StateMachine::new()));
     let audio_capture: Arc<Mutex<dyn AudioCaptureProvider>> =
         Arc::new(Mutex::new(AudioCapture::new()));
-    let clipboard_manager = Arc::new(Mutex::new(clipboard::AnyClipboard::Windows(
-        clipboard::ClipboardManager::new(),
-    )));
+    let clipboard_manager: Arc<dyn ClipboardProvider> = Arc::new(ClipboardManager::new());
     let perf_history = Arc::new(PerfHistory::new());
     let cached_llm: Arc<Mutex<Option<crate::llm::AnyCorrector>>> = Arc::new(Mutex::new(None));
     let shutting_down = Arc::new(AtomicBool::new(false));
@@ -291,7 +289,7 @@ fn manage_pipeline_state(
     app: &tauri::AppHandle,
     state_machine: Arc<Mutex<StateMachine>>,
     audio_capture: Arc<Mutex<dyn AudioCaptureProvider>>,
-    clipboard_manager: Arc<Mutex<AnyClipboard>>,
+    clipboard_manager: Arc<dyn ClipboardProvider>,
     perf_history: Arc<PerfHistory>,
     shutting_down: Arc<AtomicBool>,
     cached_llm: Arc<Mutex<Option<crate::llm::AnyCorrector>>>,

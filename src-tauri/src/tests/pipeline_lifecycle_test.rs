@@ -2,7 +2,7 @@
 //! Exercises the pipeline functions through complete state machine transitions.
 
 use crate::audio::MockAudioCapture;
-use crate::clipboard::{AnyClipboard, MockClipboard};
+use crate::clipboard::MockClipboard;
 use crate::commands::pipeline_state::PipelineState;
 use crate::commands::review_provider::MockReviewProvider;
 use crate::commands::window_controller::NoopWindowController;
@@ -18,7 +18,7 @@ fn build_ps() -> PipelineState {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
     let engine = Arc::new(MockEngine::new("test transcription"));
-    let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
+    let clipboard = Arc::new(MockClipboard::new());
     let emitter: Arc<dyn EventEmitter> = Arc::new(MockEmitter::new());
 
     PipelineState::new(

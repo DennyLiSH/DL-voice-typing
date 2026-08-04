@@ -6,7 +6,7 @@
 //! C. `recover()` panic-recovery (conditional restore).
 
 use crate::audio::MockAudioCapture;
-use crate::clipboard::{AnyClipboard, ClipboardProvider, MockClipboard};
+use crate::clipboard::{ClipboardProvider, MockClipboard};
 use crate::commands::MockEmitter;
 use crate::commands::recording_session::{
     RecordingSession, ReleaseAction, ReleaseActionKind, SessionPolicy, decide_release,
@@ -27,7 +27,7 @@ struct Rig {
     session: RecordingSession,
     sm: Arc<Mutex<StateMachine>>,
     emitter: Arc<MockEmitter>,
-    clipboard: Arc<Mutex<AnyClipboard>>,
+    clipboard: Arc<MockClipboard>,
 }
 
 fn config(realtime: bool, review: bool, llm: bool) -> AppConfig {
@@ -43,7 +43,7 @@ fn build_rig(cfg: AppConfig, engine_text: &str) -> Rig {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
     let engine = Arc::new(MockEngine::new(engine_text));
-    let clipboard = Arc::new(Mutex::new(AnyClipboard::Mock(MockClipboard::new())));
+    let clipboard = Arc::new(MockClipboard::new());
     let emitter = Arc::new(MockEmitter::new());
     let ps = crate::commands::pipeline_state::PipelineState::new(
         sm.clone(),
@@ -82,10 +82,6 @@ fn event_names(emitter: &MockEmitter) -> Vec<String> {
         .into_iter()
         .map(|(name, _)| name)
         .collect()
-}
-
-fn clipboard_mock(rig: &Rig) -> std::sync::MutexGuard<'_, AnyClipboard> {
-    rig.clipboard.lock().unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -166,10 +162,8 @@ async fn run_pipeline_classic_direct_injects() {
     let names = event_names(&rig.emitter);
     assert!(names.contains(&"transcription-complete".to_string()));
     assert!(names.contains(&"injection-complete".to_string()));
-    if let AnyClipboard::Mock(m) = &*clipboard_mock(&rig) {
-        assert!(m.saved, "clipboard should be saved");
-        assert!(!m.injected.lock().unwrap().is_empty(), "text injected");
-    }
+    assert!(rig.clipboard.saved(), "clipboard should be saved");
+    assert!(!rig.clipboard.injected().is_empty(), "text injected");
 }
 
 #[tokio::test]
@@ -197,9 +191,7 @@ async fn run_pipeline_classic_review_enters_reviewing() {
         !names.contains(&"injection-complete".to_string()),
         "review path must not inject"
     );
-    if let AnyClipboard::Mock(m) = &*clipboard_mock(&rig) {
-        assert!(m.saved, "clipboard saved before review");
-    }
+    assert!(rig.clipboard.saved(), "clipboard saved before review");
 }
 
 #[tokio::test]
@@ -226,9 +218,7 @@ async fn run_realtime_fast_path_injects_accumulated() {
         !names.contains(&"transcription-complete".to_string()),
         "fast path skips Whisper"
     );
-    if let AnyClipboard::Mock(m) = &*clipboard_mock(&rig) {
-        assert!(!m.injected.lock().unwrap().is_empty());
-    }
+    assert!(!rig.clipboard.injected().is_empty());
 }
 
 #[tokio::test]
@@ -297,17 +287,16 @@ fn recover_with_saved_restores_clipboard() {
         s.stop_recording().unwrap();
         s.transcribing_to_injecting().unwrap();
         // Clipboard was saved this cycle.
-        if let AnyClipboard::Mock(m) = &mut *rig.clipboard.lock().unwrap() {
-            m.save().unwrap();
-        }
+        rig.clipboard.save().unwrap();
     }
 
     rig.session.recover();
 
     assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
-    if let AnyClipboard::Mock(m) = &*rig.clipboard.lock().unwrap() {
-        assert!(m.restored, "saved clipboard should be restored");
-    }
+    assert!(
+        rig.clipboard.restored(),
+        "saved clipboard should be restored"
+    );
     let names = event_names(&rig.emitter);
     assert!(names.contains(&"speech-error".to_string()));
 }
@@ -325,9 +314,10 @@ fn recover_without_save_does_not_restore() {
     rig.session.recover();
 
     assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
-    if let AnyClipboard::Mock(m) = &*rig.clipboard.lock().unwrap() {
-        assert!(!m.restored, "unsaved clipboard must not be restored");
-    }
+    assert!(
+        !rig.clipboard.restored(),
+        "unsaved clipboard must not be restored"
+    );
     assert!(event_names(&rig.emitter).contains(&"speech-error".to_string()));
 }
 

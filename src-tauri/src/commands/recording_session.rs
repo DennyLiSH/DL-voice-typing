@@ -11,7 +11,6 @@
 //! `Deliver` future can be awaited directly under a test runtime.
 
 use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
-use crate::clipboard::ClipboardProvider;
 use crate::config::{AppConfig, Language, PipelineMode};
 use crate::data_saving::{SaveConfig, SaveResult};
 use crate::error::AppError;
@@ -426,10 +425,8 @@ impl RecordingSession {
     pub(crate) fn recover(&self) {
         self.ps.sm_reset();
         self.ps.window_controller.hide_floating();
-        if let Some(mut cb) = crate::util::lock_mutex(&self.ps.clipboard, "clipboard") {
-            if cb.was_saved() {
-                let _ = cb.restore();
-            }
+        if self.ps.clipboard.was_saved() {
+            let _ = self.ps.clipboard.restore();
         }
         self.ps.emitter.emit(
             "speech-error",
