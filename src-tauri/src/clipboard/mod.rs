@@ -58,6 +58,8 @@ pub struct ClipboardManager {
     saved_content: Mutex<Option<String>>,
     /// Serializes whole clipboard operations (save / inject / restore /
     /// save_and_inject) against each other — replaces the old outer mutex.
+    /// Helpers (`save_inner`/`inject_inner`/`restore_inner`) assume the caller
+    /// already holds this lock; public methods acquire it via `lock_op`.
     op: Mutex<()>,
 }
 
@@ -70,6 +72,7 @@ impl ClipboardManager {
         }
     }
 
+    /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn save_inner(&self) -> Result<(), AppError> {
         let content = read_clipboard().ok();
         if let Some(mut guard) =
@@ -80,6 +83,7 @@ impl ClipboardManager {
         Ok(())
     }
 
+    /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn inject_inner(&self, text: &str) -> Result<(), AppError> {
         write_clipboard_with_retry(text)?;
         simulate_paste()?;
@@ -101,6 +105,7 @@ impl ClipboardManager {
         Ok(())
     }
 
+    /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn restore_inner(&self) -> Result<(), AppError> {
         let saved = crate::util::lock_mutex(&self.saved_content, "ClipboardManager::saved_content")
             .and_then(|mut guard| guard.take());
@@ -110,6 +115,8 @@ impl ClipboardManager {
         Ok(())
     }
 
+    /// Acquires the op lock. Callers must hold the returned guard across both
+    /// the save and inject halves of `save_and_inject` to preserve atomicity.
     fn lock_op(&self) -> Result<std::sync::MutexGuard<'_, ()>, AppError> {
         crate::util::lock_mutex(&self.op, "ClipboardManager::op")
             .ok_or_else(|| AppError::Clipboard("op lock poisoned".to_string()))
@@ -160,6 +167,11 @@ pub struct MockClipboard {
     save_error: Mutex<Option<String>>,
     inject_error: Mutex<Option<String>>,
     restore_error: Mutex<Option<String>>,
+    /// Serializes whole clipboard operations (save / inject / restore /
+    /// save_and_inject) against each other — mirrors production shape per
+    /// ADR-0010 test-fidelity rationale. Helpers (`save_inner`/`inject_inner`/
+    /// `restore_inner`) assume the caller already holds this lock; public
+    /// trait methods acquire it via `lock_op`.
     op: Mutex<()>,
 }
 
@@ -213,6 +225,7 @@ impl MockClipboard {
         self.injected.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
+    /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn save_inner(&self) -> Result<(), AppError> {
         if let Ok(guard) = self.save_error.lock() {
             if let Some(msg) = guard.as_ref() {
@@ -223,6 +236,7 @@ impl MockClipboard {
         Ok(())
     }
 
+    /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn inject_inner(&self, text: &str) -> Result<(), AppError> {
         if let Ok(guard) = self.inject_error.lock() {
             if let Some(msg) = guard.as_ref() {
@@ -236,6 +250,7 @@ impl MockClipboard {
         Ok(())
     }
 
+    /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn restore_inner(&self) -> Result<(), AppError> {
         if let Ok(guard) = self.restore_error.lock() {
             if let Some(msg) = guard.as_ref() {
@@ -246,6 +261,8 @@ impl MockClipboard {
         Ok(())
     }
 
+    /// Acquires the op lock. Callers must hold the returned guard across both
+    /// the save and inject halves of `save_and_inject` to preserve atomicity.
     /// Same poison behaviour as production: surfaces an Err instead of panicking.
     fn lock_op(&self) -> Result<std::sync::MutexGuard<'_, ()>, AppError> {
         crate::util::lock_mutex(&self.op, "MockClipboard::op")
