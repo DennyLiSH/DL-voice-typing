@@ -215,7 +215,6 @@ src-tauri/src/
 ├── watchdog.rs                # 状态机看门狗 (10s check, 30s force reset)
 ├── perf.rs                    # 性能指标采集
 ├── win32.rs                   # Win32 API (光标定位、显示器工作区、前台窗口)
-├── platform.rs                # 平台相关工具
 ├── util.rs                    # 通用工具 (锁 poisoning 日志)
 ├── data_saving.rs             # 训练数据保存 (WAV + JSON)
 ├── realtime.rs                # 实时转写 (滑动窗口、VAD、累积去重)
