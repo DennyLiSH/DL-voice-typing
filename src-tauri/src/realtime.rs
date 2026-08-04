@@ -341,8 +341,8 @@ impl RealtimeTranscriber {
     /// Start the background transcription loop.
     ///
     /// The `engine` parameter uses `Arc<dyn SpeechEngine>` trait-object dispatch,
-    /// consistent with the project's other trait-object abstractions (`AnyClipboard`,
-    /// `AnyCorrector`, `AudioCaptureProvider`). Tests use `MockEngine::new()`.
+    /// consistent with the project's other trait-object abstractions
+    /// (`ClipboardProvider`, `TextCorrector`, `AudioCaptureProvider`). Tests use `MockEngine::new()`.
     pub fn start(
         audio: Arc<dyn AudioSource + Send + Sync>,
         engine: Arc<dyn SpeechEngine>,

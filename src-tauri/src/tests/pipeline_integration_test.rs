@@ -8,7 +8,7 @@ use crate::audio::{AudioCaptureProvider, MockAudioCapture};
 use crate::clipboard::{ClipboardProvider, MockClipboard};
 use crate::commands::{EventEmitter, MockEmitter};
 use crate::config::AppConfig;
-use crate::llm::{AnyCorrector, MockCorrector, TextCorrector};
+use crate::llm::{MockCorrector, TextCorrector};
 use crate::speech::{SpeechEngine, mock::MockEngine};
 use crate::state::StateMachine;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ fn test_mock_clipboard_cycle() {
 
 #[test]
 fn test_mock_corrector_corrects() {
-    let corrector = AnyCorrector::Mock(MockCorrector::new("corrected"));
+    let corrector = MockCorrector::new("corrected");
     let result = corrector.correct_sync("original");
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "corrected");

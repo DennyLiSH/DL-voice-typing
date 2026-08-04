@@ -14,7 +14,7 @@ use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
 use crate::config::{AppConfig, Language, PipelineMode};
 use crate::data_saving::{SaveConfig, SaveResult};
 use crate::error::AppError;
-use crate::llm::{AnyCorrector, LLMClient, TextCorrector};
+use crate::llm::{LLMClient, TextCorrector};
 use crate::perf::PerfMetrics;
 use std::future::Future;
 use std::pin::Pin;
@@ -670,32 +670,38 @@ async fn transcribe_and_save(
 }
 
 /// Ensure the cached corrector matches the given config, replacing it if mismatched.
-/// Returns Err only on lock poisoning. HTTP calls happen later in `resolve_llm_text`.
+/// Returns `Ok(true)` when the cache was rebuilt, `Ok(false)` when the existing
+/// corrector was kept. Returns Err only on lock poisoning. HTTP calls happen
+/// later in `resolve_llm_text`.
 ///
-/// Boundary: `live_api_key` must stay read inside `resolve_llm_text` (line ~673)
-/// and be passed in here as a parameter — do NOT move the read into this helper.
+/// Boundary: `live_api_key` must stay read inside `resolve_llm_text` and be
+/// passed in here as a parameter — do NOT move the read into this helper.
 /// Rationale: preserve the "key rotation live-read per call" contract (see
 /// SessionPolicy doc) so a rotated key takes effect on the next call without
 /// invalidating the rest of the session policy snapshot.
+///
+/// Security note: the DPAPI boundary is unchanged — the key is decrypted from
+/// ConfigCache per call and held as a plaintext String inside LLMClient;
+/// Box<dyn TextCorrector> adds no new exposure surface.
 fn refresh_cached_llm(
-    cached_llm: &Arc<Mutex<Option<AnyCorrector>>>,
+    cached_llm: &Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
     api_url: &str,
     api_key: &str,
     model: &str,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let mut cached = crate::util::lock_mutex(cached_llm, "cached_llm")
         .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
     let needs_new = cached
         .as_ref()
         .is_none_or(|c| !c.matches_config(api_url, api_key, model));
     if needs_new {
-        *cached = Some(AnyCorrector::Live(LLMClient::new(
+        *cached = Some(Box::new(LLMClient::new(
             api_url.to_string(),
             api_key.to_string(),
             model.to_string(),
         )));
     }
-    Ok(())
+    Ok(needs_new)
 }
 
 /// Resolve LLM-corrected text. Handles cache lookup, client creation, and fallback.
@@ -933,45 +939,39 @@ mod tests_session_policy {
 #[cfg(test)]
 mod tests_refresh_cached_llm {
     use super::*;
-    use crate::llm::{AnyCorrector, MockCorrector};
+    use crate::llm::MockCorrector;
 
-    fn make_cached(url: &str, key: &str, model: &str) -> Arc<Mutex<Option<AnyCorrector>>> {
-        Arc::new(Mutex::new(Some(AnyCorrector::Mock(
+    fn make_cached(
+        url: &str,
+        key: &str,
+        model: &str,
+    ) -> Arc<Mutex<Option<Box<dyn TextCorrector>>>> {
+        Arc::new(Mutex::new(Some(Box::new(
             MockCorrector::new("ok").with_config(url, key, model),
         ))))
     }
 
-    /// Snapshot the current variant name so tests can assert rebuild behaviour
-    /// without holding the lock across the refresh call.
-    fn current_variant(cached: &Arc<Mutex<Option<AnyCorrector>>>) -> &'static str {
-        let guard = cached
-            .lock()
-            .unwrap_or_else(|_| panic!("lock should not be poisoned in this test"));
-        match guard.as_ref() {
-            Some(AnyCorrector::Mock(_)) => "mock",
-            Some(AnyCorrector::Live(_)) => "live",
-            None => "none",
-        }
-    }
-
-    fn refresh_ok(cached: &Arc<Mutex<Option<AnyCorrector>>>, url: &str, key: &str, model: &str) {
-        if let Err(e) = refresh_cached_llm(cached, url, key, model) {
-            panic!("refresh_cached_llm should succeed in this test: {e}");
-        }
+    /// Refresh and return the rebuilt flag, panicking on unexpected Err.
+    fn refresh(
+        cached: &Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
+        url: &str,
+        key: &str,
+        model: &str,
+    ) -> bool {
+        refresh_cached_llm(cached, url, key, model)
+            .unwrap_or_else(|e| panic!("refresh_cached_llm should succeed in this test: {e}"))
     }
 
     #[test]
     fn skips_rebuild_when_config_matches() {
         let cached = make_cached("u", "k", "m");
-        refresh_ok(&cached, "u", "k", "m");
-        assert_eq!(current_variant(&cached), "mock", "expected no rebuild");
+        assert!(!refresh(&cached, "u", "k", "m"), "expected no rebuild");
     }
 
     #[test]
     fn rebuilds_when_api_url_differs() {
         let cached = make_cached("u1", "k", "m");
-        refresh_ok(&cached, "u2", "k", "m");
-        assert_eq!(current_variant(&cached), "live", "expected Live rebuild");
+        assert!(refresh(&cached, "u2", "k", "m"), "expected rebuild");
     }
 
     #[test]
@@ -979,29 +979,24 @@ mod tests_refresh_cached_llm {
         // Validates the live-key rotation property: a rotated key forces rebuild
         // even though policy (url+model) is unchanged.
         let cached = make_cached("u", "k1", "m");
-        refresh_ok(&cached, "u", "k2", "m");
-        assert_eq!(
-            current_variant(&cached),
-            "live",
-            "expected Live rebuild on key rotation"
+        assert!(
+            refresh(&cached, "u", "k2", "m"),
+            "expected rebuild on key rotation"
         );
     }
 
     #[test]
     fn rebuilds_when_model_differs() {
         let cached = make_cached("u", "k", "m1");
-        refresh_ok(&cached, "u", "k", "m2");
-        assert_eq!(current_variant(&cached), "live", "expected Live rebuild");
+        assert!(refresh(&cached, "u", "k", "m2"), "expected rebuild");
     }
 
     #[test]
     fn rebuilds_when_cache_empty() {
-        let cached: Arc<Mutex<Option<AnyCorrector>>> = Arc::new(Mutex::new(None));
-        refresh_ok(&cached, "u", "k", "m");
-        assert_eq!(
-            current_variant(&cached),
-            "live",
-            "expected Live on first insertion"
+        let cached: Arc<Mutex<Option<Box<dyn TextCorrector>>>> = Arc::new(Mutex::new(None));
+        assert!(
+            refresh(&cached, "u", "k", "m"),
+            "expected rebuild on first insertion"
         );
     }
 
@@ -1009,7 +1004,7 @@ mod tests_refresh_cached_llm {
     fn returns_err_when_mutex_poisoned() {
         // Covers the lock-poisoned error path — without this, only the Ok branch
         // of refresh_cached_llm would be exercised by the suite.
-        let cached: Arc<Mutex<Option<AnyCorrector>>> = Arc::new(Mutex::new(None));
+        let cached: Arc<Mutex<Option<Box<dyn TextCorrector>>>> = Arc::new(Mutex::new(None));
         let _ = std::panic::catch_unwind(|| {
             let _g = cached
                 .lock()

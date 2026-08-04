@@ -12,7 +12,7 @@ use crate::commands::recording_session::SessionPolicy;
 use crate::commands::review_provider::MockReviewProvider;
 use crate::commands::window_controller::{NoopWindowController, WindowController};
 use crate::config::{AppConfig, ConfigCache};
-use crate::llm::{AnyCorrector, MockCorrector};
+use crate::llm::MockCorrector;
 use crate::perf::PerfHistory;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
@@ -35,9 +35,7 @@ fn build_ps_with_clipboard(clipboard: Arc<MockClipboard>) -> (PipelineState, Arc
         clipboard,
         Arc::new(PerfHistory::new()),
         ConfigCache::new(AppConfig::default()),
-        Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new(
-            "corrected",
-        ))))),
+        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
         Arc::new(Mutex::new(None)),
         Arc::new(NoopWindowController),
         emitter.clone(),

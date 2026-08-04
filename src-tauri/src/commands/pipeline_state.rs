@@ -6,7 +6,7 @@ use crate::commands::delivery_controller::DeliveryController;
 use crate::commands::review_provider::{ReviewProvider, TauriReviewProvider};
 use crate::commands::window_controller::window_controller_from_app;
 use crate::config::ConfigCache;
-use crate::llm::AnyCorrector;
+use crate::llm::TextCorrector;
 use crate::perf::PerfHistory;
 use crate::realtime::RealtimeTranscriber;
 use crate::speech::SpeechEngine;
@@ -27,7 +27,7 @@ pub struct PipelineState {
     pub(crate) clipboard: Arc<dyn ClipboardProvider>,
     pub(crate) perf_history: Arc<PerfHistory>,
     pub(crate) config_cache: ConfigCache,
-    pub(crate) cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
+    pub(crate) cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
     pub(crate) realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
     pub(crate) window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
     pub(crate) emitter: Arc<dyn EventEmitter>,
@@ -53,7 +53,7 @@ impl PipelineState {
         clipboard: Arc<dyn ClipboardProvider>,
         perf_history: Arc<PerfHistory>,
         config_cache: ConfigCache,
-        cached_llm: Arc<Mutex<Option<AnyCorrector>>>,
+        cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
         realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
         window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
         emitter: Arc<dyn EventEmitter>,
@@ -114,7 +114,7 @@ impl PipelineState {
             perf_history,
             config_cache: app.state::<ConfigCache>().inner().clone(),
             cached_llm: app
-                .state::<Arc<Mutex<Option<AnyCorrector>>>>()
+                .state::<Arc<Mutex<Option<Box<dyn TextCorrector>>>>>()
                 .inner()
                 .clone(),
             realtime_transcriber: app
@@ -384,7 +384,7 @@ mod sm_verb_tests {
     use crate::commands::review_provider::MockReviewProvider;
     use crate::commands::window_controller::NoopWindowController;
     use crate::config::{AppConfig, ConfigCache};
-    use crate::llm::{AnyCorrector, MockCorrector};
+    use crate::llm::MockCorrector;
     use crate::perf::PerfHistory;
     use crate::speech::mock::MockEngine;
     use crate::state::StateTag;
@@ -400,9 +400,7 @@ mod sm_verb_tests {
             Arc::new(MockClipboard::new()),
             Arc::new(PerfHistory::new()),
             ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new(
-                "corrected",
-            ))))),
+            Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
             Arc::new(Mutex::new(None)),
             Arc::new(NoopWindowController),
             emitter,

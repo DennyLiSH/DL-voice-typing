@@ -8,7 +8,7 @@ use crate::commands::review_provider::MockReviewProvider;
 use crate::commands::window_controller::NoopWindowController;
 use crate::commands::{EventEmitter, MockEmitter};
 use crate::config::AppConfig;
-use crate::llm::{AnyCorrector, MockCorrector};
+use crate::llm::MockCorrector;
 use crate::perf::PerfHistory;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
@@ -28,9 +28,7 @@ fn build_ps() -> PipelineState {
         clipboard,
         Arc::new(PerfHistory::new()),
         crate::config::ConfigCache::new(AppConfig::default()),
-        Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new(
-            "corrected",
-        ))))),
+        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
         Arc::new(Mutex::new(None)),
         Arc::new(NoopWindowController),
         emitter,

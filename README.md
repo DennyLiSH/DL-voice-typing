@@ -158,7 +158,7 @@ Idle → Recording → Transcribing → [LLMRefining →] Injecting → Idle
 
 ## 🧠 关键设计决策
 
-1. **枚举派发与 trait 对象的混用** — `AnyClipboard` / `AnyCorrector` 枚举替代对应 trait 的 dyn 派发（性能 + Mock 变体）。`SpeechEngine` 则相反：用 `Arc<dyn SpeechEngine>` trait 对象，以便 Whisper 与未来云端后端共享同一调用 surface。每条路径都有 `Mock` 变体注入测试。
+1. **统一 trait 对象派发** — `ClipboardProvider`、`SpeechEngine`、`TextCorrector` 等能力统一走 trait 对象（`Arc<dyn …>` / `Box<dyn …>`），以便生产实现与 Mock 变体共享同一调用 surface。早年的 `AnyClipboard` / `AnyCorrector` 枚举派发已于 2026-08 移除（纯 1:1 透传壳，无领域逻辑）。每条路径都有 `Mock` 变体注入测试。
 
 2. **剪贴板 + Ctrl+V 文本注入** — 写入剪贴板 → 模拟 Ctrl+V → 恢复原剪贴板内容。未使用 SendInput 直接文本输入，因 Windows IME 兼容性不可靠。剪贴板操作有 2 秒超时，防止其他进程持有剪贴板时死锁。
 
@@ -226,12 +226,12 @@ src-tauri/src/
 │   ├── whisper.rs             # Whisper.cpp 引擎 (GPU fallback, no_speech filter)
 │   └── mock.rs                # 测试用 MockEngine
 ├── clipboard/
-│   └── mod.rs                 # ClipboardProvider trait + AnyClipboard, Win32 剪贴板 + Ctrl+V, 2s timeout
+│   └── mod.rs                 # ClipboardProvider trait (Arc<dyn> 句柄), Win32 剪贴板 + Ctrl+V, 2s timeout
 ├── hotkey/
 │   ├── mod.rs                 # HotkeyManager trait, HotkeyEvent
 │   └── windows.rs             # Windows 全局热键 (SetWindowsHookEx)
 ├── llm/
-│   ├── mod.rs                 # TextCorrector trait + AnyCorrector 枚举派发
+│   ├── mod.rs                 # TextCorrector trait (Box<dyn> 缓存), LLMClient + MockCorrector
 │   └── prompt.rs              # LLM 提示词模板
 └── commands/
     ├── mod.rs                 # EventEmitter trait, 命令注册
@@ -239,7 +239,6 @@ src-tauri/src/
     ├── download.rs            # 模型下载/删除/取消
     ├── hotkey_pipeline.rs     # 热键回调 → PipelineMode 分发
     ├── pipeline_state.rs      # PipelineState 共享状态聚合
-    ├── text_injector.rs       # 文本注入逻辑 (clipboard → paste → restore)
     ├── review.rs              # 粘贴前确认窗口
     ├── review_provider.rs     # ReviewProvider trait
     ├── window_controller.rs   # WindowController trait

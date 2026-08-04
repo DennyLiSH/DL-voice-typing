@@ -14,7 +14,7 @@ use crate::commands::recording_session::{
 use crate::commands::review_provider::MockReviewProvider;
 use crate::commands::window_controller::NoopWindowController;
 use crate::config::{AppConfig, PipelineMode};
-use crate::llm::{AnyCorrector, MockCorrector};
+use crate::llm::MockCorrector;
 use crate::perf::PerfMetrics;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
@@ -52,9 +52,7 @@ fn build_rig(cfg: AppConfig, engine_text: &str) -> Rig {
         clipboard.clone(),
         Arc::new(crate::perf::PerfHistory::new()),
         crate::config::ConfigCache::new(cfg),
-        Arc::new(Mutex::new(Some(AnyCorrector::Mock(MockCorrector::new(
-            "corrected",
-        ))))),
+        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
         Arc::new(Mutex::new(None)),
         Arc::new(NoopWindowController),
         emitter.clone(),

@@ -13,40 +13,6 @@ pub trait TextCorrector: Send + Sync {
     fn test_connection_sync(&self) -> Result<(), AppError>;
 }
 
-/// Enum-based dispatch for text correctors.
-///
-/// TODO(architecture): Consider replacing with `Box<dyn TextCorrector>` to match
-/// AudioCaptureProvider/EventEmitter/ReviewProvider/SpeechEngine pattern.
-/// AnyCorrector is a shallow 1:1 passthrough with no domain-specific dispatch logic;
-/// the dyn pattern is now used consistently across the pipeline.
-pub enum AnyCorrector {
-    Live(LLMClient),
-    Mock(MockCorrector),
-}
-
-impl TextCorrector for AnyCorrector {
-    fn correct_sync(&self, text: &str) -> Result<String, AppError> {
-        match self {
-            AnyCorrector::Live(c) => c.correct_sync(text),
-            AnyCorrector::Mock(m) => m.correct_sync(text),
-        }
-    }
-
-    fn matches_config(&self, api_url: &str, api_key: &str, model: &str) -> bool {
-        match self {
-            AnyCorrector::Live(c) => c.matches_config(api_url, api_key, model),
-            AnyCorrector::Mock(m) => m.matches_config(api_url, api_key, model),
-        }
-    }
-
-    fn test_connection_sync(&self) -> Result<(), AppError> {
-        match self {
-            AnyCorrector::Live(c) => c.test_connection_sync(),
-            AnyCorrector::Mock(m) => m.test_connection_sync(),
-        }
-    }
-}
-
 /// LLM API response format (OpenAI-compatible).
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
@@ -271,11 +237,5 @@ mod tests {
         let mock = MockCorrector::new("ok").with_config("url", "key", "model");
         assert!(mock.matches_config("url", "key", "model"));
         assert!(!mock.matches_config("other", "key", "model"));
-    }
-
-    #[test]
-    fn test_any_corrector_mock() {
-        let corrector = AnyCorrector::Mock(MockCorrector::new("mock result"));
-        assert_eq!(corrector.correct_sync("input").unwrap(), "mock result");
     }
 }

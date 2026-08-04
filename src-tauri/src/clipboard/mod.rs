@@ -34,9 +34,11 @@ where
 ///
 /// `save_and_inject` is the atomic delivery unit: implementations hold an
 /// internal op lock spanning save → inject → self-restore, preserving the
-/// cross-call atomicity the old outer `Mutex<AnyClipboard>` provided. Without
-/// it, a Tray Reset `restore()` could interleave mid-injection and leak
-/// transcription text into the user's clipboard.
+/// cross-call atomicity the old outer `Mutex<AnyClipboard>` provided (the
+/// enum shell was removed 2026-08; the trait-object `Arc<dyn ClipboardProvider>`
+/// handle carries no outer Mutex today). Without it, a Tray Reset `restore()`
+/// could interleave mid-injection and leak transcription text into the user's
+/// clipboard.
 pub trait ClipboardProvider: Send + Sync {
     fn save(&self) -> Result<(), AppError>;
     fn inject_text(&self, text: &str) -> Result<(), AppError>;

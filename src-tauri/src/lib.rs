@@ -50,7 +50,8 @@ pub fn run() {
         Arc::new(Mutex::new(AudioCapture::new()));
     let clipboard_manager: Arc<dyn ClipboardProvider> = Arc::new(ClipboardManager::new());
     let perf_history = Arc::new(PerfHistory::new());
-    let cached_llm: Arc<Mutex<Option<crate::llm::AnyCorrector>>> = Arc::new(Mutex::new(None));
+    let cached_llm: Arc<Mutex<Option<Box<dyn crate::llm::TextCorrector>>>> =
+        Arc::new(Mutex::new(None));
     let shutting_down = Arc::new(AtomicBool::new(false));
 
     tauri::Builder::default()
@@ -292,7 +293,7 @@ fn manage_pipeline_state(
     clipboard_manager: Arc<dyn ClipboardProvider>,
     perf_history: Arc<PerfHistory>,
     shutting_down: Arc<AtomicBool>,
-    cached_llm: Arc<Mutex<Option<crate::llm::AnyCorrector>>>,
+    cached_llm: Arc<Mutex<Option<Box<dyn crate::llm::TextCorrector>>>>,
 ) {
     app.manage(state_machine);
     app.manage(audio_capture);
