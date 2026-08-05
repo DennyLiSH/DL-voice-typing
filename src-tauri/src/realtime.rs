@@ -176,6 +176,35 @@ fn pull_window(audio: &dyn AudioSource, samples_needed: usize) -> WindowPull {
     }
 }
 
+/// Outcome of reading accumulated context text under the mutex.
+enum ContextRead {
+    /// Accumulator held non-empty confirmed text — use as Whisper initial_prompt.
+    Context(String),
+    /// Accumulator was empty (first iteration or after take()).
+    Empty,
+    /// Mutex poisoned — caller should terminate loop.
+    Poisoned,
+}
+
+/// Read the accumulated context text for use as Whisper initial_prompt.
+///
+/// Extracts the lock + empty-check logic so the loop body does not embed
+/// lock handling inline. Poison path maps to ContextRead::Poisoned which
+/// the caller converts to `break` (preserving original `Err(_) => break`).
+fn read_context(accumulator: &Mutex<TextAccumulator>) -> ContextRead {
+    match accumulator.lock() {
+        Ok(guard) => {
+            let t = guard.text();
+            if t.is_empty() {
+                ContextRead::Empty
+            } else {
+                ContextRead::Context(t.to_string())
+            }
+        }
+        Err(_) => ContextRead::Poisoned,
+    }
+}
+
 /// Background transcriber that runs a sliding-window loop on a dedicated thread.
 ///
 /// Owns the thread handle, stop flag, and incremental text accumulator.
@@ -449,31 +478,21 @@ impl RealtimeTranscriber {
                     continue;
                 }
 
-                let text = {
-                    // Read accumulated text as context before transcription.
-                    let context_text = {
-                        match accumulated_clone.lock() {
-                            Ok(guard) => {
-                                let t = guard.text();
-                                if t.is_empty() {
-                                    None
-                                } else {
-                                    Some(t.to_string())
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    };
+                let ctx_owned: Option<String> = match read_context(&accumulated_clone) {
+                    ContextRead::Context(s) => Some(s),
+                    ContextRead::Empty => None,
+                    ContextRead::Poisoned => break,
+                };
 
-                    match engine.transcribe_sync_with_context(resampled, context_text.as_deref()) {
+                let text =
+                    match engine.transcribe_sync_with_context(resampled, ctx_owned.as_deref()) {
                         Ok(t) => t,
                         Err(err) => {
                             warn!("realtime transcription error: {err}");
                             sleep_or_stop(&running_clone, STEP_MS, STOP_POLL_MS);
                             continue;
                         }
-                    }
-                };
+                    };
 
                 debug!("realtime transcription: {text:?}");
 
