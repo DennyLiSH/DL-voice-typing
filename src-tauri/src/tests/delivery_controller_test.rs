@@ -9,7 +9,7 @@ use crate::clipboard::MockClipboard;
 use crate::commands::MockEmitter;
 use crate::commands::pipeline_state::PipelineState;
 use crate::commands::recording_session::SessionPolicy;
-use crate::commands::review_provider::MockReviewProvider;
+use crate::commands::review_provider::{MockReviewProvider, ReviewProvider};
 use crate::commands::window_controller::{NoopWindowController, WindowController};
 use crate::config::{AppConfig, ConfigCache};
 use crate::llm::MockCorrector;
@@ -40,6 +40,30 @@ fn build_ps_with_clipboard(clipboard: Arc<MockClipboard>) -> (PipelineState, Arc
         Arc::new(NoopWindowController),
         emitter.clone(),
         Arc::new(MockReviewProvider::new()),
+    );
+    (ps, emitter)
+}
+
+fn build_ps_with_clipboard_and_review(
+    clipboard: Arc<MockClipboard>,
+    review: Arc<MockReviewProvider>,
+) -> (PipelineState, Arc<MockEmitter>) {
+    let sm = Arc::new(Mutex::new(StateMachine::new()));
+    let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
+    let engine = Arc::new(MockEngine::new("test"));
+    let emitter = Arc::new(MockEmitter::new());
+    let ps = PipelineState::new(
+        sm,
+        ac,
+        engine,
+        clipboard,
+        Arc::new(PerfHistory::new()),
+        ConfigCache::new(AppConfig::default()),
+        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
+        Arc::new(Mutex::new(None)),
+        Arc::new(NoopWindowController),
+        emitter.clone(),
+        review,
     );
     (ps, emitter)
 }
@@ -739,5 +763,98 @@ async fn show_review_aborts_when_entry_transition_fails() {
     assert!(
         mock_cb.restored(),
         "clipboard must be restored when entry transition fails (else user's clipboard is silently held)"
+    );
+}
+
+#[tokio::test]
+async fn realtime_review_handoff_saves_clipboard_and_advances_state() {
+    let mock_cb = Arc::new(MockClipboard::new());
+    let review = Arc::new(MockReviewProvider::new());
+    let (ps, _emitter) = build_ps_with_clipboard_and_review(mock_cb.clone(), review.clone());
+
+    // Pre-seed review_provider.foreground via save_foreground() (MockReviewProvider
+    // hardcodes sentinel 42 — review_provider.rs:120). realtime_review_handoff will
+    // call take_foreground() to migrate this hwnd into delivery context.
+    review.save_foreground();
+
+    // Drive state to Recording so sm_stop_recording can transition to Transcribing-compatible state:
+    ps.sm_start_recording();
+    ps.sm_stop_recording();
+
+    // Call realtime_review_handoff with some accumulated text:
+    ps.delivery
+        .realtime_review_handoff(&ps, Some("accumulated".to_string()));
+
+    // Assertions on current documented behavior:
+    assert!(mock_cb.saved(), "clipboard must be saved");
+    assert_eq!(
+        mock_cb.injected(),
+        Vec::<String>::new(),
+        "realtime_review_handoff must NOT inject (no paste path)"
+    );
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
+    // store_text was called with "accumulated":
+    assert_eq!(review.get_text(), Some("accumulated".to_string()));
+    // foreground was migrated from review_provider.take_foreground() to delivery context.
+    // DeliveryContext.context is private — use pub(crate) take_context() to inspect.
+    let (foreground_hwnd, _data_saving, _perf, _t_press) = ps.delivery.take_context();
+    assert_eq!(
+        foreground_hwnd,
+        Some(42),
+        "sentinel from MockReviewProvider::save_foreground"
+    );
+}
+
+#[tokio::test]
+async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
+    let mock_cb = Arc::new(MockClipboard::new());
+    let (ps, _emitter) = build_ps_with_clipboard(mock_cb.clone());
+
+    // Pre-seed via the existing ReviewProvider::set_shown_on_press trait method
+    // (review_provider.rs:18, accessible via pub(crate) ps.review at pipeline_state.rs:34).
+    ps.review.set_shown_on_press(true);
+
+    // Drive state to Transcribing:
+    ps.sm_start_recording();
+    ps.sm_stop_recording();
+
+    // show_review signature takes perf by value (delivery_controller.rs:156):
+    let policy = SessionPolicy::from_config(&AppConfig::default());
+    let perf = crate::perf::PerfMetrics::new(0);
+
+    ps.delivery
+        .show_review(
+            &ps,
+            "final text".to_string(),
+            "raw transcription".to_string(),
+            None,
+            &policy,
+            perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+
+    // Assertions on current documented behavior:
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
+    assert_eq!(
+        mock_cb.injected(),
+        Vec::<String>::new(),
+        "was_shown_on_press path must NOT inject"
+    );
+    // show_review UNCONDITIONALLY calls clipboard.save() at line 168 BEFORE the
+    // was_shown_on_press branch (line 198) — saved() returns true.
+    assert!(
+        mock_cb.saved(),
+        "show_review always calls clipboard.save before branching"
+    );
+    // store_context populated. DeliveryContext.context is private; field name is
+    // `data_saving` (not `review_data`). Use take_context() to inspect.
+    // Note: show_review builds review_data from save_result via Option::map, so
+    // with save_result=None the stored data_saving is None — this is current behavior.
+    let (_foreground_hwnd, data_saving, _perf, _t_press) = ps.delivery.take_context();
+    assert!(
+        data_saving.is_none(),
+        "data_saving is None when save_result is None (current behavior)"
     );
 }
