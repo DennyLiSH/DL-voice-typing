@@ -101,19 +101,10 @@ const ENERGY_MIN_FRAMES: usize = 5;
 /// `FUZZY_TOP_N`) are intentionally NOT in this struct — they are intrinsic
 /// to `TextAccumulator`'s algorithm and stay as module-level `const`.
 pub(crate) struct RealtimeLoopConfig {
-    // Loop-policy fields wired up in T2 (loop body migration). `#[expect]`
-    // marks them as intentionally-unread at the T1 introduction boundary so
-    // clippy does not fire `dead_code` for the partial rollout. Once T2 routes
-    // the loop body through `config.*`, drop the attributes.
-    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
     pub step_ms: u64,
-    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
     pub short_step_ms: u64,
-    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
     pub stop_poll_ms: u64,
-    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
     pub window_secs: u32,
-    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
     pub vad_threshold: f32,
     pub energy_frame_samples: usize,
     pub energy_frame_threshold: f32,
@@ -152,6 +143,15 @@ fn has_speech_energy(resampled: &[f32], config: &RealtimeLoopConfig) -> bool {
         }
     }
     high_energy_frames >= config.energy_min_frames
+}
+
+/// Combined VAD predicate: RMS threshold AND frame-energy check.
+///
+/// Inverts the original `rms < THR || !energy` silent-skip condition into a
+/// positive "passes VAD" predicate for readability. Caller emits debug! for
+/// both rms/energy values and the silent-skip decision.
+fn passes_vad(rms_val: f32, has_energy: bool, config: &RealtimeLoopConfig) -> bool {
+    rms_val >= config.vad_threshold && has_energy
 }
 
 /// Outcome of pulling one audio window from the source.
@@ -491,11 +491,11 @@ impl RealtimeTranscriber {
             let config = RealtimeLoopConfig::DEFAULT;
 
             while running_clone.load(Ordering::Relaxed) {
-                let samples_needed = (sample_rate * WINDOW_SECS) as usize;
+                let samples_needed = (sample_rate * config.window_secs) as usize;
                 let window = match pull_window(audio.as_ref(), samples_needed) {
                     WindowPull::Window(w) => w,
                     WindowPull::Empty => {
-                        thread::sleep(Duration::from_millis(SHORT_STEP_MS));
+                        thread::sleep(Duration::from_millis(config.short_step_ms));
                         continue;
                     }
                     WindowPull::SourceGone => break,
@@ -504,14 +504,14 @@ impl RealtimeTranscriber {
                 let resampled = resampler.process(&window);
                 let rms_val = rms::calculate_rms(resampled);
 
-                let speech_energy = has_speech_energy(resampled, &config);
+                let has_energy = has_speech_energy(resampled, &config);
                 debug!(
-                    "realtime VAD: rms={rms_val:.4} energy={speech_energy} samples={}",
+                    "realtime VAD: rms={rms_val:.4} energy={has_energy} samples={}",
                     resampled.len()
                 );
-                if rms_val < VAD_THRESHOLD || !speech_energy {
+                if !passes_vad(rms_val, has_energy, &config) {
                     debug!("realtime VAD: silent, skipping");
-                    sleep_or_stop(&running_clone, STEP_MS, STOP_POLL_MS);
+                    sleep_or_stop(&running_clone, config.step_ms, config.stop_poll_ms);
                     continue;
                 }
 
@@ -526,7 +526,7 @@ impl RealtimeTranscriber {
                         Ok(t) => t,
                         Err(err) => {
                             warn!("realtime transcription error: {err}");
-                            sleep_or_stop(&running_clone, STEP_MS, STOP_POLL_MS);
+                            sleep_or_stop(&running_clone, config.step_ms, config.stop_poll_ms);
                             continue;
                         }
                     };
@@ -541,7 +541,7 @@ impl RealtimeTranscriber {
                     }
                 }
 
-                sleep_or_stop(&running_clone, STEP_MS, STOP_POLL_MS);
+                sleep_or_stop(&running_clone, config.step_ms, config.stop_poll_ms);
             }
 
             debug!("realtime transcriber loop exited");
