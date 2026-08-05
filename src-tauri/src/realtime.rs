@@ -46,13 +46,13 @@ impl AudioSource for AudioRingBufferSource {
 }
 
 /// Sleep for `total_ms`, but wake early if `running` becomes false.
-fn sleep_or_stop(running: &AtomicBool, total_ms: u64) {
-    let steps = total_ms.div_ceil(STOP_POLL_MS);
+fn sleep_or_stop(running: &AtomicBool, total_ms: u64, stop_poll_ms: u64) {
+    let steps = total_ms.div_ceil(stop_poll_ms);
     for _ in 0..steps {
         if !running.load(Ordering::Relaxed) {
             return;
         }
-        thread::sleep(Duration::from_millis(STOP_POLL_MS));
+        thread::sleep(Duration::from_millis(stop_poll_ms));
     }
 }
 
@@ -423,7 +423,7 @@ impl RealtimeTranscriber {
                 );
                 if rms_val < VAD_THRESHOLD || !speech_energy {
                     debug!("realtime VAD: silent, skipping");
-                    sleep_or_stop(&running_clone, STEP_MS);
+                    sleep_or_stop(&running_clone, STEP_MS, STOP_POLL_MS);
                     continue;
                 }
 
@@ -447,7 +447,7 @@ impl RealtimeTranscriber {
                         Ok(t) => t,
                         Err(err) => {
                             warn!("realtime transcription error: {err}");
-                            sleep_or_stop(&running_clone, STEP_MS);
+                            sleep_or_stop(&running_clone, STEP_MS, STOP_POLL_MS);
                             continue;
                         }
                     }
@@ -475,7 +475,7 @@ impl RealtimeTranscriber {
                     }
                 }
 
-                sleep_or_stop(&running_clone, STEP_MS);
+                sleep_or_stop(&running_clone, STEP_MS, STOP_POLL_MS);
             }
 
             debug!("realtime transcriber loop exited");
