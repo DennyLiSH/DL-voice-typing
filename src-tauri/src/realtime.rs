@@ -1021,4 +1021,165 @@ mod tests {
         let result = engine.transcribe_sync_with_context(&[0.5f32; 100], None);
         assert_eq!(result.map_or(String::new(), |s| s), "test");
     }
+
+    #[test]
+    fn test_pull_window_empty_returns_empty() {
+        struct StubSource;
+        impl AudioSource for StubSource {
+            fn get_recent_samples(&self, _max: usize) -> Option<Vec<f32>> {
+                Some(Vec::new())
+            }
+        }
+        assert!(matches!(pull_window(&StubSource, 500), WindowPull::Empty));
+    }
+
+    #[test]
+    fn test_pull_window_normal_returns_window() {
+        struct StubSource(Vec<f32>);
+        impl AudioSource for StubSource {
+            fn get_recent_samples(&self, _max: usize) -> Option<Vec<f32>> {
+                Some(self.0.clone())
+            }
+        }
+        let src = StubSource(vec![0.1f32; 1000]);
+        match pull_window(&src, 500) {
+            WindowPull::Window(w) => assert_eq!(w.len(), 1000),
+            other => panic!(
+                "expected Window, got {:?}",
+                match other {
+                    WindowPull::Window(_) => "Window",
+                    WindowPull::Empty => "Empty",
+                    WindowPull::SourceGone => "SourceGone",
+                }
+            ),
+        }
+    }
+
+    #[test]
+    fn test_pull_window_source_gone_returns_source_gone() {
+        struct StubSource;
+        impl AudioSource for StubSource {
+            fn get_recent_samples(&self, _max: usize) -> Option<Vec<f32>> {
+                None
+            }
+        }
+        assert!(matches!(
+            pull_window(&StubSource, 500),
+            WindowPull::SourceGone
+        ));
+    }
+
+    #[test]
+    fn test_read_context_empty_returns_empty() {
+        let acc = Mutex::new(TextAccumulator::new());
+        assert!(matches!(read_context(&acc), ContextRead::Empty));
+    }
+
+    #[test]
+    fn test_read_context_with_text_returns_context() {
+        let mut acc = TextAccumulator::new();
+        acc.push("hello world");
+        let acc = Mutex::new(acc);
+        match read_context(&acc) {
+            ContextRead::Context(s) => assert_eq!(s, "hello world"),
+            other => panic!(
+                "expected Context, got {:?}",
+                match other {
+                    ContextRead::Context(_) => "Context",
+                    ContextRead::Empty => "Empty",
+                    ContextRead::Poisoned => "Poisoned",
+                }
+            ),
+        }
+    }
+
+    #[test]
+    fn test_read_context_poisoned_returns_poisoned() {
+        // Poison the mutex by spawning a thread that panics while holding the lock.
+        let acc = Arc::new(Mutex::new(TextAccumulator::new()));
+        let acc_for_poison = acc.clone();
+        let poison_handle = std::thread::spawn(move || {
+            // Acquire via match — the global check-unwrap hook scans every
+            // source line (incl. cfg(test)) for the forbidden method form.
+            if let Ok(_g) = acc_for_poison.lock() {
+                panic!("intentional poison");
+            } else {
+                panic!("lock failed before poison setup");
+            }
+        });
+        let _ = poison_handle.join();
+        // acc is now poisoned.
+
+        assert!(matches!(read_context(&acc), ContextRead::Poisoned));
+    }
+
+    #[test]
+    fn test_push_and_emit_ok_emits_event() {
+        struct CapturingEmitter {
+            events: Arc<Mutex<Vec<String>>>,
+        }
+        impl crate::commands::EventEmitter for CapturingEmitter {
+            fn emit(&self, event: &str, payload: serde_json::Value) {
+                if event == "transcription-partial" {
+                    if let serde_json::Value::String(s) = payload {
+                        if let Ok(mut e) = self.events.lock() {
+                            e.push(s);
+                        }
+                    }
+                }
+            }
+        }
+        let acc = Mutex::new(TextAccumulator::new());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let emitter = CapturingEmitter {
+            events: events.clone(),
+        };
+        let running = AtomicBool::new(true);
+
+        let outcome = push_and_emit("hello", &acc, &emitter, &running);
+        assert!(matches!(outcome, PushOutcome::Ok));
+
+        let emitted: Vec<String> = match events.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => Vec::new(),
+        };
+        assert_eq!(emitted, vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn test_push_and_emit_poisoned_returns_poisoned() {
+        // Poison the mutex by panicking while holding it.
+        let acc = Arc::new(Mutex::new(TextAccumulator::new()));
+        let acc_for_poison = acc.clone();
+        let poison_handle = std::thread::spawn(move || {
+            if let Ok(_g) = acc_for_poison.lock() {
+                panic!("intentional poison");
+            } else {
+                panic!("lock failed before poison setup");
+            }
+        });
+        let _ = poison_handle.join();
+        // acc is now poisoned.
+
+        struct NoopEmitter;
+        impl crate::commands::EventEmitter for NoopEmitter {
+            fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+        }
+        let running = AtomicBool::new(true);
+        let outcome = push_and_emit("text", &acc, &NoopEmitter, &running);
+        assert!(matches!(outcome, PushOutcome::Poisoned));
+    }
+
+    #[test]
+    fn test_realtime_loop_config_default_matches_legacy_constants() {
+        let c = RealtimeLoopConfig::DEFAULT;
+        assert_eq!(c.step_ms, STEP_MS);
+        assert_eq!(c.short_step_ms, SHORT_STEP_MS);
+        assert_eq!(c.stop_poll_ms, STOP_POLL_MS);
+        assert_eq!(c.window_secs, WINDOW_SECS);
+        assert_eq!(c.vad_threshold, VAD_THRESHOLD);
+        assert_eq!(c.energy_frame_samples, ENERGY_FRAME_SAMPLES);
+        assert_eq!(c.energy_frame_threshold, ENERGY_FRAME_THRESHOLD);
+        assert_eq!(c.energy_min_frames, ENERGY_MIN_FRAMES);
+    }
 }
