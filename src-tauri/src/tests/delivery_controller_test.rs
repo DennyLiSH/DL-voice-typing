@@ -9,7 +9,6 @@ use crate::clipboard::MockClipboard;
 use crate::commands::MockEmitter;
 use crate::commands::pipeline_state::PipelineState;
 use crate::commands::recording_session::SessionPolicy;
-use crate::commands::review::ReviewData;
 use crate::commands::review_provider::{MockReviewProvider, ReviewProvider};
 use crate::commands::window_controller::{NoopWindowController, WindowController};
 use crate::config::{AppConfig, ConfigCache};
@@ -27,24 +26,7 @@ fn build_ps() -> (PipelineState, Arc<MockEmitter>) {
 }
 
 fn build_ps_with_clipboard(clipboard: Arc<MockClipboard>) -> (PipelineState, Arc<MockEmitter>) {
-    let sm = Arc::new(Mutex::new(StateMachine::new()));
-    let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let engine = Arc::new(MockEngine::new("test"));
-    let emitter = Arc::new(MockEmitter::new());
-    let ps = PipelineState::new(
-        sm,
-        ac,
-        engine,
-        clipboard,
-        Arc::new(PerfHistory::new()),
-        ConfigCache::new(AppConfig::default()),
-        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
-        Arc::new(Mutex::new(None)),
-        Arc::new(NoopWindowController),
-        emitter.clone(),
-        Arc::new(MockReviewProvider::new()),
-    );
-    (ps, emitter)
+    build_ps_with_clipboard_and_review(clipboard, Arc::new(MockReviewProvider::new()))
 }
 
 fn build_ps_with_clipboard_and_review(
@@ -776,13 +758,14 @@ async fn realtime_review_handoff_saves_clipboard_and_advances_state() {
     let (ps, _emitter) = build_ps_with_clipboard_and_review(mock_cb.clone(), review.clone());
 
     // Pre-seed review_provider.foreground via save_foreground() (MockReviewProvider
-    // hardcodes sentinel 42 — review_provider.rs:120). realtime_review_handoff will
+    // hardcodes sentinel 42 in MockReviewProvider::save_foreground). realtime_review_handoff will
     // call take_foreground() to migrate this hwnd into delivery context.
     review.save_foreground();
 
-    // Drive state to Recording so sm_stop_recording can transition to Transcribing-compatible state:
+    // Drive state to Recording; realtime_review_handoff internally runs
+    // sm_stop_recording -> sm_transcribing_to_reviewing, so the test enters from
+    // the production path.
     ps.sm_start_recording();
-    ps.sm_stop_recording();
 
     // Call realtime_review_handoff with some accumulated text:
     ps.delivery
@@ -811,17 +794,16 @@ async fn realtime_review_handoff_saves_clipboard_and_advances_state() {
 #[tokio::test]
 async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
     let mock_cb = Arc::new(MockClipboard::new());
-    let (ps, _emitter) = build_ps_with_clipboard(mock_cb.clone());
+    let mock_review = Arc::new(MockReviewProvider::new());
+    let (ps, _emitter) = build_ps_with_clipboard_and_review(mock_cb.clone(), mock_review.clone());
 
-    // Pre-seed via the existing ReviewProvider::set_shown_on_press trait method
-    // (review_provider.rs:18, accessible via pub(crate) ps.review at pipeline_state.rs:34).
-    ps.review.set_shown_on_press(true);
+    // Pre-seed via the existing ReviewProvider::set_shown_on_press trait method.
+    mock_review.set_shown_on_press(true);
 
     // Drive state to Transcribing:
     ps.sm_start_recording();
     ps.sm_stop_recording();
 
-    // show_review signature takes perf by value (delivery_controller.rs:156):
     let policy = SessionPolicy::from_config(&AppConfig::default());
     let perf = crate::perf::PerfMetrics::new(0);
 
@@ -850,11 +832,17 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
         Vec::<String>::new(),
         "was_shown_on_press path must NOT inject"
     );
-    // show_review UNCONDITIONALLY calls clipboard.save() at line 168 BEFORE the
-    // was_shown_on_press branch (line 198) — saved() returns true.
+    // show_review UNCONDITIONALLY calls clipboard.save() before the
+    // was_shown_on_press branch — saved() returns true.
     assert!(
         mock_cb.saved(),
         "show_review always calls clipboard.save before branching"
+    );
+    // store_text was called unconditionally with the final text.
+    assert_eq!(
+        mock_review.get_text(),
+        Some("final text".to_string()),
+        "show_review must store final text in review provider"
     );
     // store_context populated. DeliveryContext.context is private; field name is
     // `data_saving` (not `review_data`). Use take_context() to inspect.
@@ -867,11 +855,10 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
     );
 
     let rd = data_saving.unwrap();
-    let rd: ReviewData = rd;
     assert_eq!(rd.json_path, PathBuf::from("test.json"));
     assert_eq!(rd.raw_transcription, "raw transcription");
     // AppConfig::default().llm_enabled is false, so llm_text is None per
-    // delivery_controller.rs:245-250.
+    // ReviewData construction in the was_shown_on_press branch.
     assert!(
         rd.llm_text.is_none(),
         "llm_text must be None when llm_enabled is false"
