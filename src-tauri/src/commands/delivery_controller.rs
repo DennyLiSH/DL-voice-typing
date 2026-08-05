@@ -75,9 +75,10 @@ pub(crate) struct DeliveryController {
 /// stay in the caller.
 #[allow(dead_code)] // TODO(Task 3): remove once EarlyStateMismatch is wired
 enum FinishOutcome {
-    /// Successful paste delivery. Caller has ALREADY done save_and_inject and
-    /// pre-inject foreground restore. finish handles sm_finish_injecting,
-    /// emit injection-complete, hide windows, JSON update, perf record.
+    /// Successful paste delivery. Caller has already done save_and_inject;
+    /// review paths have already restored foreground pre-inject. finish handles
+    /// sm_finish_injecting, emit injection-complete, hide windows, JSON update,
+    /// perf record.
     ///
     /// If sm_finish_injecting returns false (TOCTOU — watchdog reset state
     /// machine mid-deliver), finish follows current source semantics: warn!
@@ -87,14 +88,15 @@ enum FinishOutcome {
         final_text: String, // for JSON final_text field (raw/llm come from ctx.review_data)
         hide_review: bool,
     },
-    /// User-cancel from Reviewing. No paste happened. Caller did NOT do
-    /// save_and_inject. finish does take_context + restore_clipboard_if_saved
-    /// (clipboard was saved on show_review) + restore_foreground + hide_windows
-    /// + set_shown_on_press(false) + JSON with None final_text.
+    /// User-cancel from Reviewing. No paste happened. Caller has taken context;
+    /// finish does restore_clipboard_if_saved (clipboard was saved on show_review),
+    /// restore_foreground, hide_windows, set_shown_on_press(false), and JSON
+    /// with None final_text.
     Cancel,
     /// confirm_review / cancel_review called from wrong state (Recording /
-    /// Transcribing / Idle). Caller returns Err(CommandError) AFTER finish
-    /// runs. finish does take_context + stop_resources + sm_reset + cleanup_review_ui.
+    /// Transcribing / Idle). Caller has taken context; finish does stop_resources,
+    /// sm_reset, and cleanup_review_ui. Caller returns Err(CommandError) AFTER
+    /// finish runs.
     EarlyStateMismatch,
 }
 
@@ -181,8 +183,6 @@ impl DeliveryController {
         });
         self.store_context(review_data, perf.clone(), t_press_for_e2e);
         let ctx = self.take_context();
-        let perf_for_record = ctx.2.clone();
-        let t_press_for_record = ctx.3.unwrap_or_else(Instant::now);
         self.finish(
             ps,
             ctx,
@@ -191,7 +191,6 @@ impl DeliveryController {
                 hide_review: false,
             },
             "inject_direct",
-            Some((&perf_for_record, t_press_for_record)),
         )
         .await;
     }
@@ -370,8 +369,6 @@ impl DeliveryController {
             });
             self.store_context(review_data, fallback_perf.clone(), t_press_for_e2e);
             let ctx = self.take_context();
-            let perf_for_record = ctx.2.clone();
-            let t_press_for_record = ctx.3.unwrap_or_else(Instant::now);
             self.finish(
                 ps,
                 ctx,
@@ -380,7 +377,6 @@ impl DeliveryController {
                     hide_review: true,
                 },
                 "show_review_fallback",
-                Some((&perf_for_record, t_press_for_record)),
             )
             .await;
         }
@@ -495,7 +491,7 @@ impl DeliveryController {
 
         // Take the stored delivery context before any await point.
         let ctx = self.take_context();
-        self.finish(ps, ctx, FinishOutcome::Cancel, "cancel_review", None)
+        self.finish(ps, ctx, FinishOutcome::Cancel, "cancel_review")
             .await;
 
         info!("cancel_review: done");
@@ -560,8 +556,6 @@ impl DeliveryController {
         }
 
         // 4. Centralized post-delivery cleanup.
-        let perf_for_record = ctx.2.clone();
-        let t_press_for_record = ctx.3.unwrap_or_else(Instant::now);
         self.finish(
             ps,
             ctx,
@@ -570,7 +564,6 @@ impl DeliveryController {
                 hide_review: true,
             },
             "confirm_from_reviewing",
-            Some((&perf_for_record, t_press_for_record)),
         )
         .await;
     }
@@ -582,7 +575,7 @@ impl DeliveryController {
     /// method top because its pre-inject foreground restore needs ctx.0).
     ///
     /// `site_label` is emitted via `debug!(target: "delivery", ...)` so production
-    /// traces stay distinguishable across the 4 historical M2 sites + future ones.
+    /// traces can distinguish the call sites.
     async fn finish(
         &self,
         ps: &PipelineState,
@@ -594,9 +587,8 @@ impl DeliveryController {
         ),
         outcome: FinishOutcome,
         site_label: &'static str,
-        perf_record_input: Option<(&PerfMetrics, Instant)>,
     ) {
-        let (foreground_hwnd, review_data, _ctx_perf, _ctx_t_press) = ctx;
+        let (foreground_hwnd, review_data, ctx_perf, _ctx_t_press) = ctx;
         debug!(target: "delivery", "finish({site_label}): entered");
 
         match outcome {
@@ -604,10 +596,11 @@ impl DeliveryController {
                 final_text,
                 hide_review,
             } => {
-                // Caller did save_and_inject + pre-inject foreground restore.
+                // Caller has already done save_and_inject; review paths have
+                // already restored foreground pre-inject.
                 if !ps.sm_finish_injecting() {
                     // TOCTOU: watchdog reset state machine mid-deliver.
-                    // Current source semantics (inject_and_finish): warn
+                    // Pre-refactor semantics (former inject_and_finish): warn
                     // and continue — paste already happened, clipboard already
                     // self-restored by inject_inner.
                     warn!(target: "delivery",
@@ -627,9 +620,7 @@ impl DeliveryController {
                         warn!(target: "delivery", "finish({site_label}): json update failed: {e}")
                     }
                 }
-                if let Some((p, t)) = perf_record_input {
-                    self.record_perf(p, t);
-                }
+                self.record_perf(&ctx_perf);
             }
             FinishOutcome::Cancel => {
                 // Cancel from Reviewing: no paste happened.
@@ -667,7 +658,8 @@ impl DeliveryController {
         }
     }
 
-    /// Build + write success JSON. Mirrors the current inject_and_finish pattern.
+    /// Build + write success JSON. Mirrors the pre-refactor inject_and_finish
+    /// success-path JSON update behavior.
     /// ReviewData carries raw_transcription + llm_text; only final_text comes from caller.
     fn update_json_deliver(
         &self,
@@ -702,7 +694,7 @@ impl DeliveryController {
     }
 
     /// Record perf + emit perf-metrics event.
-    fn record_perf(&self, perf: &PerfMetrics, _t_press: Instant) {
+    fn record_perf(&self, perf: &PerfMetrics) {
         self.perf_history.record(perf.clone());
         self.emitter.emit(
             "perf-metrics",
