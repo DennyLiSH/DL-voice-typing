@@ -74,10 +74,7 @@ impl Default for PendingReview {
 pub fn get_review_text(
     pending: tauri::State<'_, PendingReview>,
 ) -> Result<Option<String>, CommandError> {
-    let mut guard = pending.text.lock().map_err(|e| CommandError {
-        code: "LOCK".to_string(),
-        message: e.to_string(),
-    })?;
+    let mut guard = pending.text.lock().map_err(CommandError::lock)?;
     let result = guard.take();
     debug!(
         "Review: get_review_text called, text={}",

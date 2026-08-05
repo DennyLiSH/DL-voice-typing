@@ -136,10 +136,10 @@ pub(crate) fn resolve_base(path_str: &str) -> Result<Option<PathBuf>, CommandErr
     }
     match raw.canonicalize() {
         Ok(p) => Ok(Some(p)),
-        Err(e) => Err(CommandError {
-            code: "IO".to_string(),
-            message: format!("failed to canonicalize data_saving_path: {e}"),
-        }),
+        Err(e) => Err(CommandError::new(
+            "IO",
+            format!("failed to canonicalize data_saving_path: {e}"),
+        )),
     }
 }
 
@@ -151,19 +151,15 @@ pub(crate) fn resolve_child(
     ext: &str,
 ) -> Result<PathBuf, CommandError> {
     if !is_valid_stem(filename) {
-        return Err(CommandError {
-            code: "VALIDATION".to_string(),
-            message: format!("invalid recording filename: {filename}"),
-        });
+        return Err(CommandError::validation(format!(
+            "invalid recording filename: {filename}"
+        )));
     }
     let child = base.join(format!("{filename}.{ext}"));
     match child.canonicalize() {
         Ok(canon) => {
             if !canon.starts_with(base) {
-                return Err(CommandError {
-                    code: "VALIDATION".to_string(),
-                    message: "path escapes data_saving_path".to_string(),
-                });
+                return Err(CommandError::validation("path escapes data_saving_path"));
             }
             Ok(canon)
         }
@@ -187,10 +183,7 @@ pub async fn list_saved_recordings(
     query: Option<String>,
 ) -> Result<RecordingListResponse, CommandError> {
     if limit == 0 {
-        return Err(CommandError {
-            code: "VALIDATION".to_string(),
-            message: "limit must be > 0".to_string(),
-        });
+        return Err(CommandError::validation("limit must be > 0"));
     }
 
     let config = config_cache.read_cached();
@@ -246,10 +239,10 @@ pub async fn list_saved_recordings(
 
     match result {
         Ok(inner) => inner,
-        Err(join_err) => Err(CommandError {
-            code: "TASK".to_string(),
-            message: format!("list task panicked: {join_err}"),
-        }),
+        Err(join_err) => Err(CommandError::new(
+            "TASK",
+            format!("list task panicked: {join_err}"),
+        )),
     }
 }
 
@@ -268,10 +261,10 @@ pub(crate) fn scan_and_collect(
             {
                 return Ok(Vec::new());
             }
-            return Err(CommandError {
-                code: "IO".to_string(),
-                message: format!("failed to read data_saving_path: {e}"),
-            });
+            return Err(CommandError::new(
+                "IO",
+                format!("failed to read data_saving_path: {e}"),
+            ));
         }
     };
 
@@ -377,18 +370,18 @@ pub async fn delete_recording(
         // (target state already reached).
         if wav.exists() {
             if let Err(e) = std::fs::remove_file(&wav) {
-                return Err(CommandError {
-                    code: "IO".to_string(),
-                    message: format!("failed to delete {filename}.wav: {e}"),
-                });
+                return Err(CommandError::new(
+                    "IO",
+                    format!("failed to delete {filename}.wav: {e}"),
+                ));
             }
         }
         if json.exists() {
             if let Err(e) = std::fs::remove_file(&json) {
-                return Err(CommandError {
-                    code: "IO".to_string(),
-                    message: format!("failed to delete {filename}.json: {e}"),
-                });
+                return Err(CommandError::new(
+                    "IO",
+                    format!("failed to delete {filename}.json: {e}"),
+                ));
             }
         }
         tracing::info!(deleted_count = 1, "delete_recording completed");
@@ -398,10 +391,10 @@ pub async fn delete_recording(
 
     match result {
         Ok(inner) => inner,
-        Err(join_err) => Err(CommandError {
-            code: "TASK".to_string(),
-            message: format!("delete task panicked: {join_err}"),
-        }),
+        Err(join_err) => Err(CommandError::new(
+            "TASK",
+            format!("delete task panicked: {join_err}"),
+        )),
     }
 }
 
@@ -473,10 +466,10 @@ pub async fn delete_recordings(
 
     match result {
         Ok(inner) => inner,
-        Err(join_err) => Err(CommandError {
-            code: "TASK".to_string(),
-            message: format!("delete batch task panicked: {join_err}"),
-        }),
+        Err(join_err) => Err(CommandError::new(
+            "TASK",
+            format!("delete batch task panicked: {join_err}"),
+        )),
     }
 }
 
@@ -509,10 +502,10 @@ pub async fn get_data_usage(
                         recording_count: 0,
                     });
                 }
-                return Err(CommandError {
-                    code: "IO".to_string(),
-                    message: format!("failed to read data_saving_path: {e}"),
-                });
+                return Err(CommandError::new(
+                    "IO",
+                    format!("failed to read data_saving_path: {e}"),
+                ));
             }
         };
 
@@ -556,10 +549,10 @@ pub async fn get_data_usage(
 
     match result {
         Ok(inner) => inner,
-        Err(join_err) => Err(CommandError {
-            code: "TASK".to_string(),
-            message: format!("usage task panicked: {join_err}"),
-        }),
+        Err(join_err) => Err(CommandError::new(
+            "TASK",
+            format!("usage task panicked: {join_err}"),
+        )),
     }
 }
 
@@ -579,25 +572,23 @@ pub async fn read_recording_audio(
         let base = resolve_base_existing(&path_str)?;
         let wav = resolve_child(&base, &filename, "wav")?;
         if !wav.exists() {
-            return Err(CommandError {
-                code: "NOT_FOUND".to_string(),
-                message: format!("audio file not found: {filename}.wav"),
-            });
+            return Err(CommandError::new(
+                "NOT_FOUND",
+                format!("audio file not found: {filename}.wav"),
+            ));
         }
-        std::fs::read(&wav).map_err(|e| CommandError {
-            code: "IO".to_string(),
-            message: format!("failed to read {filename}.wav: {e}"),
-        })
+        std::fs::read(&wav)
+            .map_err(|e| CommandError::new("IO", format!("failed to read {filename}.wav: {e}")))
     })
     .await;
 
     match result {
         Ok(Ok(bytes)) => Ok(Response::new(bytes)),
         Ok(Err(e)) => Err(e),
-        Err(join_err) => Err(CommandError {
-            code: "TASK".to_string(),
-            message: format!("read audio task panicked: {join_err}"),
-        }),
+        Err(join_err) => Err(CommandError::new(
+            "TASK",
+            format!("read audio task panicked: {join_err}"),
+        )),
     }
 }
 
@@ -609,22 +600,19 @@ pub async fn read_recording_audio(
 /// Used by commands where an empty result would be misleading (delete, read).
 fn resolve_base_existing(path_str: &str) -> Result<PathBuf, CommandError> {
     if path_str.is_empty() {
-        return Err(CommandError {
-            code: "VALIDATION".to_string(),
-            message: "data_saving_path is not configured".to_string(),
-        });
+        return Err(CommandError::validation(
+            "data_saving_path is not configured",
+        ));
     }
     let raw = PathBuf::from(path_str);
     if !raw.exists() {
-        return Err(CommandError {
-            code: "NOT_FOUND".to_string(),
-            message: "data_saving_path does not exist on disk".to_string(),
-        });
+        return Err(CommandError::new(
+            "NOT_FOUND",
+            "data_saving_path does not exist on disk",
+        ));
     }
-    raw.canonicalize().map_err(|e| CommandError {
-        code: "IO".to_string(),
-        message: format!("failed to canonicalize data_saving_path: {e}"),
-    })
+    raw.canonicalize()
+        .map_err(|e| CommandError::io(e, "failed to canonicalize data_saving_path"))
 }
 
 /// Translate a raw OS io::Error into a user-friendly Chinese message

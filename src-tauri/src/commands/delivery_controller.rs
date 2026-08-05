@@ -432,10 +432,7 @@ impl DeliveryController {
                     "confirm_review_recording_transcribing",
                 )
                 .await;
-                Err(CommandError {
-                    code: "STATE".to_string(),
-                    message: "cannot confirm from current state".to_string(),
-                })
+                Err(CommandError::state("cannot confirm from current state"))
             }
             _ => {
                 let ctx = self.take_context();
@@ -446,10 +443,7 @@ impl DeliveryController {
                     "confirm_review_catchall",
                 )
                 .await;
-                Err(CommandError {
-                    code: "STATE".to_string(),
-                    message: "cannot confirm from current state".to_string(),
-                })
+                Err(CommandError::state("cannot confirm from current state"))
             }
         }
     }
@@ -469,10 +463,7 @@ impl DeliveryController {
                         "cancel_review_sm_cancel_failed",
                     )
                     .await;
-                    return Err(CommandError {
-                        code: "STATE".to_string(),
-                        message: "cancel_reviewing failed".to_string(),
-                    });
+                    return Err(CommandError::state("cancel_reviewing failed"));
                 }
             }
             Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
@@ -492,10 +483,7 @@ impl DeliveryController {
                     "cancel_review_catchall",
                 )
                 .await;
-                return Err(CommandError {
-                    code: "STATE".to_string(),
-                    message: "cannot cancel from current state".to_string(),
-                });
+                return Err(CommandError::state("cannot cancel from current state"));
             }
         }
 

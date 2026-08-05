@@ -80,23 +80,17 @@ pub async fn download_whisper_model(
     let model = WhisperModel::all_built_in()
         .iter()
         .find(|m| m.size_str() == size)
-        .ok_or_else(|| CommandError {
-            code: "VALIDATION".to_string(),
-            message: format!("unknown model size: {size}"),
-        })?;
+        .ok_or_else(|| CommandError::validation(format!("unknown model size: {size}")))?;
     let filename = model.filename();
 
     // Check not already downloading.
     {
-        let active = download_state.active.lock().map_err(|e| CommandError {
-            code: "LOCK".to_string(),
-            message: e.to_string(),
-        })?;
+        let active = download_state.active.lock().map_err(CommandError::lock)?;
         if active.is_some() {
-            return Err(CommandError {
-                code: "CONFLICT".to_string(),
-                message: "a download is already in progress".to_string(),
-            });
+            return Err(CommandError::new(
+                "CONFLICT",
+                "a download is already in progress",
+            ));
         }
     }
 
@@ -144,26 +138,17 @@ pub async fn download_whisper_model(
         {
             let _ = file.shutdown().await;
             let _ = std::fs::remove_file(&temp_path);
-            return Err(CommandError {
-                code: "CANCELLED".to_string(),
-                message: "download cancelled".to_string(),
-            });
+            return Err(CommandError::new("CANCELLED", "download cancelled"));
         }
 
         let chunk = chunk.map_err(|e| {
             let _ = std::fs::remove_file(&temp_path);
-            CommandError {
-                code: "NETWORK".to_string(),
-                message: format!("download stream error: {e}"),
-            }
+            CommandError::new("NETWORK", format!("download stream error: {e}"))
         })?;
 
         file.write_all(&chunk).await.map_err(|e| {
             let _ = std::fs::remove_file(&temp_path);
-            CommandError {
-                code: "IO".to_string(),
-                message: format!("write error: {e}"),
-            }
+            CommandError::new("IO", format!("write error: {e}"))
         })?;
 
         downloaded += chunk.len() as u64;
@@ -193,10 +178,7 @@ pub async fn download_whisper_model(
     // Rename temp to final.
     std::fs::rename(&temp_path, &final_path).map_err(|e| {
         let _ = std::fs::remove_file(&temp_path);
-        CommandError {
-            code: "IO".to_string(),
-            message: format!("rename failed: {e}"),
-        }
+        CommandError::new("IO", format!("rename failed: {e}"))
     })?;
 
     Ok(())
@@ -222,24 +204,19 @@ pub fn delete_custom_model(
 ) -> Result<(), CommandError> {
     let built_in = WhisperModel::built_in_filenames();
     if built_in.contains(filename.as_str()) {
-        return Err(CommandError {
-            code: "VALIDATION".to_string(),
-            message: "cannot delete built-in model".to_string(),
-        });
+        return Err(CommandError::validation("cannot delete built-in model"));
     }
 
     let path = models_dir().join(&filename);
     if !path.exists() {
-        return Err(CommandError {
-            code: "NOT_FOUND".to_string(),
-            message: format!("model file not found: {filename}"),
-        });
+        return Err(CommandError::new(
+            "NOT_FOUND",
+            format!("model file not found: {filename}"),
+        ));
     }
 
-    std::fs::remove_file(&path).map_err(|e| CommandError {
-        code: "IO".to_string(),
-        message: format!("failed to delete {filename}: {e}"),
-    })?;
+    std::fs::remove_file(&path)
+        .map_err(|e| CommandError::new("IO", format!("failed to delete {filename}: {e}")))?;
 
     let config = config_cache.read_cached();
     if let WhisperModel::Custom(ref name) = config.whisper_model {

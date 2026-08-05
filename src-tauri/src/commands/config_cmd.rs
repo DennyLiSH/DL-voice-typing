@@ -115,15 +115,12 @@ pub fn save_settings(
             Ok(Err(e)) => {
                 // Hotkey error — config is saved but hotkey didn't change.
                 let _ = app.emit("hotkey-error", &e);
-                Err(CommandError {
-                    code: "HOTKEY".to_string(),
-                    message: e,
-                })
+                Err(CommandError::new("HOTKEY", e))
             }
-            Err(_) => Err(CommandError {
-                code: "HOTKEY".to_string(),
-                message: "hotkey re-registration timed out".to_string(),
-            }),
+            Err(_) => Err(CommandError::new(
+                "HOTKEY",
+                "hotkey re-registration timed out",
+            )),
         }
     } else {
         Ok(())

@@ -40,6 +40,36 @@ pub struct CommandError {
     pub message: String,
 }
 
+impl CommandError {
+    /// Generic constructor for arbitrary error codes.
+    pub fn new(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+        }
+    }
+
+    /// State-machine violation (e.g., confirm_review from non-Reviewing state).
+    pub fn state(message: impl Into<String>) -> Self {
+        Self::new("STATE", message)
+    }
+
+    /// Mutex/RwLock poisoning or contention.
+    pub fn lock<E: std::fmt::Display>(e: E) -> Self {
+        Self::new("LOCK", e.to_string())
+    }
+
+    /// I/O failure with context prefix (template: "<ctx>: <e>").
+    pub fn io<E: std::fmt::Display>(e: E, context: &str) -> Self {
+        Self::new("IO", format!("{context}: {e}"))
+    }
+
+    /// Input validation failure.
+    pub fn validation(message: impl Into<String>) -> Self {
+        Self::new("VALIDATION", message)
+    }
+}
+
 impl std::fmt::Display for CommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code, self.message)
@@ -125,5 +155,74 @@ mod tests {
             message: "bad value".to_string(),
         };
         assert_eq!(err.to_string(), "CONFIG: bad value");
+    }
+
+    #[test]
+    fn test_command_error_new_generic() {
+        let err = CommandError::new("CUSTOM", "detail");
+        assert_eq!(err.code, "CUSTOM");
+        assert_eq!(err.message, "detail");
+    }
+
+    #[test]
+    fn test_command_error_state_helper() {
+        let err = CommandError::state("cannot confirm from current state");
+        assert_eq!(err.code, "STATE");
+        assert_eq!(err.message, "cannot confirm from current state");
+    }
+
+    #[test]
+    fn test_command_error_lock_helper() {
+        let err = CommandError::lock(std::io::Error::other("poisoned"));
+        assert_eq!(err.code, "LOCK");
+        assert!(err.message.contains("poisoned"));
+    }
+
+    #[test]
+    fn test_command_error_io_helper() {
+        let err = CommandError::io(std::io::Error::other("disk full"), "save_settings");
+        assert_eq!(err.code, "IO");
+        assert_eq!(err.message, "save_settings: disk full");
+    }
+
+    #[test]
+    fn test_command_error_validation_helper() {
+        let err = CommandError::validation("invalid filename");
+        assert_eq!(err.code, "VALIDATION");
+        assert_eq!(err.message, "invalid filename");
+    }
+
+    #[test]
+    fn test_state_helper_byte_identical_to_struct_literal() {
+        let helper = CommandError::state("cannot confirm from current state");
+        let literal = CommandError {
+            code: "STATE".to_string(),
+            message: "cannot confirm from current state".to_string(),
+        };
+        assert_eq!(helper.code, literal.code);
+        assert_eq!(helper.message, literal.message);
+
+        let helper2 = CommandError::state("cancel_reviewing failed");
+        let literal2 = CommandError {
+            code: "STATE".to_string(),
+            message: "cancel_reviewing failed".to_string(),
+        };
+        assert_eq!(helper2.code, literal2.code);
+        assert_eq!(helper2.message, literal2.message);
+
+        let helper3 = CommandError::state("cannot cancel from current state");
+        let literal3 = CommandError {
+            code: "STATE".to_string(),
+            message: "cannot cancel from current state".to_string(),
+        };
+        assert_eq!(helper3.code, literal3.code);
+        assert_eq!(helper3.message, literal3.message);
+    }
+
+    #[test]
+    fn test_download_cancelled_message_byte_identical() {
+        let err = CommandError::new("CANCELLED", "download cancelled");
+        assert_eq!(err.message, "download cancelled");
+        assert_eq!(err.message.len(), "download cancelled".len());
     }
 }
