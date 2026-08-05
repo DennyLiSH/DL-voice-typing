@@ -1,8 +1,7 @@
+import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { hideError, showError } from './lib/ui-utils.js';
 import { getModelStatus, getSelectedModel } from './model-manager.js';
-
-const { invoke } = window.__TAURI__.core;
 
 // DOM elements
 const languageSelect = document.getElementById('language');
@@ -78,14 +77,14 @@ export function populateFields(config) {
     // In dev builds without DL_AUTOSTART=1, gray out the autostart toggle.
     (async () => {
         try {
-            const autostartAvailable = await invoke('is_autostart_available');
+            const autostartAvailable = await call('is_autostart_available');
             if (!autostartAvailable) {
                 autostartToggle.classList.add('disabled');
                 autostartToggle.setAttribute('aria-disabled', 'true');
                 autostartToggle.parentElement.classList.add('disabled');
             }
         } catch (_e) {
-            // Non-critical: just skip gray-out
+            // Non-critical: just skip gray-out (error already reported via call)
         }
     })();
 }
@@ -238,16 +237,9 @@ testBtn.addEventListener('click', async () => {
     testStatus.textContent = '';
 
     try {
-        await invoke('test_llm_connection', { apiUrl, apiKey, model });
+        await call('test_llm_connection', { apiUrl, apiKey, model });
         setTestStatus('✓ 连接成功', 'success');
-    } catch (e) {
-        const message =
-            typeof e === 'object' && e?.message ? e.message : String(e);
-        invoke('log_frontend_error', {
-            message,
-            stack: e instanceof Error ? e.stack : null,
-            context: 'test_llm_connection',
-        }).catch(() => {});
+    } catch (_e) {
         setTestStatus('✗ 连接失败，请检查配置', 'error');
     } finally {
         testBtn.disabled = false;
@@ -354,7 +346,7 @@ saveBtn.addEventListener('click', async () => {
     saveBtn.classList.add('saving');
 
     try {
-        await invoke('save_settings', { config });
+        await call('save_settings', { config });
         loadedConfig = config;
 
         // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
@@ -362,7 +354,7 @@ saveBtn.addEventListener('click', async () => {
         let saveMsgType = 'success';
         try {
             const wantAutostart = autostartToggle.classList.contains('active');
-            const autostartAvailable = await invoke('is_autostart_available');
+            const autostartAvailable = await call('is_autostart_available');
             if (autostartAvailable) {
                 if (wantAutostart) {
                     await window.__TAURI__.autostart.enable();
@@ -380,14 +372,7 @@ saveBtn.addEventListener('click', async () => {
         setTimeout(() => {
             saveStatus.textContent = '';
         }, 1500);
-    } catch (e) {
-        const message =
-            typeof e === 'object' && e?.message ? e.message : String(e);
-        invoke('log_frontend_error', {
-            message,
-            stack: e instanceof Error ? e.stack : null,
-            context: 'save_settings',
-        }).catch(() => {});
+    } catch (_e) {
         setSaveStatus('✗ 保存失败，请重试', 'error');
         showError('保存失败，请重试');
     } finally {

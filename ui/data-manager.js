@@ -1,3 +1,4 @@
+import { call } from './lib/api.js';
 import {
     buildExpandedMetadata,
     buildRecordingRow,
@@ -6,8 +7,6 @@ import {
     formatBytes,
     getPageRange,
 } from './lib/data-management.js';
-
-const { invoke } = window.__TAURI__.core;
 
 // ============================================================
 // Data management — saved recordings list
@@ -88,7 +87,7 @@ async function loadRecordingsPage(offset) {
         refreshBtn.classList.add('loading');
     }
     try {
-        const resp = await invoke('list_saved_recordings', {
+        const resp = await call('list_saved_recordings', {
             offset,
             limit: dataState.limit,
             query: dataState.query || null,
@@ -158,7 +157,7 @@ function renderDataList() {
 
 async function attachAudioSrc(audioEl, filename) {
     try {
-        const bytes = await invoke('read_recording_audio', { filename });
+        const bytes = await call('read_recording_audio', { filename });
         // Tauri returns ArrayLike<number>; convert to Uint8Array for Blob.
         const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
         const blob = new Blob([u8], { type: 'audio/wav' });
@@ -435,7 +434,7 @@ function wireDataListEvents() {
 async function handleSingleDelete(filename) {
     if (!confirm(deleteConfirmMessage(1))) return;
     try {
-        await invoke('delete_recording', { filename });
+        await call('delete_recording', { filename });
         // Clear audio state if it was this row (constraint #10a).
         if (dataState.audioPlayerRowId === filename) {
             if (dataState.audioElement) {
@@ -481,7 +480,7 @@ async function handleBatchDelete() {
     if (!confirm(deleteConfirmMessage(count))) return;
     const filenames = Array.from(dataState.selectedFiles);
     try {
-        const result = await invoke('delete_recordings', { filenames });
+        const result = await call('delete_recordings', { filenames });
         dataState.selectedFiles.clear();
         // Clear audio if it was a selected row.
         if (

@@ -1,7 +1,7 @@
+import { call } from './lib/api.js';
 import { formatInjectionError } from './review-utils.js';
 
 const { listen } = window.__TAURI__.event;
-const { invoke } = window.__TAURI__.core;
 
 const textarea = document.getElementById('review-text');
 const preview = document.getElementById('preview');
@@ -39,7 +39,7 @@ listen('review-show', async () => {
     updateButtons();
 
     try {
-        const text = await invoke('get_review_text');
+        const text = await call('get_review_text');
         if (text) {
             textarea.value = text;
             updateButtons();
@@ -92,7 +92,7 @@ listen('injection-error', (event) => {
 // has already typed (or that review-show has already populated).
 (async () => {
     try {
-        const text = await invoke('get_review_text');
+        const text = await call('get_review_text');
         if (text && !userEdited && !textarea.value) {
             textarea.value = text;
             errorMsg.textContent = '';
@@ -142,7 +142,7 @@ async function doConfirm() {
 
     try {
         errorMsg.textContent = '';
-        await invoke('confirm_inject', { text });
+        await call('confirm_inject', { text });
     } catch (err) {
         errorMsg.textContent =
             typeof err === 'string' ? err : '粘贴失败，请重试';
@@ -156,7 +156,7 @@ async function doCancel() {
     isClosing = true;
     updateButtons();
     try {
-        await invoke('cancel_review');
+        await call('cancel_review');
     } catch (e) {
         errorMsg.textContent = typeof e === 'string' ? e : '取消失败，请重试';
         isClosing = false;

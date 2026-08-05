@@ -1,7 +1,7 @@
+import { call, rawInvoke, reportError } from './lib/api.js';
 import { showError } from './lib/ui-utils.js';
 import { updateDirtyState } from './settings-form.js';
 
-const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 // DOM elements
@@ -119,7 +119,7 @@ whisperModelSelect.addEventListener('change', () => {
 export async function loadComputeMode() {
     const badge = document.getElementById('compute-mode-badge');
     try {
-        const mode = await invoke('get_compute_mode');
+        const mode = await call('get_compute_mode');
         if (mode === 'gpu') {
             badge.textContent = 'GPU 加速';
             badge.className = 'mode-badge gpu';
@@ -144,9 +144,9 @@ btnDownloadModel.addEventListener('click', async () => {
         const filename = selectedModel.replace(/^custom:/, '');
         if (!confirm(`确认删除模型 ${filename}？`)) return;
         try {
-            await invoke('delete_custom_model', { filename });
+            await call('delete_custom_model', { filename });
             // Refresh model list
-            const modelsData = await invoke('get_whisper_models');
+            const modelsData = await call('get_whisper_models');
             modelStatus = modelsData.built_in;
             customModels = modelsData.custom;
             // If deleted was selected, reset to base
@@ -156,14 +156,7 @@ btnDownloadModel.addEventListener('click', async () => {
             populateModelSelect();
             updateModelAction();
             updateDirtyState();
-        } catch (e) {
-            const message =
-                typeof e === 'object' && e?.message ? e.message : String(e);
-            invoke('log_frontend_error', {
-                message,
-                stack: e instanceof Error ? e.stack : null,
-                context: 'delete_custom_model',
-            }).catch(() => {});
+        } catch (_e) {
             showError('删除失败，请重试');
         }
     } else {
@@ -182,7 +175,7 @@ async function startDownload(size) {
     updateModelAction();
 
     try {
-        await invoke('download_whisper_model', { size });
+        await rawInvoke('download_whisper_model', { size });
         activeDownload = null;
         modelStatus[size] = true;
         updateModelAction();
@@ -195,13 +188,7 @@ async function startDownload(size) {
         if (isCancel) {
             updateModelAction();
         } else {
-            const message =
-                typeof e === 'object' && e?.message ? e.message : String(e);
-            invoke('log_frontend_error', {
-                message,
-                stack: e instanceof Error ? e.stack : null,
-                context: 'download_whisper_model',
-            }).catch(() => {});
+            reportError(e, 'download_whisper_model');
             showError('下载失败，请重试');
             updateModelAction();
         }
@@ -210,7 +197,7 @@ async function startDownload(size) {
 
 async function cancelDownload() {
     try {
-        await invoke('cancel_download');
+        await rawInvoke('cancel_download');
     } catch (_e) {
         progressPercent.textContent = '取消下载失败';
     }

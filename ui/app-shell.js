@@ -1,4 +1,5 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
+import { call } from './lib/api.js';
 import {
     loadComputeMode,
     populateModelSelect,
@@ -14,7 +15,6 @@ import {
     updateDirtyState,
 } from './settings-form.js';
 
-const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 // DOM elements
@@ -120,8 +120,8 @@ listen('hotkey-error', (event) => {
 export async function init() {
     try {
         const [config, modelsData] = await Promise.all([
-            invoke('get_config'),
-            invoke('get_whisper_models'),
+            call('get_config'),
+            call('get_whisper_models'),
         ]);
         setDirtyCheckEnabled(false);
         setSelectedModel(config.whisper_model);

@@ -244,11 +244,11 @@ describe('settings.js error forwarding to log_frontend_error', () => {
         });
     });
 
-    describe('static contract — 4 catch blocks present in split settings modules', () => {
-        // Static source assertions: guarantee the log_frontend_error forwarding
-        // exists at all 4 expected catch sites and the F6 fix expression is in place.
-        // After splitting ui/settings.js, the catch sites live in settings-form.js
-        // and model-manager.js.
+    describe('static contract — call/rawInvoke shapes after api.js wrapper adoption', () => {
+        // Static source assertions: after routing invoke through ui/lib/api.js,
+        // the 4 user-initiated catch sites no longer contain log_frontend_error
+        // boilerplate. Instead, error forwarding is centralized in api.js's
+        // call() / reportError(). These tests verify the new call shapes.
         let settingsFormSrc;
         let modelManagerSrc;
         beforeAll(async () => {
@@ -276,48 +276,47 @@ describe('settings.js error forwarding to log_frontend_error', () => {
             );
         });
 
-        it('save_settings catch forwards with context=save_settings', () => {
-            const idx = settingsFormSrc.indexOf("context: 'save_settings'");
-            expect(idx).toBeGreaterThan(-1);
-            // Sanity: nearby code must reference the invoke command
-            expect(settingsFormSrc.substring(idx - 400, idx)).toContain(
-                'log_frontend_error',
+        it('save_settings invoked via call(cmd, args)', () => {
+            expect(settingsFormSrc).toMatch(/call\(['"]save_settings['"]/);
+        });
+
+        it('test_llm_connection invoked via call', () => {
+            expect(settingsFormSrc).toMatch(
+                /call\(['"]test_llm_connection['"]/,
             );
         });
 
-        it('test_llm_connection catch forwards with context=test_llm_connection', () => {
-            const idx = settingsFormSrc.indexOf(
-                "context: 'test_llm_connection'",
+        it('delete_custom_model invoked via call', () => {
+            expect(modelManagerSrc).toMatch(
+                /call\(['"]delete_custom_model['"]/,
             );
-            expect(idx).toBeGreaterThan(-1);
         });
 
-        it('download_whisper_model catch forwards with context=download_whisper_model', () => {
-            const idx = modelManagerSrc.indexOf(
-                "context: 'download_whisper_model'",
+        it('download_whisper_model uses rawInvoke + reportError (Option B)', () => {
+            // rawInvoke preserves the cancel-silent invariant; reportError only
+            // fires in the error branch (semantically equivalent to the old
+            // log_frontend_error boilerplate).
+            expect(modelManagerSrc).toMatch(
+                /rawInvoke\(['"]download_whisper_model['"]/,
             );
-            expect(idx).toBeGreaterThan(-1);
+            expect(modelManagerSrc).toMatch(
+                /reportError\([^,]+,\s*['"]download_whisper_model['"]\)/,
+            );
         });
 
-        it('delete_custom_model catch forwards with context=delete_custom_model', () => {
-            const idx = modelManagerSrc.indexOf(
-                "context: 'delete_custom_model'",
-            );
-            expect(idx).toBeGreaterThan(-1);
-        });
-
-        it('F6 fix expression present (defensive cancel check)', () => {
-            // Match the literal expression: e === 'download cancelled' || e?.message === 'download cancelled'
+        it('F6 fix expression preserved', () => {
             expect(modelManagerSrc).toContain(
                 "e === 'download cancelled' || e?.message === 'download cancelled'",
             );
         });
 
-        it('all 4 catch blocks use fire-and-forget .catch(() => {})', () => {
+        it('fire-and-forget .catch(() => {}) removed from settings-form + model-manager', () => {
+            // The boilerplate catch (() => {}) was the mark of inline
+            // log_frontend_error forwarding; with call()/reportError() handling
+            // it centrally, no inline sites should remain.
             const combined = settingsFormSrc + modelManagerSrc;
             const matches = combined.match(/\.catch\(\(\) => \{\}\)/g) || [];
-            // 4 forwarding sites each contribute one fire-and-forget catch.
-            expect(matches.length).toBeGreaterThanOrEqual(4);
+            expect(matches.length).toBe(0);
         });
     });
 
