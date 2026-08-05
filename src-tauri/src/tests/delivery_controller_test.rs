@@ -9,13 +9,16 @@ use crate::clipboard::MockClipboard;
 use crate::commands::MockEmitter;
 use crate::commands::pipeline_state::PipelineState;
 use crate::commands::recording_session::SessionPolicy;
+use crate::commands::review::ReviewData;
 use crate::commands::review_provider::{MockReviewProvider, ReviewProvider};
 use crate::commands::window_controller::{NoopWindowController, WindowController};
 use crate::config::{AppConfig, ConfigCache};
+use crate::data_saving::SaveResult;
 use crate::llm::MockCorrector;
 use crate::perf::PerfHistory;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -822,12 +825,17 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
     let policy = SessionPolicy::from_config(&AppConfig::default());
     let perf = crate::perf::PerfMetrics::new(0);
 
+    let save_result = Some(SaveResult {
+        wav_path: PathBuf::from("test.wav"),
+        json_path: PathBuf::from("test.json"),
+    });
+
     ps.delivery
         .show_review(
             &ps,
             "final text".to_string(),
             "raw transcription".to_string(),
-            None,
+            save_result,
             &policy,
             perf,
             Instant::now(),
@@ -850,11 +858,22 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
     );
     // store_context populated. DeliveryContext.context is private; field name is
     // `data_saving` (not `review_data`). Use take_context() to inspect.
-    // Note: show_review builds review_data from save_result via Option::map, so
-    // with save_result=None the stored data_saving is None — this is current behavior.
+    // show_review builds ReviewData from save_result via Option::map, so
+    // with save_result=Some(...) the stored data_saving must be Some(...).
     let (_foreground_hwnd, data_saving, _perf, _t_press) = ps.delivery.take_context();
     assert!(
-        data_saving.is_none(),
-        "data_saving is None when save_result is None (current behavior)"
+        data_saving.is_some(),
+        "data_saving must be stored for later confirm"
+    );
+
+    let rd = data_saving.unwrap();
+    let rd: ReviewData = rd;
+    assert_eq!(rd.json_path, PathBuf::from("test.json"));
+    assert_eq!(rd.raw_transcription, "raw transcription");
+    // AppConfig::default().llm_enabled is false, so llm_text is None per
+    // delivery_controller.rs:245-250.
+    assert!(
+        rd.llm_text.is_none(),
+        "llm_text must be None when llm_enabled is false"
     );
 }
