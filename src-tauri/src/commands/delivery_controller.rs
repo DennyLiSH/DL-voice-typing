@@ -65,6 +65,39 @@ pub(crate) struct DeliveryController {
     context: Mutex<DeliveryContext>,
 }
 
+// -------------------------------------------------------------------------
+// FinishOutcome: centralized post-delivery cleanup
+// -------------------------------------------------------------------------
+
+/// Encodes the post-delivery cleanup recipe. Each variant carries only the
+/// data finish() actually needs; site-specific pre-side-effects (entry guards,
+/// clipboard save, window show, save_and_inject itself, foreground restore)
+/// stay in the caller.
+#[allow(dead_code)] // TODO(Task 3): remove once EarlyStateMismatch is wired
+enum FinishOutcome {
+    /// Successful paste delivery. Caller has ALREADY done save_and_inject and
+    /// pre-inject foreground restore. finish handles sm_finish_injecting,
+    /// emit injection-complete, hide windows, JSON update, perf record.
+    ///
+    /// If sm_finish_injecting returns false (TOCTOU — watchdog reset state
+    /// machine mid-deliver), finish follows current source semantics: warn!
+    /// and continue with injection-complete (paste already happened, clipboard
+    /// already self-restored by inject_inner).
+    Deliver {
+        final_text: String, // for JSON final_text field (raw/llm come from ctx.review_data)
+        hide_review: bool,
+    },
+    /// User-cancel from Reviewing. No paste happened. Caller did NOT do
+    /// save_and_inject. finish does take_context + restore_clipboard_if_saved
+    /// (clipboard was saved on show_review) + restore_foreground + hide_windows
+    /// + set_shown_on_press(false) + JSON with None final_text.
+    Cancel,
+    /// confirm_review / cancel_review called from wrong state (Recording /
+    /// Transcribing / Idle). Caller returns Err(CommandError) AFTER finish
+    /// runs. finish does take_context + stop_resources + sm_reset + cleanup_review_ui.
+    EarlyStateMismatch,
+}
+
 impl DeliveryController {
     pub(crate) fn new(
         emitter: Arc<dyn EventEmitter>,
@@ -118,22 +151,47 @@ impl DeliveryController {
             return;
         }
 
-        let llm_text = if policy.llm_enabled {
-            Some(text.clone())
-        } else {
-            None
-        };
+        let t_inject = Instant::now();
+        let inject_result = self.save_and_inject(&text).await;
 
-        self.inject_and_finish(
+        perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
+        perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
+        perf.text_length = text.len();
+
+        if let Err(ref e) = inject_result {
+            warn!("inject_direct: injection failed: {e}");
+            self.emitter.emit(
+                "injection-error",
+                serde_json::to_value(e).unwrap_or_default(),
+            );
+            let _ = self.restore_clipboard();
+            self.window_controller.hide_floating();
+            ps.sm_reset();
+            return;
+        }
+
+        let review_data = save_result.map(|sr| ReviewData {
+            json_path: sr.json_path,
+            raw_transcription: transcription,
+            llm_text: if policy.llm_enabled {
+                Some(text.clone())
+            } else {
+                None
+            },
+        });
+        self.store_context(review_data, perf.clone(), t_press_for_e2e);
+        let ctx = self.take_context();
+        let perf_for_record = ctx.2.clone();
+        let t_press_for_record = ctx.3.unwrap_or_else(Instant::now);
+        self.finish(
             ps,
-            text,
-            save_result,
-            policy,
-            perf,
-            t_press_for_e2e,
-            Some(transcription.as_str()),
-            llm_text,
-            false,
+            ctx,
+            FinishOutcome::Deliver {
+                final_text: text,
+                hide_review: false,
+            },
+            "inject_direct",
+            Some((&perf_for_record, t_press_for_record)),
         )
         .await;
     }
@@ -280,22 +338,49 @@ impl DeliveryController {
             let _ = self.take_context();
             // Reviewing -> Injecting, then inject.
             ps.sm_reviewing_to_injecting();
-            let llm_text = if policy.llm_enabled {
-                Some(final_text.clone())
-            } else {
-                None
-            };
             let mut fallback_perf = perf;
-            self.inject_and_finish(
+            let t_inject = Instant::now();
+            let inject_result = self.save_and_inject(&final_text).await;
+
+            fallback_perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
+            fallback_perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
+            fallback_perf.text_length = final_text.len();
+
+            if let Err(ref e) = inject_result {
+                warn!("show_review: fallback injection failed: {e}");
+                self.emitter.emit(
+                    "injection-error",
+                    serde_json::to_value(e).unwrap_or_default(),
+                );
+                let _ = self.restore_clipboard();
+                self.window_controller.hide_review();
+                self.window_controller.hide_floating();
+                ps.sm_reset();
+                return;
+            }
+
+            let review_data = save_result.map(|sr| ReviewData {
+                json_path: sr.json_path,
+                raw_transcription: transcription,
+                llm_text: if policy.llm_enabled {
+                    Some(final_text.clone())
+                } else {
+                    None
+                },
+            });
+            self.store_context(review_data, fallback_perf.clone(), t_press_for_e2e);
+            let ctx = self.take_context();
+            let perf_for_record = ctx.2.clone();
+            let t_press_for_record = ctx.3.unwrap_or_else(Instant::now);
+            self.finish(
                 ps,
-                final_text,
-                save_result,
-                policy,
-                &mut fallback_perf,
-                t_press_for_e2e,
-                Some(transcription.as_str()),
-                llm_text,
-                true,
+                ctx,
+                FinishOutcome::Deliver {
+                    final_text,
+                    hide_review: true,
+                },
+                "show_review_fallback",
+                Some((&perf_for_record, t_press_for_record)),
             )
             .await;
         }
@@ -409,37 +494,9 @@ impl DeliveryController {
         }
 
         // Take the stored delivery context before any await point.
-        let (foreground_hwnd, data_saving, _perf, _t_press) = self.take_context();
-
-        // Restore clipboard.
-        if let Err(e) = self.clipboard.restore() {
-            warn!("cancel_review: clipboard restore failed: {e}");
-        }
-
-        // Restore focus and hide windows.
-        if let Some(hwnd_val) = foreground_hwnd {
-            self.window_controller.restore_foreground_hwnd(hwnd_val);
-        }
-        self.window_controller.hide_floating();
-        self.window_controller.hide_review();
-
-        // Reset shown_on_press flag.
-        self.review.set_shown_on_press(false);
-
-        // Update data-saving JSON: preserve raw transcription, mark no final text.
-        if let Some(review_data) = data_saving {
-            if let Err(e) = crate::data_saving::update_json_with_text(
-                &review_data.json_path,
-                &review_data.raw_transcription,
-                review_data.llm_text.as_deref(),
-                None,
-            ) {
-                warn!(
-                    "cancel_review: failed to update JSON {}: {e}",
-                    review_data.json_path.display()
-                );
-            }
-        }
+        let ctx = self.take_context();
+        self.finish(ps, ctx, FinishOutcome::Cancel, "cancel_review", None)
+            .await;
 
         info!("cancel_review: done");
         Ok(())
@@ -450,26 +507,14 @@ impl DeliveryController {
     // -------------------------------------------------------------------------
 
     async fn confirm_from_reviewing(&self, ps: &PipelineState, text: String) {
-        let (foreground_hwnd, data_saving, mut perf, t_press) = self.take_context();
+        // 0. Take context at method TOP (decision#8 exception): pre-inject
+        // foreground restore needs ctx.0, and the sm_reviewing_to_injecting
+        // early-return must not leak context.
+        let mut ctx = self.take_context();
 
-        // 1. Save data before text is consumed.
-        if let Some(review_data) = data_saving {
-            if let Err(e) = crate::data_saving::update_json_with_text(
-                &review_data.json_path,
-                &review_data.raw_transcription,
-                review_data.llm_text.as_deref(),
-                Some(&text),
-            ) {
-                warn!(
-                    "confirm_from_reviewing: failed to update JSON {}: {e}",
-                    review_data.json_path.display()
-                );
-            }
-        }
-
-        // 2. Restore focus to target app BEFORE paste.
-        info!("confirm_from_reviewing: saved_hwnd={:?}", foreground_hwnd);
-        if let Some(hwnd_val) = foreground_hwnd {
+        // 1. Restore focus to target app BEFORE paste.
+        info!("confirm_from_reviewing: saved_hwnd={:?}", ctx.0);
+        if let Some(hwnd_val) = ctx.0 {
             self.window_controller.restore_foreground_hwnd(hwnd_val);
             // Wait for OS to fully process the focus change before simulating
             // keyboard input. Without this delay, SendInput (Ctrl+V) may still
@@ -477,14 +522,14 @@ impl DeliveryController {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        // 3. Inject text in a blocking thread to avoid starving the runtime.
+        // 2. Inject text in a blocking thread to avoid starving the runtime.
         let t_inject = Instant::now();
         let inject_result = self.save_and_inject(&text).await;
 
-        perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-        perf.text_length = text.len();
-        if let Some(t_press_for_e2e) = t_press {
-            perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
+        ctx.2.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
+        ctx.2.text_length = text.len();
+        if let Some(t_press_for_e2e) = ctx.3 {
+            ctx.2.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
         }
 
         if let Err(ref e) = inject_result {
@@ -495,7 +540,7 @@ impl DeliveryController {
             );
             // Best-effort cleanup: restore clipboard, restore focus, hide windows, reset state.
             let _ = self.restore_clipboard();
-            if let Some(hwnd_val) = foreground_hwnd {
+            if let Some(hwnd_val) = ctx.0 {
                 debug!(
                     target: "delivery",
                     "confirm_from_reviewing: restoring foreground on inject failure, hwnd={hwnd_val}"
@@ -508,115 +553,159 @@ impl DeliveryController {
             return;
         }
 
-        // 4. State transition Reviewing -> Injecting.
+        // 3. State transition Reviewing -> Injecting.
         if !ps.sm_reviewing_to_injecting() {
             warn!("confirm_from_reviewing: reviewing_to_injecting failed");
             return;
         }
 
-        // 5. Hide review window AFTER paste, then finish.
-        self.window_controller.hide_review();
-        // sm_finish_injecting returns false on TOCTOU (state already moved on
-        // via watchdog reset or concurrent cancel). We log but still emit
-        // injection-complete so the UI hides the overlay — silently dropping
-        // the event would leave the user staring at a "still injecting" state.
-        if !ps.sm_finish_injecting() {
-            warn!(
-                "confirm_from_reviewing: sm_finish_injecting returned false (TOCTOU or watchdog reset) — emitting injection-complete anyway for UI consistency"
-            );
-        }
-        self.emitter
-            .emit("injection-complete", serde_json::Value::Null);
-        self.window_controller.hide_floating();
-
-        // 6. Reset shown_on_press flag.
-        self.review.set_shown_on_press(false);
-
-        // 7. Record perf.
-        self.perf_history.record(perf.clone());
-        self.emitter.emit(
-            "perf-metrics",
-            serde_json::to_value(&perf).unwrap_or_default(),
-        );
-        info!("{}", perf.summary());
+        // 4. Centralized post-delivery cleanup.
+        let perf_for_record = ctx.2.clone();
+        let t_press_for_record = ctx.3.unwrap_or_else(Instant::now);
+        self.finish(
+            ps,
+            ctx,
+            FinishOutcome::Deliver {
+                final_text: text,
+                hide_review: true,
+            },
+            "confirm_from_reviewing",
+            Some((&perf_for_record, t_press_for_record)),
+        )
+        .await;
     }
 
-    /// Shared injection tail used by direct inject and fallback paths.
+    /// Single authority for post-delivery cleanup ordering. Caller passes the
+    /// already-taken context tuple (callers call take_context themselves —
+    /// default timing is immediately before finish() to minimize the panic
+    /// window; the ONE exception is confirm_from_reviewing which takes at
+    /// method top because its pre-inject foreground restore needs ctx.0).
     ///
-    /// Caller is responsible for transitioning into `Injecting` before calling.
-    #[allow(clippy::too_many_arguments)]
-    async fn inject_and_finish(
+    /// `site_label` is emitted via `debug!(target: "delivery", ...)` so production
+    /// traces stay distinguishable across the 4 historical M2 sites + future ones.
+    async fn finish(
         &self,
         ps: &PipelineState,
-        text: String,
-        save_result: Option<SaveResult>,
-        _policy: &SessionPolicy,
-        perf: &mut PerfMetrics,
-        t_press_for_e2e: Instant,
-        raw_transcription: Option<&str>,
-        llm_text: Option<String>,
-        hide_review: bool,
+        ctx: (
+            Option<isize>,
+            Option<ReviewData>,
+            PerfMetrics,
+            Option<Instant>,
+        ),
+        outcome: FinishOutcome,
+        site_label: &'static str,
+        perf_record_input: Option<(&PerfMetrics, Instant)>,
     ) {
-        let t_inject = Instant::now();
-        let inject_result = self.save_and_inject(&text).await;
+        let (foreground_hwnd, review_data, _ctx_perf, _ctx_t_press) = ctx;
+        debug!(target: "delivery", "finish({site_label}): entered");
 
-        perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-        perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
-        perf.text_length = text.len();
-
-        match inject_result {
-            Ok(()) => {
-                info!("inject_and_finish: injection succeeded");
-            }
-            Err(e) => {
-                warn!("inject_and_finish: injection failed: {e}");
-                self.emitter.emit(
-                    "injection-error",
-                    serde_json::to_value(&e).unwrap_or_default(),
-                );
-                let _ = self.restore_clipboard();
+        match outcome {
+            FinishOutcome::Deliver {
+                final_text,
+                hide_review,
+            } => {
+                // Caller did save_and_inject + pre-inject foreground restore.
+                if !ps.sm_finish_injecting() {
+                    // TOCTOU: watchdog reset state machine mid-deliver.
+                    // Current source semantics (inject_and_finish): warn
+                    // and continue — paste already happened, clipboard already
+                    // self-restored by inject_inner.
+                    warn!(target: "delivery",
+                        "finish({site_label}): sm_finish_injecting failed (TOCTOU) — paste already happened, continuing injection-complete"
+                    );
+                }
+                self.emitter
+                    .emit("injection-complete", serde_json::Value::Null);
                 if hide_review {
                     self.window_controller.hide_review();
                 }
                 self.window_controller.hide_floating();
-                ps.sm_reset();
-                return;
-            }
-        }
-
-        if !ps.sm_finish_injecting() {
-            warn!(
-                "inject_and_finish: sm_finish_injecting returned false (TOCTOU or watchdog reset) — emitting injection-complete anyway for UI consistency"
-            );
-        }
-        self.emitter
-            .emit("injection-complete", serde_json::Value::Null);
-
-        if hide_review {
-            self.window_controller.hide_review();
-        }
-        self.window_controller.hide_floating();
-
-        if let Some(sr) = save_result {
-            if let Some(raw) = raw_transcription {
-                if let Err(e) = crate::data_saving::update_json_with_text(
-                    &sr.json_path,
-                    raw,
-                    llm_text.as_deref(),
-                    Some(&text),
-                ) {
-                    warn!(
-                        "inject_and_finish: failed to update JSON {}: {e}",
-                        sr.json_path.display()
-                    );
+                match self.update_json_deliver(review_data.as_ref(), &final_text) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        warn!(target: "delivery", "finish({site_label}): json update failed: {e}")
+                    }
+                }
+                if let Some((p, t)) = perf_record_input {
+                    self.record_perf(p, t);
                 }
             }
+            FinishOutcome::Cancel => {
+                // Cancel from Reviewing: no paste happened.
+                self.restore_clipboard_if_saved();
+                if let Some(hwnd) = foreground_hwnd {
+                    self.window_controller.restore_foreground_hwnd(hwnd);
+                }
+                self.window_controller.hide_floating();
+                self.window_controller.hide_review();
+                ps.review.set_shown_on_press(false);
+                match self.update_json_cancel(review_data.as_ref()) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        warn!(target: "delivery", "finish({site_label}): cancel json update failed: {e}")
+                    }
+                }
+            }
+            FinishOutcome::EarlyStateMismatch => {
+                ps.stop_recording_resources_graceful();
+                ps.sm_reset();
+                self.cleanup_review_ui().await;
+            }
         }
+        debug!(target: "delivery", "finish({site_label}): done");
+    }
 
+    /// Restore clipboard only if save_and_inject (or save alone) was called this
+    /// cycle. Uses ClipboardProvider::was_saved() trait method (mirrors
+    /// recover() usage in recording_session). No ctx parameter.
+    fn restore_clipboard_if_saved(&self) {
+        if self.clipboard.was_saved() {
+            if let Err(e) = self.clipboard.restore() {
+                warn!(target: "delivery", "restore_clipboard_if_saved: restore failed: {e}");
+            }
+        }
+    }
+
+    /// Build + write success JSON. Mirrors the current inject_and_finish pattern.
+    /// ReviewData carries raw_transcription + llm_text; only final_text comes from caller.
+    fn update_json_deliver(
+        &self,
+        review_data: Option<&ReviewData>,
+        final_text: &str,
+    ) -> Result<(), crate::error::AppError> {
+        let Some(rd) = review_data else {
+            return Ok(());
+        };
+        crate::data_saving::update_json_with_text(
+            &rd.json_path,
+            &rd.raw_transcription,
+            rd.llm_text.as_deref(),
+            Some(final_text),
+        )
+    }
+
+    /// Build + write cancel JSON (final_text=None per existing cancel_review behavior).
+    fn update_json_cancel(
+        &self,
+        review_data: Option<&ReviewData>,
+    ) -> Result<(), crate::error::AppError> {
+        let Some(rd) = review_data else {
+            return Ok(());
+        };
+        crate::data_saving::update_json_with_text(
+            &rd.json_path,
+            &rd.raw_transcription,
+            rd.llm_text.as_deref(),
+            None,
+        )
+    }
+
+    /// Record perf + emit perf-metrics event.
+    fn record_perf(&self, perf: &PerfMetrics, _t_press: Instant) {
         self.perf_history.record(perf.clone());
         self.emitter.emit(
             "perf-metrics",
-            serde_json::to_value(&*perf).unwrap_or_default(),
+            serde_json::to_value(perf).unwrap_or_default(),
         );
         info!("{}", perf.summary());
     }
