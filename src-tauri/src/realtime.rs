@@ -205,6 +205,43 @@ fn read_context(accumulator: &Mutex<TextAccumulator>) -> ContextRead {
     }
 }
 
+/// Outcome of pushing new text and emitting the partial event.
+enum PushOutcome {
+    /// Push + emit completed normally.
+    Ok,
+    /// Accumulator mutex poisoned — caller should terminate loop.
+    Poisoned,
+}
+
+/// Push transcribed text into the accumulator and emit the partial event.
+///
+/// Combines the lock-push-text-emit sequence so the loop body reads as a
+/// single named call. Late-event guard (running check before emit) preserved
+/// to avoid late events after stop signal. Poison path returns PushOutcome::Poisoned
+/// which the caller converts to `break` (preserving original `Err(_) => break`).
+fn push_and_emit(
+    text: &str,
+    accumulator: &Mutex<TextAccumulator>,
+    emitter: &dyn crate::commands::EventEmitter,
+    running: &AtomicBool,
+) -> PushOutcome {
+    let new_accumulated = match accumulator.lock() {
+        Ok(mut guard) => {
+            guard.push(text);
+            guard.text().to_string()
+        }
+        Err(_) => return PushOutcome::Poisoned,
+    };
+
+    if running.load(Ordering::Relaxed) {
+        emitter.emit(
+            "transcription-partial",
+            serde_json::Value::String(new_accumulated),
+        );
+    }
+    PushOutcome::Ok
+}
+
 /// Background transcriber that runs a sliding-window loop on a dedicated thread.
 ///
 /// Owns the thread handle, stop flag, and incremental text accumulator.
@@ -497,22 +534,10 @@ impl RealtimeTranscriber {
                 debug!("realtime transcription: {text:?}");
 
                 if !text.is_empty() {
-                    // Accumulate: diff against previous partial to extract new content.
-                    let new_accumulated = {
-                        let mut acc_guard = match accumulated_clone.lock() {
-                            Ok(g) => g,
-                            Err(_) => break,
-                        };
-                        acc_guard.push(&text);
-                        acc_guard.text().to_string()
-                    };
-
-                    // Only emit if still running — avoid late events after stop signal.
-                    if running_clone.load(Ordering::Relaxed) {
-                        emitter.emit(
-                            "transcription-partial",
-                            serde_json::Value::String(new_accumulated.clone()),
-                        );
+                    match push_and_emit(&text, &accumulated_clone, emitter.as_ref(), &running_clone)
+                    {
+                        PushOutcome::Ok => {}
+                        PushOutcome::Poisoned => break,
                     }
                 }
 
