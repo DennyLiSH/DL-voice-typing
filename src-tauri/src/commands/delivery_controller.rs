@@ -73,7 +73,6 @@ pub(crate) struct DeliveryController {
 /// data finish() actually needs; site-specific pre-side-effects (entry guards,
 /// clipboard save, window show, save_and_inject itself, foreground restore)
 /// stay in the caller.
-#[allow(dead_code)] // TODO(Task 3): remove once EarlyStateMismatch is wired
 enum FinishOutcome {
     /// Successful paste delivery. Caller has already done save_and_inject;
     /// review paths have already restored foreground pre-inject. finish handles
@@ -329,11 +328,7 @@ impl DeliveryController {
             self.store_context(review_data, perf, t_press_for_e2e);
         } else {
             warn!("show_review: review window not found. Falling back to direct injection.");
-            // Clear residual context: foreground never left the original app in fallback
-            // path, so no restoration needed. Without this, the stored hwnd would leak
-            // into the next confirm/cancel cycle and restore focus to a stale window.
-            // take_context() returns a tuple (no Result); Option::take is infallible.
-            // On mutex poison, lock_mutex logs and unwrap_or returns defaults.
+            // Clear residual context from any prior cycle; the inline inject path below calls take_context + finish(Deliver) for the rest.
             let _ = self.take_context();
             // Reviewing -> Injecting, then inject.
             ps.sm_reviewing_to_injecting();
@@ -426,25 +421,28 @@ impl DeliveryController {
             }
             Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
                 info!("confirm_review: early confirm during recording/transcribing");
-                let _ = self.take_context();
-                debug!(
-                    target: "delivery",
-                    "take_context cleared on confirm_review recording/transcribing branch"
-                );
-                ps.stop_recording_resources_graceful();
-                ps.sm_reset();
-                self.cleanup_review_ui().await;
+                let ctx = self.take_context();
+                self.finish(
+                    ps,
+                    ctx,
+                    FinishOutcome::EarlyStateMismatch,
+                    "confirm_review_recording_transcribing",
+                )
+                .await;
                 Err(CommandError {
                     code: "STATE".to_string(),
                     message: "cannot confirm from current state".to_string(),
                 })
             }
             _ => {
-                let _ = self.take_context();
-                debug!(
-                    target: "delivery",
-                    "take_context cleared on confirm_review catch-all branch"
-                );
+                let ctx = self.take_context();
+                self.finish(
+                    ps,
+                    ctx,
+                    FinishOutcome::EarlyStateMismatch,
+                    "confirm_review_catchall",
+                )
+                .await;
                 Err(CommandError {
                     code: "STATE".to_string(),
                     message: "cannot confirm from current state".to_string(),
@@ -460,11 +458,14 @@ impl DeliveryController {
         match ps.sm_state() {
             Some(StateTag::Reviewing) => {
                 if !ps.sm_cancel_reviewing() {
-                    let _ = self.take_context();
-                    debug!(
-                        target: "delivery",
-                        "take_context cleared on cancel_review sm_cancel_reviewing failure branch"
-                    );
+                    let ctx = self.take_context();
+                    self.finish(
+                        ps,
+                        ctx,
+                        FinishOutcome::EarlyStateMismatch,
+                        "cancel_review_sm_cancel_failed",
+                    )
+                    .await;
                     return Err(CommandError {
                         code: "STATE".to_string(),
                         message: "cancel_reviewing failed".to_string(),
@@ -477,11 +478,14 @@ impl DeliveryController {
                 ps.sm_reset();
             }
             _ => {
-                let _ = self.take_context();
-                debug!(
-                    target: "delivery",
-                    "take_context cleared on cancel_review catch-all branch"
-                );
+                let ctx = self.take_context();
+                self.finish(
+                    ps,
+                    ctx,
+                    FinishOutcome::EarlyStateMismatch,
+                    "cancel_review_catchall",
+                )
+                .await;
                 return Err(CommandError {
                     code: "STATE".to_string(),
                     message: "cannot cancel from current state".to_string(),
