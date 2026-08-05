@@ -161,6 +161,9 @@ impl DeliveryController {
 
         if let Err(ref e) = inject_result {
             warn!("inject_direct: injection failed: {e}");
+            // Deliberately not routed through finish(): failure timing/side-effects don't match
+            // any FinishOutcome variant — paste did not complete, so best-effort cleanup + reset
+            // happens inline.
             self.emitter.emit(
                 "injection-error",
                 serde_json::to_value(e).unwrap_or_default(),
@@ -474,6 +477,9 @@ impl DeliveryController {
             }
             Some(StateTag::Recording) | Some(StateTag::Transcribing) => {
                 info!("cancel_review: early cancel during recording/transcribing");
+                // No DeliveryContext exists yet in Recording/Transcribing (store_context runs in
+                // show_review), so there is nothing to take; resource stop + reset happen here and
+                // the shared Cancel cleanup below handles the rest.
                 ps.stop_recording_resources_graceful();
                 ps.sm_reset();
             }
@@ -534,6 +540,9 @@ impl DeliveryController {
 
         if let Err(ref e) = inject_result {
             warn!("confirm_from_reviewing: inject failed: {e}");
+            // Deliberately not routed through finish(): failure timing/side-effects don't match
+            // any FinishOutcome variant — paste did not complete, so best-effort cleanup + reset
+            // happens inline.
             self.emitter.emit(
                 "injection-error",
                 serde_json::to_value(e).unwrap_or_default(),
@@ -643,6 +652,10 @@ impl DeliveryController {
                 }
             }
             FinishOutcome::EarlyStateMismatch => {
+                // Reachable from any non-Reviewing state, including Injecting: a concurrent
+                // save_and_inject runs on a spawn_blocking thread and is unaffected by sm_reset;
+                // the in-flight Deliver path tolerates the reset via its sm_finish_injecting
+                // TOCTOU handling (warn + continue).
                 ps.stop_recording_resources_graceful();
                 ps.sm_reset();
                 self.cleanup_review_ui().await;
