@@ -24,16 +24,15 @@ const { invoke } = window.__TAURI__.core;
 export const rawInvoke = invoke;
 
 /**
- * Report an error to the backend tracing log. Fire-and-forget.
+ * Report an error to the backend tracing log. Returns a Promise that
+ * never rejects (caller can await or fire-and-forget).
  *
  * @param {unknown} e - Error value (any shape; typically Error or Tauri CommandError)
  * @param {string} context - Operation name for filtering in logs
+ * @returns {Promise<void>}
  */
 export function reportError(e, context) {
-    const message =
-        typeof e === 'object' && e !== null && 'message' in e
-            ? String(e.message)
-            : String(e);
+    const message = typeof e === 'object' && e?.message ? e.message : String(e);
     const stack = e instanceof Error ? e.stack : null;
     // rawInvoke (NOT call) — prevents infinite recursion if log_frontend_error itself fails.
     // Return the promise chain so callers CAN await if desired; the .catch() guarantees
@@ -59,11 +58,13 @@ export function reportError(e, context) {
  * @param {string} [context] - Operation name for log filtering (defaults to cmd)
  * @returns {Promise<unknown>}
  */
-export async function call(cmd, args = {}, context = cmd) {
+// biome-ignore lint/style/useDefaultParameterLast: default-null-context pattern preserves the "context optional, defaults to cmd" contract from the original boilerplate (cmd, args, context) — required-param-after-default is intentional to keep args={} ergonomic at call sites.
+export async function call(cmd, args = {}, context) {
+    const ctx = context ?? cmd;
     try {
         return await invoke(cmd, args);
     } catch (e) {
-        reportError(e, context);
+        reportError(e, ctx);
         throw e;
     }
 }
