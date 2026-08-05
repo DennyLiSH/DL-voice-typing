@@ -154,6 +154,28 @@ fn has_speech_energy(resampled: &[f32], config: &RealtimeLoopConfig) -> bool {
     high_energy_frames >= config.energy_min_frames
 }
 
+/// Outcome of pulling one audio window from the source.
+enum WindowPull {
+    /// Non-empty window ready for processing.
+    Window(Vec<f32>),
+    /// Source returned an empty buffer (still recording but no samples yet).
+    Empty,
+    /// Source returned None (e.g., recording stopped). Caller should terminate.
+    SourceGone,
+}
+
+/// Pull the most recent audio window from the source.
+///
+/// Encapsulates the three-way match on `get_recent_samples` so the loop body
+/// reads as `match pull_window(...) { Window(w) => ..., Empty => ..., SourceGone => break }`.
+fn pull_window(audio: &dyn AudioSource, samples_needed: usize) -> WindowPull {
+    match audio.get_recent_samples(samples_needed) {
+        Some(buf) if !buf.is_empty() => WindowPull::Window(buf),
+        Some(_) => WindowPull::Empty,
+        None => WindowPull::SourceGone,
+    }
+}
+
 /// Background transcriber that runs a sliding-window loop on a dedicated thread.
 ///
 /// Owns the thread handle, stop flag, and incremental text accumulator.
@@ -404,13 +426,13 @@ impl RealtimeTranscriber {
 
             while running_clone.load(Ordering::Relaxed) {
                 let samples_needed = (sample_rate * WINDOW_SECS) as usize;
-                let window = match audio.get_recent_samples(samples_needed) {
-                    Some(buf) if !buf.is_empty() => buf,
-                    Some(_) => {
+                let window = match pull_window(audio.as_ref(), samples_needed) {
+                    WindowPull::Window(w) => w,
+                    WindowPull::Empty => {
                         thread::sleep(Duration::from_millis(SHORT_STEP_MS));
                         continue;
                     }
-                    None => break,
+                    WindowPull::SourceGone => break,
                 };
 
                 let resampled = resampler.process(&window);
