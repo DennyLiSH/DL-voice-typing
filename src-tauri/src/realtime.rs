@@ -90,25 +90,68 @@ const ENERGY_FRAME_THRESHOLD: f32 = 0.04;
 /// Minimum number of high-energy frames required to consider audio as containing speech.
 const ENERGY_MIN_FRAMES: usize = 5;
 
+/// Tunable configuration for the realtime transcription loop.
+///
+/// Groups loop-policy (timing/window) and VAD-tuning constants into a single
+/// struct so the loop body reads as `config.step_ms` etc. instead of bare
+/// module constants. Values are sourced from the module-level `const`s by
+/// `DEFAULT` to keep a single source of truth.
+///
+/// Text-overlap constants (`MIN_OVERLAP_RATIO` / `EDIT_DISTANCE_RATIO` /
+/// `FUZZY_TOP_N`) are intentionally NOT in this struct — they are intrinsic
+/// to `TextAccumulator`'s algorithm and stay as module-level `const`.
+pub(crate) struct RealtimeLoopConfig {
+    // Loop-policy fields wired up in T2 (loop body migration). `#[expect]`
+    // marks them as intentionally-unread at the T1 introduction boundary so
+    // clippy does not fire `dead_code` for the partial rollout. Once T2 routes
+    // the loop body through `config.*`, drop the attributes.
+    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
+    pub step_ms: u64,
+    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
+    pub short_step_ms: u64,
+    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
+    pub stop_poll_ms: u64,
+    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
+    pub window_secs: u32,
+    #[expect(dead_code, reason = "wired up in T2 loop-body migration")]
+    pub vad_threshold: f32,
+    pub energy_frame_samples: usize,
+    pub energy_frame_threshold: f32,
+    pub energy_min_frames: usize,
+}
+
+impl RealtimeLoopConfig {
+    pub(crate) const DEFAULT: Self = Self {
+        step_ms: STEP_MS,
+        short_step_ms: SHORT_STEP_MS,
+        stop_poll_ms: STOP_POLL_MS,
+        window_secs: WINDOW_SECS,
+        vad_threshold: VAD_THRESHOLD,
+        energy_frame_samples: ENERGY_FRAME_SAMPLES,
+        energy_frame_threshold: ENERGY_FRAME_THRESHOLD,
+        energy_min_frames: ENERGY_MIN_FRAMES,
+    };
+}
+
 /// Check whether the audio contains sustained speech energy.
 /// Splits the audio into 100ms frames and requires at least `ENERGY_MIN_FRAMES` frames
 /// to exceed `ENERGY_FRAME_THRESHOLD` RMS. This distinguishes real speech (clear energy
 /// peaks from syllables) from ambient noise (uniform low energy).
-fn has_speech_energy(resampled: &[f32]) -> bool {
-    if resampled.len() < ENERGY_FRAME_SAMPLES {
+fn has_speech_energy(resampled: &[f32], config: &RealtimeLoopConfig) -> bool {
+    if resampled.len() < config.energy_frame_samples {
         return false;
     }
     let mut high_energy_frames = 0;
-    for frame in resampled.chunks(ENERGY_FRAME_SAMPLES) {
-        if frame.len() < ENERGY_FRAME_SAMPLES {
+    for frame in resampled.chunks(config.energy_frame_samples) {
+        if frame.len() < config.energy_frame_samples {
             break;
         }
         let frame_rms = rms::calculate_rms(frame);
-        if frame_rms > ENERGY_FRAME_THRESHOLD {
+        if frame_rms > config.energy_frame_threshold {
             high_energy_frames += 1;
         }
     }
-    high_energy_frames >= ENERGY_MIN_FRAMES
+    high_energy_frames >= config.energy_min_frames
 }
 
 /// Background transcriber that runs a sliding-window loop on a dedicated thread.
@@ -357,6 +400,7 @@ impl RealtimeTranscriber {
         let handle = thread::spawn(move || {
             let _span = tracing::info_span!("realtime_transcriber").entered();
             let mut resampler = Resampler::new(sample_rate, TARGET_SAMPLE_RATE);
+            let config = RealtimeLoopConfig::DEFAULT;
 
             while running_clone.load(Ordering::Relaxed) {
                 let samples_needed = (sample_rate * WINDOW_SECS) as usize;
@@ -372,7 +416,7 @@ impl RealtimeTranscriber {
                 let resampled = resampler.process(&window);
                 let rms_val = rms::calculate_rms(resampled);
 
-                let speech_energy = has_speech_energy(resampled);
+                let speech_energy = has_speech_energy(resampled, &config);
                 debug!(
                     "realtime VAD: rms={rms_val:.4} energy={speech_energy} samples={}",
                     resampled.len()
@@ -525,14 +569,14 @@ mod tests {
     fn test_has_speech_energy_pure_silence() {
         // All zeros → no speech energy
         let silent = vec![0.0f32; 80_000]; // 5 seconds at 16kHz
-        assert!(!has_speech_energy(&silent));
+        assert!(!has_speech_energy(&silent, &RealtimeLoopConfig::DEFAULT));
     }
 
     #[test]
     fn test_has_speech_energy_ambient_noise() {
         // Low uniform noise below frame threshold (RMS ≈ 0.01) → no speech energy
         let noise = vec![0.01f32; 80_000];
-        assert!(!has_speech_energy(&noise));
+        assert!(!has_speech_energy(&noise, &RealtimeLoopConfig::DEFAULT));
     }
 
     #[test]
@@ -546,7 +590,7 @@ mod tests {
                 audio[start + j] = 0.2; // RMS = 0.2, well above 0.04
             }
         }
-        assert!(has_speech_energy(&audio));
+        assert!(has_speech_energy(&audio, &RealtimeLoopConfig::DEFAULT));
     }
 
     #[test]
@@ -559,14 +603,14 @@ mod tests {
                 audio[start + j] = 0.2;
             }
         }
-        assert!(!has_speech_energy(&audio));
+        assert!(!has_speech_energy(&audio, &RealtimeLoopConfig::DEFAULT));
     }
 
     #[test]
     fn test_has_speech_energy_short_buffer() {
         // Buffer shorter than one frame → no speech energy
         let short = vec![0.5f32; 100];
-        assert!(!has_speech_energy(&short));
+        assert!(!has_speech_energy(&short, &RealtimeLoopConfig::DEFAULT));
     }
 
     #[test]
