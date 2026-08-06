@@ -94,6 +94,32 @@ export function populateFields(config) {
     })();
 }
 
+// --- Toggle helper ---
+
+/**
+ * Bind click + keydown handlers to a toggle button.
+ *
+ * @param {HTMLElement} el - the toggle button element
+ * @param {Object} [opts]
+ * @param {(isActive: boolean) => void} [opts.onToggle] - called after toggle state changes (e.g., disable dependent inputs)
+ * @param {() => boolean} [opts.guard] - returns true to skip the click (e.g., disabled check)
+ */
+function bindToggle(el, { onToggle, guard } = {}) {
+    el.addEventListener('click', () => {
+        if (guard?.()) return;
+        const isActive = el.classList.toggle('active');
+        el.setAttribute('aria-checked', String(isActive));
+        if (onToggle) onToggle(isActive);
+        updateDirtyState();
+    });
+    el.addEventListener('keydown', (e) => {
+        if (e.key === ' ') {
+            e.preventDefault();
+            el.click();
+        }
+    });
+}
+
 // --- LLM Toggle ---
 
 function updateLlmFieldsState(enabled) {
@@ -104,19 +130,7 @@ function updateLlmFieldsState(enabled) {
     testBtn.disabled = !enabled;
 }
 
-llmToggle.addEventListener('click', () => {
-    const isActive = llmToggle.classList.toggle('active');
-    llmToggle.setAttribute('aria-checked', String(isActive));
-    updateLlmFieldsState(isActive);
-    updateDirtyState();
-});
-
-llmToggle.addEventListener('keydown', (e) => {
-    if (e.key === ' ') {
-        e.preventDefault();
-        llmToggle.click();
-    }
-});
+bindToggle(llmToggle, { onToggle: updateLlmFieldsState });
 
 // --- Data Saving Toggle ---
 
@@ -128,65 +142,21 @@ function updateDataSavingFieldsState(enabled) {
     btnBrowsePath.disabled = !enabled;
 }
 
-dataSavingToggle.addEventListener('click', () => {
-    const isActive = dataSavingToggle.classList.toggle('active');
-    dataSavingToggle.setAttribute('aria-checked', String(isActive));
-    updateDataSavingFieldsState(isActive);
-    updateDirtyState();
-});
-
-dataSavingToggle.addEventListener('keydown', (e) => {
-    if (e.key === ' ') {
-        e.preventDefault();
-        dataSavingToggle.click();
-    }
-});
+bindToggle(dataSavingToggle, { onToggle: updateDataSavingFieldsState });
 
 // --- Review Before Paste Toggle ---
 
-reviewToggle.addEventListener('click', () => {
-    const isActive = reviewToggle.classList.toggle('active');
-    reviewToggle.setAttribute('aria-checked', String(isActive));
-    updateDirtyState();
-});
-
-reviewToggle.addEventListener('keydown', (e) => {
-    if (e.key === ' ') {
-        e.preventDefault();
-        reviewToggle.click();
-    }
-});
+bindToggle(reviewToggle);
 
 // --- Autostart Toggle ---
 
-autostartToggle.addEventListener('click', () => {
-    if (autostartToggle.classList.contains('disabled')) return;
-    const isActive = autostartToggle.classList.toggle('active');
-    autostartToggle.setAttribute('aria-checked', String(isActive));
-    updateDirtyState();
-});
-
-autostartToggle.addEventListener('keydown', (e) => {
-    if (e.key === ' ') {
-        e.preventDefault();
-        autostartToggle.click();
-    }
+bindToggle(autostartToggle, {
+    guard: () => autostartToggle.classList.contains('disabled'),
 });
 
 // --- Realtime Transcription Toggle ---
 
-realtimeToggle.addEventListener('click', () => {
-    const isActive = realtimeToggle.classList.toggle('active');
-    realtimeToggle.setAttribute('aria-checked', String(isActive));
-    updateDirtyState();
-});
-
-realtimeToggle.addEventListener('keydown', (e) => {
-    if (e.key === ' ') {
-        e.preventDefault();
-        realtimeToggle.click();
-    }
-});
+bindToggle(realtimeToggle);
 
 // --- Folder Browser ---
 
