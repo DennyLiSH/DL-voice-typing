@@ -1,6 +1,7 @@
 import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { onFormChange } from './lib/form-state.js';
+import { isConfigDirty } from './lib/settings-utils.js';
 import { hideError, showError } from './lib/ui-utils.js';
 import { getModelStatus, getSelectedModel } from './model-manager.js';
 
@@ -232,26 +233,7 @@ function setTestStatus(message, type) {
 export function updateDirtyState() {
     if (!loadedConfig || !dirtyCheckEnabled) return;
 
-    const current = getCurrentConfig();
-    // API key dirty check: only dirty if user typed a new key (non-empty, non-masked)
-    const hasExistingKey = loadedConfig.llm_api_key === MASKED_MARKER;
-    const apiKeyDirty = hasExistingKey
-        ? current.llm_api_key !== MASKED_MARKER
-        : current.llm_api_key !== loadedConfig.llm_api_key;
-    isDirty =
-        current.language !== loadedConfig.language ||
-        current.hotkey !== loadedConfig.hotkey ||
-        current.whisper_model !== loadedConfig.whisper_model ||
-        current.llm_enabled !== loadedConfig.llm_enabled ||
-        current.llm_api_url !== loadedConfig.llm_api_url ||
-        apiKeyDirty ||
-        current.llm_model !== loadedConfig.llm_model ||
-        current.download_mirror !== loadedConfig.download_mirror ||
-        current.data_saving_enabled !== loadedConfig.data_saving_enabled ||
-        current.data_saving_path !== loadedConfig.data_saving_path ||
-        current.review_before_paste !== loadedConfig.review_before_paste ||
-        current.autostart !== loadedConfig.autostart ||
-        current.realtime_transcription !== loadedConfig.realtime_transcription;
+    isDirty = isConfigDirty(getCurrentConfig(), loadedConfig);
 
     saveBtn.disabled = !isDirty;
     saveStatus.textContent = '';
