@@ -34,6 +34,32 @@ function $data(id) {
     return document.getElementById(id);
 }
 
+/**
+ * Release the current audio player: pause, revoke blob URL, clear state.
+ *
+ * Centralizes the cleanup that was previously duplicated at 5 sites
+ * (toggle collapse, toggle switch, onAudioError, single-delete, batch-delete).
+ * Slightly unifies behavior: all 5 sites now delete dataset.blobUrl after
+ * revoke (previously only onAudioError did). The element is about to be
+ * replaced or nulled, so the delete is purely defensive — no observable
+ * difference.
+ */
+function releaseAudio() {
+    if (dataState.audioElement) {
+        try {
+            dataState.audioElement.pause();
+        } catch (_e) {
+            /* ignore */
+        }
+        if (dataState.audioElement.dataset.blobUrl) {
+            URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
+            delete dataState.audioElement.dataset.blobUrl;
+        }
+        dataState.audioElement = null;
+    }
+    dataState.audioPlayerRowId = null;
+}
+
 export function onDataPageEnter() {
     // Reset all state on entry (constraint #1 from design review).
     resetDataListState();
@@ -187,16 +213,7 @@ function onAudioError(filename) {
             setTimeout(() => badge.remove(), 3000);
         }
     }
-    // Revoke the blob URL before nulling the element — otherwise the URL
-    // stays in memory until the next page load. Each failed playback would
-    // leak one URL across long-running settings sessions.
-    if (dataState.audioElement?.dataset?.blobUrl) {
-        URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
-        delete dataState.audioElement.dataset.blobUrl;
-    }
-    // Collapse the player.
-    dataState.audioPlayerRowId = null;
-    dataState.audioElement = null;
+    releaseAudio();
     renderDataList();
 }
 
@@ -339,34 +356,9 @@ function wireDataListEvents() {
                 e.stopPropagation();
                 // Toggle: clicking again collapses.
                 if (dataState.audioPlayerRowId === filename) {
-                    dataState.audioPlayerRowId = null;
-                    if (dataState.audioElement) {
-                        try {
-                            dataState.audioElement.pause();
-                        } catch (_e) {
-                            /* ignore */
-                        }
-                        if (dataState.audioElement.dataset.blobUrl) {
-                            URL.revokeObjectURL(
-                                dataState.audioElement.dataset.blobUrl,
-                            );
-                        }
-                        dataState.audioElement = null;
-                    }
+                    releaseAudio();
                 } else {
-                    if (dataState.audioElement) {
-                        try {
-                            dataState.audioElement.pause();
-                        } catch (_e) {
-                            /* ignore */
-                        }
-                        if (dataState.audioElement.dataset.blobUrl) {
-                            URL.revokeObjectURL(
-                                dataState.audioElement.dataset.blobUrl,
-                            );
-                        }
-                        dataState.audioElement = null;
-                    }
+                    releaseAudio();
                     dataState.audioPlayerRowId = filename;
                 }
                 renderDataList();
@@ -437,18 +429,7 @@ async function handleSingleDelete(filename) {
         await call('delete_recording', { filename });
         // Clear audio state if it was this row (constraint #10a).
         if (dataState.audioPlayerRowId === filename) {
-            if (dataState.audioElement) {
-                try {
-                    dataState.audioElement.pause();
-                } catch (_e) {
-                    /* ignore */
-                }
-                if (dataState.audioElement.dataset.blobUrl) {
-                    URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
-                }
-                dataState.audioElement = null;
-            }
-            dataState.audioPlayerRowId = null;
+            releaseAudio();
         }
         dataState.selectedFiles.delete(filename);
         if (dataState.expandedRowId === filename) {
@@ -487,18 +468,7 @@ async function handleBatchDelete() {
             dataState.audioPlayerRowId &&
             filenames.includes(dataState.audioPlayerRowId)
         ) {
-            if (dataState.audioElement) {
-                try {
-                    dataState.audioElement.pause();
-                } catch (_e) {
-                    /* ignore */
-                }
-                if (dataState.audioElement.dataset.blobUrl) {
-                    URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
-                }
-                dataState.audioElement = null;
-            }
-            dataState.audioPlayerRowId = null;
+            releaseAudio();
         }
         if (
             dataState.expandedRowId &&
