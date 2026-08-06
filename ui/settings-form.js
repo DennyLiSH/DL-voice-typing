@@ -80,7 +80,7 @@ const FIELDS = [
     },
     {
         key: 'llm_api_url',
-        get: () => apiUrlInput.value,
+        get: () => apiUrlInput.value.trim(),
         set: (v) => {
             apiUrlInput.value = v || '';
         },
@@ -106,7 +106,7 @@ const FIELDS = [
     },
     {
         key: 'llm_model',
-        get: () => modelInput.value,
+        get: () => modelInput.value.trim(),
         set: (v) => {
             modelInput.value = v || '';
         },
