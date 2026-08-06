@@ -1,5 +1,6 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import { call } from './lib/api.js';
+import { showError } from './lib/ui-utils.js';
 import {
     loadComputeMode,
     populateModelSelect,
@@ -20,7 +21,6 @@ const { listen } = window.__TAURI__.event;
 // DOM elements
 const sidebarItems = document.querySelectorAll('.sidebar-item');
 const pageContents = document.querySelectorAll('.page-content');
-const errorBanner = document.getElementById('error-banner');
 
 // State
 let currentPage = 'general';
@@ -79,17 +79,6 @@ document.querySelector('.sidebar').addEventListener('keydown', (e) => {
     switchPage(next);
     document.querySelector(`.sidebar-item[data-page="${next}"]`).focus();
 });
-
-// --- Error Banner ---
-
-export function showError(msg) {
-    errorBanner.textContent = msg;
-    errorBanner.classList.add('visible');
-}
-
-export function hideError() {
-    errorBanner.classList.remove('visible');
-}
 
 // --- Window Close ---
 
