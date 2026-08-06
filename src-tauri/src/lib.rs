@@ -308,11 +308,20 @@ fn manage_pipeline_state(
 }
 
 /// Register the global hotkey from config. Warns but does not fail on error.
+///
+/// Uses the SAME managed PipelineState instance as review commands — calling
+/// `PipelineState::from_app` here would construct a second instance with an
+/// independent `DeliveryController.context`, breaking the show_review →
+/// confirm/cancel context flow (stored on one instance, taken on the other).
+/// Must be called after `manage_pipeline_state` (which manages PipelineState).
 fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyManager {
     let hotkey_name = config.hotkey.clone();
     let mut hotkey_manager = WindowsHotkeyManager::new();
-    let callback =
-        commands::make_hotkey_callback(commands::pipeline_state::PipelineState::from_app(app));
+    let ps = app
+        .state::<commands::pipeline_state::PipelineState>()
+        .inner()
+        .clone();
+    let callback = commands::make_hotkey_callback(ps);
     if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
         warn!("failed to register hotkey '{hotkey_name}': {e}");
     }
