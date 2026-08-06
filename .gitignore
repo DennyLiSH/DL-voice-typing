@@ -31,3 +31,4 @@ pgo-data/
 # Local-only markers (never committed)
 .pre-t1-anchor
 .flake-diagnostic.diff
+.pre-c1-anchor
