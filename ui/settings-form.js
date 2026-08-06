@@ -1,7 +1,7 @@
 import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { onFormChange } from './lib/form-state.js';
-import { isConfigDirty } from './lib/settings-utils.js';
+import { isConfigDirty, validateSettings } from './lib/settings-utils.js';
 import { hideError, showError } from './lib/ui-utils.js';
 import { getModelStatus, getSelectedModel } from './model-manager.js';
 
@@ -276,25 +276,9 @@ saveBtn.addEventListener('click', async () => {
     hideError();
     const config = getCurrentConfig();
 
-    // Validate: LLM fields when enabled
-    if (
-        config.llm_enabled &&
-        (!config.llm_api_url || !config.llm_api_key || !config.llm_model)
-    ) {
-        showError('启用 LLM 时，API 地址、密钥和模型名称不能为空');
-        return;
-    }
-
-    // Validate: selected model must be downloaded (built-in) or exist (custom)
-    const isCustom = config.whisper_model.startsWith('custom:');
-    if (!isCustom && !getModelStatus()[config.whisper_model]) {
-        showError('请先下载所选的 Whisper 模型');
-        return;
-    }
-
-    // Validate: data saving path when enabled
-    if (config.data_saving_enabled && !config.data_saving_path) {
-        showError('启用数据保存时，必须设置保存路径');
+    const validation = validateSettings(config, getModelStatus());
+    if (!validation.valid) {
+        showError(validation.error);
         return;
     }
 
