@@ -1,5 +1,6 @@
 import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
+import { onFormChange } from './lib/form-state.js';
 import { hideError, showError } from './lib/ui-utils.js';
 import { getModelStatus, getSelectedModel } from './model-manager.js';
 
@@ -30,6 +31,10 @@ let loadedConfig = null;
 let isDirty = false;
 let dirtyCheckEnabled = false;
 let loadedAutostart = false;
+
+// Subscribe to form change events (model selection etc.) to recompute dirty state.
+// Returns unsubscribe; we don't unsubscribe for the lifetime of the settings window.
+onFormChange(updateDirtyState);
 
 // --- Initialization ---
 

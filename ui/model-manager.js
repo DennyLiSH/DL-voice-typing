@@ -1,6 +1,6 @@
 import { call, rawInvoke, reportError } from './lib/api.js';
+import { notifyFormChange } from './lib/form-state.js';
 import { showError } from './lib/ui-utils.js';
-import { updateDirtyState } from './settings-form.js';
 
 const { listen } = window.__TAURI__.event;
 
@@ -111,7 +111,7 @@ export function updateModelAction() {
 whisperModelSelect.addEventListener('change', () => {
     selectedModel = whisperModelSelect.value;
     updateModelAction();
-    updateDirtyState();
+    notifyFormChange();
 });
 
 // --- Compute Mode ---
@@ -155,7 +155,7 @@ btnDownloadModel.addEventListener('click', async () => {
             }
             populateModelSelect();
             updateModelAction();
-            updateDirtyState();
+            notifyFormChange();
         } catch (_e) {
             showError('删除失败，请重试');
         }
@@ -179,7 +179,7 @@ async function startDownload(size) {
         activeDownload = null;
         modelStatus[size] = true;
         updateModelAction();
-        updateDirtyState();
+        notifyFormChange();
     } catch (e) {
         activeDownload = null;
         // F6 fix: defensive check matches both raw string and CommandError-object shapes
