@@ -3,7 +3,11 @@ import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { onFormChange } from './lib/form-state.js';
 import { isConfigDirty, validateSettings } from './lib/settings-utils.js';
 import { hideError, showError } from './lib/ui-utils.js';
-import { getModelStatus, getSelectedModel } from './model-manager.js';
+import {
+    getModelStatus,
+    getSelectedModel,
+    setSelectedModel,
+} from './model-manager.js';
 
 // DOM elements
 const languageSelect = document.getElementById('language');
@@ -39,48 +43,134 @@ onFormChange(updateDirtyState);
 
 // --- Initialization ---
 
+/**
+ * Field descriptors for the settings form.
+ * Single source of truth for: populateFields (config -> DOM),
+ * getCurrentConfig (DOM -> config). Adding a new field = adding one entry.
+ *
+ * Toggle fields use classList.contains('active') + setAttribute('aria-checked').
+ * Input/select fields use .value.
+ * llm_api_key has masked-marker fallback in get (preserves existing behavior).
+ * whisper_model delegates to model-manager getSelectedModel/setSelectedModel.
+ */
+const FIELDS = [
+    {
+        key: 'language',
+        get: () => languageSelect.value,
+        set: (v) => {
+            languageSelect.value = v || 'zh';
+        },
+    },
+    {
+        key: 'hotkey',
+        get: () => hotkeySelect.value,
+        set: (v) => {
+            hotkeySelect.value = v || 'RightAlt';
+        },
+    },
+    { key: 'whisper_model', get: getSelectedModel, set: setSelectedModel },
+    {
+        key: 'llm_enabled',
+        get: () => llmToggle.classList.contains('active'),
+        set: (v) => {
+            llmToggle.classList.toggle('active', !!v);
+            llmToggle.setAttribute('aria-checked', String(!!v));
+            updateLlmFieldsState(!!v);
+        },
+    },
+    {
+        key: 'llm_api_url',
+        get: () => apiUrlInput.value,
+        set: (v) => {
+            apiUrlInput.value = v || '';
+        },
+    },
+    {
+        key: 'llm_api_key',
+        get: () => {
+            const v = apiKeyInput.value.trim();
+            const hasExistingKey =
+                loadedConfig && loadedConfig.llm_api_key === MASKED_MARKER;
+            return v || (hasExistingKey ? MASKED_MARKER : '');
+        },
+        set: (v) => {
+            // Handle masked API key: clear input, show placeholder
+            if (v === MASKED_MARKER) {
+                apiKeyInput.value = '';
+                apiKeyInput.placeholder = 'API Key 已设置';
+            } else {
+                apiKeyInput.value = v || '';
+                apiKeyInput.placeholder = 'sk-...';
+            }
+        },
+    },
+    {
+        key: 'llm_model',
+        get: () => modelInput.value,
+        set: (v) => {
+            modelInput.value = v || '';
+        },
+    },
+    {
+        key: 'download_mirror',
+        get: () => downloadMirrorSelect.value,
+        set: (v) => {
+            downloadMirrorSelect.value = v || 'hf-mirror';
+        },
+    },
+    {
+        key: 'data_saving_enabled',
+        get: () => dataSavingToggle.classList.contains('active'),
+        set: (v) => {
+            dataSavingToggle.classList.toggle('active', !!v);
+            dataSavingToggle.setAttribute('aria-checked', String(!!v));
+            updateDataSavingFieldsState(!!v);
+        },
+    },
+    {
+        key: 'data_saving_path',
+        get: () => dataSavingPath.value.trim(),
+        set: (v) => {
+            dataSavingPath.value = v || '';
+        },
+    },
+    {
+        key: 'review_before_paste',
+        get: () => reviewToggle.classList.contains('active'),
+        set: (v) => {
+            reviewToggle.classList.toggle('active', !!v);
+            reviewToggle.setAttribute('aria-checked', String(!!v));
+        },
+    },
+    {
+        key: 'realtime_transcription',
+        get: () => realtimeToggle.classList.contains('active'),
+        set: (v) => {
+            realtimeToggle.classList.toggle('active', !!v);
+            realtimeToggle.setAttribute('aria-checked', String(!!v));
+        },
+    },
+    {
+        key: 'autostart',
+        get: () => autostartToggle.classList.contains('active'),
+        set: (v) => {
+            loadedAutostart = !!v;
+            autostartToggle.classList.toggle('active', loadedAutostart);
+            autostartToggle.setAttribute(
+                'aria-checked',
+                String(loadedAutostart),
+            );
+        },
+    },
+];
+
 export function populateFields(config) {
     loadedConfig = config;
-    languageSelect.value = config.language || 'zh';
-    hotkeySelect.value = config.hotkey || 'RightAlt';
-    llmToggle.classList.toggle('active', config.llm_enabled);
-    llmToggle.setAttribute('aria-checked', String(!!config.llm_enabled));
-    updateLlmFieldsState(config.llm_enabled);
-    apiUrlInput.value = config.llm_api_url || '';
-    modelInput.value = config.llm_model || '';
-    // Handle masked API key: clear input, show placeholder
-    if (config.llm_api_key === MASKED_MARKER) {
-        apiKeyInput.value = '';
-        apiKeyInput.placeholder = 'API Key 已设置';
-    } else {
-        apiKeyInput.value = config.llm_api_key || '';
-        apiKeyInput.placeholder = 'sk-...';
-    }
-    downloadMirrorSelect.value = config.download_mirror || 'hf-mirror';
-    dataSavingToggle.classList.toggle('active', !!config.data_saving_enabled);
-    dataSavingToggle.setAttribute(
-        'aria-checked',
-        String(!!config.data_saving_enabled),
-    );
-    updateDataSavingFieldsState(!!config.data_saving_enabled);
-    dataSavingPath.value = config.data_saving_path || '';
-    reviewToggle.classList.toggle('active', !!config.review_before_paste);
-    reviewToggle.setAttribute(
-        'aria-checked',
-        String(!!config.review_before_paste),
-    );
-    realtimeToggle.classList.toggle('active', !!config.realtime_transcription);
-    realtimeToggle.setAttribute(
-        'aria-checked',
-        String(!!config.realtime_transcription),
-    );
-
-    // Load autostart state from config (source of truth).
-    loadedAutostart = !!config.autostart;
-    autostartToggle.classList.toggle('active', loadedAutostart);
-    autostartToggle.setAttribute('aria-checked', String(loadedAutostart));
+    FIELDS.forEach(({ key, set }) => set(config[key]));
 
     // In dev builds without DL_AUTOSTART=1, gray out the autostart toggle.
+    // Probe is in populateFields (not in FIELDS) because it is a one-shot
+    // availability check, not a per-field set operation.
     (async () => {
         try {
             const autostartAvailable = await call('is_autostart_available');
@@ -241,25 +331,7 @@ export function updateDirtyState() {
 }
 
 export function getCurrentConfig() {
-    const apiKeyValue = apiKeyInput.value.trim();
-    // Send masked marker only if user hasn't typed anything AND a key was previously set
-    const hasExistingKey =
-        loadedConfig && loadedConfig.llm_api_key === MASKED_MARKER;
-    return {
-        language: languageSelect.value,
-        hotkey: hotkeySelect.value,
-        whisper_model: getSelectedModel(),
-        llm_enabled: llmToggle.classList.contains('active'),
-        llm_api_url: apiUrlInput.value.trim(),
-        llm_api_key: apiKeyValue || (hasExistingKey ? MASKED_MARKER : ''),
-        llm_model: modelInput.value.trim(),
-        download_mirror: downloadMirrorSelect.value,
-        data_saving_enabled: dataSavingToggle.classList.contains('active'),
-        data_saving_path: dataSavingPath.value.trim(),
-        review_before_paste: reviewToggle.classList.contains('active'),
-        autostart: autostartToggle.classList.contains('active'),
-        realtime_transcription: realtimeToggle.classList.contains('active'),
-    };
+    return Object.fromEntries(FIELDS.map(({ key, get }) => [key, get()]));
 }
 
 // Track changes on all inputs

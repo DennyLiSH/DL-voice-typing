@@ -229,6 +229,9 @@ export function setCustomModels(models) {
 
 export function setSelectedModel(model) {
     selectedModel = model;
+    // Keep DOM <select> in sync with the variable. populateModelSelect
+    // rebuilds options with `selected` set on the matching one.
+    populateModelSelect();
 }
 
 export function getSelectedModel() {
