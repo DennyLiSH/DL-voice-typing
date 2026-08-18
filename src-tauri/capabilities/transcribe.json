@@ -1,0 +1,10 @@
+{
+  "identifier": "transcribe",
+  "description": "Transcribe window (record-only playback + on-demand transcription)",
+  "windows": ["transcribe"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen"
+  ]
+}

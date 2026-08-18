@@ -32,3 +32,4 @@ pgo-data/
 .pre-t1-anchor
 .flake-diagnostic.diff
 .pre-c1-anchor
+.tmp/
