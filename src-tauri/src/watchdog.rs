@@ -18,6 +18,8 @@ pub trait RecoveryActions: Send + Sync {
     fn set_tray_recovered(&self);
     /// Reset review session state (e.g., shown_on_press flag).
     fn reset_review_state(&self);
+    /// Stop any active record-only streaming recorder (bounded wait).
+    fn stop_record_only(&self);
 }
 
 /// Tauri-based implementation of recovery actions.
@@ -65,6 +67,15 @@ impl RecoveryActions for TauriRecoveryActions {
             {
                 *guard = false;
             }
+        }
+    }
+
+    fn stop_record_only(&self) {
+        if let Some(ps) = self
+            .app
+            .try_state::<super::commands::pipeline_state::PipelineState>()
+        {
+            ps.stop_record_only();
         }
     }
 }
@@ -197,6 +208,7 @@ impl Watchdog {
         self.recovery.hide_floating_window();
         self.recovery.hide_review_window();
         self.recovery.reset_review_state();
+        self.recovery.stop_record_only();
         self.recovery.emit_watchdog_reset();
         self.recovery.set_tray_recovered();
         // Clear the stuck timer so a fresh recording doesn't immediately
@@ -244,6 +256,12 @@ mod tests {
                 .actions
                 .lock()
                 .map(|mut a| a.push("reset_review".into()));
+        }
+        fn stop_record_only(&self) {
+            let _ = self
+                .actions
+                .lock()
+                .map(|mut a| a.push("stop_record_only".into()));
         }
     }
 
@@ -294,6 +312,7 @@ mod tests {
         assert!(actions.contains(&"emit_reset".to_string()));
         assert!(actions.contains(&"set_tray".to_string()));
         assert!(actions.contains(&"reset_review".to_string()));
+        assert!(actions.contains(&"stop_record_only".to_string()));
         assert_eq!(
             wd.sm.lock().map_or(StateTag::Idle, |s| s.state()),
             crate::state::StateTag::Idle

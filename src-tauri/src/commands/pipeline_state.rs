@@ -37,6 +37,10 @@ pub struct PipelineState {
     /// Decoupled audio buffer for lock-free realtime reads.
     /// Capacity: 60 seconds @ 48kHz = 2,880,000 samples.
     pub(crate) audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
+    /// Active record-only streaming recorder (Some only while a record-only
+    /// session is capturing). Set after `sm_start_record_only` succeeds;
+    /// taken by release / reset paths.
+    pub(crate) record_only: Arc<Mutex<Option<crate::streaming_recorder::StreamingRecorder>>>,
 }
 
 impl PipelineState {
@@ -84,6 +88,7 @@ impl PipelineState {
             audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
                 Self::AUDIO_BUFFER_CAPACITY,
             ))),
+            record_only: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -128,6 +133,7 @@ impl PipelineState {
             audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
                 Self::AUDIO_BUFFER_CAPACITY,
             ))),
+            record_only: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -174,6 +180,49 @@ impl PipelineState {
                 info!("stop_recording_resources_graceful: stopping realtime thread");
                 rt.stop_and_wait();
             }
+        }
+    }
+
+    // ========================================================================
+    // Record-only resource management
+    // ========================================================================
+
+    /// Install the active record-only recorder. Must only be called after
+    /// `sm_start_record_only()` succeeded (transition is the atomic gate).
+    /// Wired up by the record-only session module (task 5).
+    #[allow(dead_code)]
+    pub(crate) fn set_record_only(&self, recorder: crate::streaming_recorder::StreamingRecorder) {
+        if let Some(mut guard) = crate::util::lock_mutex(&self.record_only, "record_only") {
+            *guard = Some(recorder);
+        }
+    }
+
+    /// Take the active record-only recorder (release / reset paths).
+    pub(crate) fn take_record_only(&self) -> Option<crate::streaming_recorder::StreamingRecorder> {
+        crate::util::lock_mutex(&self.record_only, "record_only").and_then(|mut g| g.take())
+    }
+
+    /// Take the active recorder and stop it with a bounded writer join.
+    /// Single shared routine for the normal release path and watchdog / tray
+    /// recovery, so timeout and error mapping live in one place.
+    /// Returns None when no record-only session is active.
+    pub fn finalize_record_only(
+        &self,
+    ) -> Option<Result<crate::streaming_recorder::FinalizeInfo, crate::error::AppError>> {
+        let recorder = self.take_record_only()?;
+        Some(recorder.stop_and_wait(crate::streaming_recorder::STOP_TIMEOUT))
+    }
+
+    /// Watchdog / tray-reset entry point: stop any active record-only
+    /// recorder and log the outcome. Never blocks longer than STOP_TIMEOUT.
+    pub fn stop_record_only(&self) {
+        match self.finalize_record_only() {
+            Some(Ok(info)) => info!(
+                "stop_record_only: finalized {} ({} bytes, {} dropped blocks)",
+                info.stem, info.data_size, info.dropped_blocks
+            ),
+            Some(Err(e)) => warn!("stop_record_only: finalize failed: {e}"),
+            None => {}
         }
     }
 
@@ -337,6 +386,36 @@ impl PipelineState {
         }
     }
 
+    /// Wired up by the record-only session module (task 5).
+    #[allow(dead_code)]
+    pub(crate) fn sm_start_record_only(&self) -> bool {
+        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
+            return false;
+        };
+        match s.start_record_only() {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("sm_start_record_only failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Wired up by the record-only session module (task 5).
+    #[allow(dead_code)]
+    pub(crate) fn sm_finish_record_only(&self) -> bool {
+        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
+            return false;
+        };
+        match s.finish_record_only() {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("sm_finish_record_only failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Reset to Idle unconditionally (infallible — `reset()` itself cannot fail).
     /// Lock-poisoned case is silently dropped (already warn!'d by `lock_mutex`).
     pub(crate) fn sm_reset(&self) {
@@ -475,5 +554,51 @@ mod sm_verb_tests {
         assert!(can_record);
         let stop_ok = ps.sm_stop_recording();
         assert!(stop_ok);
+    }
+
+    #[test]
+    fn test_sm_record_only_verbs() {
+        let ps = build_test_ps();
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+        // Happy path: Idle → RecordOnly → Idle.
+        assert!(ps.sm_start_record_only());
+        assert_eq!(ps.sm_state(), Some(StateTag::RecordOnly));
+        assert!(ps.sm_finish_record_only());
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+        // Illegal: finish from Idle; start while Recording.
+        assert!(!ps.sm_finish_record_only());
+        assert!(ps.sm_start_recording());
+        assert!(!ps.sm_start_record_only());
+        ps.sm_reset();
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+    }
+
+    #[test]
+    fn test_record_only_resource_roundtrip() {
+        let ps = build_test_ps();
+        // No recorder installed → take returns None, finalize returns None.
+        assert!(ps.take_record_only().is_none());
+        assert!(ps.finalize_record_only().is_none());
+        // stop_record_only with nothing active must not panic.
+        ps.stop_record_only();
+
+        let dir = std::env::temp_dir().join("dl-vt-ps-record-only");
+        let _ = std::fs::remove_dir_all(&dir);
+        let rec = crate::streaming_recorder::StreamingRecorder::start(
+            &dir,
+            crate::audio::TARGET_SAMPLE_RATE,
+        );
+        assert!(rec.is_ok());
+        let Some(rec) = rec.ok() else { return };
+        ps.set_record_only(rec);
+        let outcome = ps.finalize_record_only();
+        assert!(outcome.is_some());
+        let Some(outcome) = outcome else { return };
+        assert!(outcome.is_ok());
+        // Slot is empty after finalize.
+        assert!(ps.take_record_only().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

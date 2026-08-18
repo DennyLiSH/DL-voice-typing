@@ -29,6 +29,10 @@ const DROP_STOP_THRESHOLD: u64 = 50;
 const PLACEHOLDER_SIZE: u32 = u32::MAX;
 const WAV_HEADER_LEN: u64 = 44;
 
+/// Bounded wait for the writer thread during forced stops (watchdog / tray
+/// reset / release). Exceeded → detach + next-startup salvage.
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Outcome of a successful finalize.
 pub struct FinalizeInfo {
     pub wav_path: PathBuf,

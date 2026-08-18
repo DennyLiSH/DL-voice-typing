@@ -68,6 +68,12 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 if let Some(cb) = app.try_state::<Arc<dyn crate::clipboard::ClipboardProvider>>() {
                     let _ = cb.restore();
                 }
+                // Stop any active record-only recording (bounded wait; the
+                // WAV stays playable via finalize or next-startup salvage).
+                if let Some(ps) = app.try_state::<crate::commands::pipeline_state::PipelineState>()
+                {
+                    ps.stop_record_only();
+                }
                 // Emit event
                 let _ = app.emit("tray-reset", ());
                 // Update tooltip
