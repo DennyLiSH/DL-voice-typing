@@ -179,8 +179,23 @@ pub(crate) fn generate_timestamp_filename() -> String {
         .unwrap_or_else(|_| now.format(&Rfc3339).unwrap())
 }
 
+/// Write JSON metadata atomically: temp file + rename, so a crash mid-write
+/// never leaves a truncated JSON. The destination is removed first because
+/// Windows `rename` fails when it already exists.
+pub(crate) fn atomic_write_json(
+    path: &std::path::Path,
+    value: &serde_json::Value,
+) -> Result<(), AppError> {
+    let content = serde_json::to_string_pretty(value)?;
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, content)?;
+    let _ = fs::remove_file(path);
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 /// RFC 3339 formatted timestamp using the local timezone offset.
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     use time::format_description::well_known::Rfc3339;
     time::OffsetDateTime::now_local()
         .unwrap_or_else(|_| time::OffsetDateTime::now_utc())

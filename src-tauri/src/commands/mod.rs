@@ -7,6 +7,7 @@ pub mod llm_cmd;
 pub mod log_cmd;
 pub mod perf_cmd;
 pub(crate) mod pipeline_state;
+pub(crate) mod record_only_session;
 pub(crate) mod recording_session;
 pub mod review;
 pub(crate) mod review_provider;

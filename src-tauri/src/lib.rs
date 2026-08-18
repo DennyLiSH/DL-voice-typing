@@ -60,6 +60,14 @@ pub fn run() {
         .setup(move |app| {
             setup_tray_and_plugins(app)?;
             let config = load_and_manage_config(app.handle());
+            // Salvage crash-truncated record-only WAVs (rewrite headers from
+            // actual file lengths). Runs before engine init; skipped when the
+            // recording directory is unset or missing.
+            if !config.data_saving_path.trim().is_empty() {
+                streaming_recorder::salvage_incomplete_recordings(std::path::Path::new(
+                    &config.data_saving_path,
+                ));
+            }
             let _engine = init_and_manage_engine(app.handle(), &config);
             create_overlay_windows(app)?;
             manage_pipeline_state(
@@ -322,9 +330,18 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
         .state::<commands::pipeline_state::PipelineState>()
         .inner()
         .clone();
-    let callback = commands::make_hotkey_callback(ps);
+    let callback = commands::make_hotkey_callback(ps.clone());
     if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
         warn!("failed to register hotkey '{hotkey_name}': {e}");
+    }
+    if config.record_only_enabled {
+        let callback = commands::record_only_session::make_record_only_callback(ps);
+        if let Err(e) = hotkey_manager.register_record_only(&config.record_only_hotkey, callback) {
+            warn!(
+                "failed to register record-only hotkey '{}': {e}",
+                config.record_only_hotkey
+            );
+        }
     }
     hotkey_manager
 }

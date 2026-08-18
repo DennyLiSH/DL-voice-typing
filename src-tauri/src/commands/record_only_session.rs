@@ -1,0 +1,511 @@
+//! Record-only session orchestration.
+//!
+//! Owns the full hold-to-record lifecycle for record-only mode: hotkey
+//! press opens a streaming recording session (state gate → policy snapshot
+//! → capture → streaming writer), release finalizes it off the hook thread.
+//! `recover_session` is the single cleanup DAG shared by release, the
+//! backpressure monitor, the watchdog, and the tray reset, so timeout and
+//! error mapping live in exactly one place.
+
+use crate::audio::{AudioCallback, TARGET_SAMPLE_RATE};
+use crate::commands::pipeline_state::PipelineState;
+use crate::config::{Language, WhisperModel};
+use crate::error::AppError;
+use crate::hotkey::{HotkeyCallback, HotkeyEvent};
+use crate::state::StateTag;
+use crate::streaming_recorder::{
+    FinalizeInfo, STOP_TIMEOUT, StreamingRecorder, exceeds_drop_threshold,
+};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use tracing::{error, info, warn};
+
+/// Backpressure monitor poll interval.
+const MONITOR_POLL_MS: u64 = 250;
+
+/// Session-level config snapshot taken at press time, so mid-session
+/// settings changes cannot affect an in-flight recording.
+#[derive(Clone)]
+pub(crate) struct RecordOnlyPolicy {
+    pub(crate) data_saving_path: String,
+    pub(crate) language: Language,
+    pub(crate) whisper_model: WhisperModel,
+}
+
+/// Active record-only session held in `PipelineState.record_only` between
+/// press and release/reset.
+pub(crate) struct RecordOnlySession {
+    pub(crate) recorder: StreamingRecorder,
+    pub(crate) policy: RecordOnlyPolicy,
+}
+
+/// Build the record-only hotkey callback (hold to record, release to save).
+pub(crate) fn make_record_only_callback(ps: PipelineState) -> HotkeyCallback {
+    Box::new(move |event| match event {
+        HotkeyEvent::Pressed => on_press(&ps),
+        HotkeyEvent::Released => on_release(&ps),
+    })
+}
+
+/// Hotkey press: gate on the state machine (mutual exclusion with the
+/// classic pipeline), snapshot the policy, start capture + streaming writer.
+pub(crate) fn on_press(ps: &PipelineState) {
+    let cfg = ps.config_cache.read_cached();
+    if !cfg.record_only_enabled {
+        // Hotkey should not be registered when disabled; defense in depth.
+        return;
+    }
+    // Atomic gate: rejects when Recording/Transcribing/... or already RecordOnly.
+    if !ps.sm_start_record_only() {
+        return;
+    }
+    let policy = RecordOnlyPolicy {
+        data_saving_path: cfg.data_saving_path.clone(),
+        language: cfg.language,
+        whisper_model: cfg.whisper_model.clone(),
+    };
+    drop(cfg);
+
+    if let Err(e) = start_session(ps, &policy) {
+        error!("record-only: failed to start session: {e}");
+        ps.emitter.emit(
+            "record-only-error",
+            serde_json::json!({"message": "录音启动失败，请检查数据保存路径"}),
+        );
+        stop_capture(ps);
+        ps.sm_reset();
+    }
+}
+
+/// Hotkey release: finalize off the hook thread — the writer join is
+/// bounded (STOP_TIMEOUT) but must never stall keyboard input.
+pub(crate) fn on_release(ps: &PipelineState) {
+    if ps.sm_state() != Some(StateTag::RecordOnly) {
+        return;
+    }
+    let ps_owned = ps.clone();
+    let spawned = std::thread::Builder::new()
+        .name("record-only-release".to_string())
+        .spawn(move || recover_session(&ps_owned));
+    if spawned.is_err() {
+        // Thread spawn failed: run inline as a last resort so the session
+        // is never orphaned.
+        recover_session(ps);
+    }
+}
+
+/// Single cleanup DAG shared by release, backpressure monitor, watchdog,
+/// and tray reset. Order: (1) stop capture, (2) finalize the WAV (bounded
+/// writer join), (3) write JSON metadata atomically, (4) return the state
+/// machine to Idle — (4) runs regardless of (2)/(3) outcomes.
+///
+/// Idempotent: the first caller takes the session and owns JSON writing;
+/// later callers only guarantee the state machine is not orphaned.
+pub(crate) fn recover_session(ps: &PipelineState) {
+    // (1) Always stop capture first (idempotent).
+    stop_capture(ps);
+
+    // (2)+(3) Take + finalize + JSON. Only the first caller wins the take.
+    let Some(session) = ps.take_record_only_session() else {
+        if ps.sm_state() == Some(StateTag::RecordOnly) {
+            warn!("recover_session: RecordOnly state without an active session; resetting");
+            ps.sm_reset();
+        }
+        return;
+    };
+
+    let stem = session.recorder.stem().to_string();
+    let outcome = session.recorder.stop_and_wait(STOP_TIMEOUT);
+    if let Err(e) = &outcome {
+        error!("record-only: finalize failed for {stem}: {e}");
+    }
+
+    if let Err(e) = write_session_json(&session.policy, &stem, &outcome) {
+        error!("record-only: failed to write metadata for {stem}: {e}");
+        ps.emitter.emit(
+            "record-only-error",
+            serde_json::json!({"message": "录音元数据写入失败"}),
+        );
+    }
+
+    let (status, dropped) = session_outcome(&outcome);
+    ps.emitter.emit(
+        "record-only-finished",
+        serde_json::json!({
+            "stem": stem,
+            "status": status,
+            "dropped_blocks": dropped,
+        }),
+    );
+    info!("record_only_finalized: {stem} status={status} dropped={dropped}");
+
+    // (4) State machine must return to Idle regardless of earlier failures.
+    if !ps.sm_finish_record_only() {
+        warn!("recover_session: sm_finish_record_only failed; forcing reset");
+        ps.sm_reset();
+    }
+}
+
+fn start_session(ps: &PipelineState, policy: &RecordOnlyPolicy) -> Result<(), AppError> {
+    if policy.data_saving_path.trim().is_empty() {
+        return Err(AppError::Config(
+            "record-only mode requires a data saving path".to_string(),
+        ));
+    }
+
+    // The cpal callback pushes into the shared session slot. It only holds
+    // the slot lock for the duration of a push; finalize takes the session
+    // out of the slot first, so the callback never blocks on the writer join.
+    let slot = ps.record_only.clone();
+    let on_data: AudioCallback = Box::new(move |data: &[f32]| {
+        if let Some(mut guard) = crate::util::lock_mutex(&slot, "record_only") {
+            if let Some(session) = guard.as_mut() {
+                session.recorder.push_samples(data);
+            }
+        }
+    });
+
+    // Start capture first so the device sample rate is known before the
+    // recorder (and its resampler) is constructed.
+    let sample_rate = {
+        let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") else {
+            return Err(AppError::Audio("audio capture lock poisoned".to_string()));
+        };
+        ac.start(on_data)?;
+        ac.sample_rate()
+            .ok_or_else(|| AppError::Audio("sample rate unavailable after start".to_string()))?
+    };
+
+    let recorder = StreamingRecorder::start(Path::new(&policy.data_saving_path), sample_rate)?;
+    let dropped = recorder.dropped_counter();
+    let stem = recorder.stem().to_string();
+    ps.set_record_only_session(RecordOnlySession {
+        recorder,
+        policy: policy.clone(),
+    });
+    spawn_backpressure_monitor(ps.clone(), dropped);
+    ps.emitter
+        .emit("record-only-started", serde_json::json!({"stem": stem}));
+    info!("record_only_started: {stem}");
+    Ok(())
+}
+
+/// Monitor thread: controlled stop when the writer-thread backpressure
+/// exceeds the drop threshold (disk too slow / stalled). Exits as soon as
+/// the session ends for any other reason.
+fn spawn_backpressure_monitor(ps: PipelineState, dropped: Arc<AtomicU64>) {
+    let _ = std::thread::Builder::new()
+        .name("record-only-monitor".to_string())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(MONITOR_POLL_MS));
+                if ps.sm_state() != Some(StateTag::RecordOnly) {
+                    return;
+                }
+                if exceeds_drop_threshold(dropped.load(Ordering::Relaxed)) {
+                    warn!("record-only: dropped-block threshold exceeded; controlled stop");
+                    recover_session(&ps);
+                    return;
+                }
+            }
+        });
+}
+
+fn stop_capture(ps: &PipelineState) {
+    if let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
+        ac.stop();
+    }
+}
+
+/// (status, dropped_blocks) for events and logs. A finalized recording with
+/// drops beyond the threshold is marked failed (the audio has holes).
+fn session_outcome(outcome: &Result<FinalizeInfo, AppError>) -> (&'static str, u64) {
+    match outcome {
+        Ok(info) if !exceeds_drop_threshold(info.dropped_blocks) => {
+            ("pending", info.dropped_blocks)
+        }
+        Ok(info) => ("failed", info.dropped_blocks),
+        Err(_) => ("failed", 0),
+    }
+}
+
+/// Write the session JSON metadata (atomic temp-file + rename).
+/// `transcription_status` starts at "pending" (awaiting user-triggered
+/// transcription) or "failed" when the audio is known to be incomplete.
+fn write_session_json(
+    policy: &RecordOnlyPolicy,
+    stem: &str,
+    outcome: &Result<FinalizeInfo, AppError>,
+) -> Result<(), AppError> {
+    let json_path = PathBuf::from(&policy.data_saving_path).join(format!("{stem}.json"));
+    let (status, duration_seconds, dropped) = match outcome {
+        Ok(info) => {
+            let status = if exceeds_drop_threshold(info.dropped_blocks) {
+                "failed"
+            } else {
+                "pending"
+            };
+            (
+                status,
+                (info.duration_ms() as f64 * 1000.0).round() / 1_000_000.0,
+                info.dropped_blocks,
+            )
+        }
+        Err(_) => ("failed", 0.0, 0),
+    };
+    let metadata = serde_json::json!({
+        "timestamp": crate::data_saving::now_rfc3339(),
+        "language": policy.language,
+        "whisper_model": policy.whisper_model,
+        "sample_rate": TARGET_SAMPLE_RATE,
+        "duration_seconds": duration_seconds,
+        "transcription": serde_json::Value::Null,
+        "llm_corrected": serde_json::Value::Null,
+        "segments": [],
+        "transcription_status": status,
+        "source": "record_only",
+        "dropped_blocks": dropped,
+    });
+    crate::data_saving::atomic_write_json(&json_path, &metadata)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::MockAudioCapture;
+    use crate::clipboard::MockClipboard;
+    use crate::commands::review_provider::MockReviewProvider;
+    use crate::commands::window_controller::NoopWindowController;
+    use crate::commands::{EventEmitter, MockEmitter};
+    use crate::config::{AppConfig, ConfigCache};
+    use crate::llm::MockCorrector;
+    use crate::perf::PerfHistory;
+    use crate::speech::mock::MockEngine;
+    use crate::state::StateMachine;
+    use std::fs;
+    use std::sync::Mutex;
+
+    fn build_ps(config: AppConfig) -> (PipelineState, Arc<MockEmitter>) {
+        let emitter = Arc::new(MockEmitter::new());
+        let ps = PipelineState::new(
+            Arc::new(Mutex::new(StateMachine::new())),
+            Arc::new(Mutex::new(MockAudioCapture::new())),
+            Arc::new(MockEngine::new("test")),
+            Arc::new(MockClipboard::new()),
+            Arc::new(PerfHistory::new()),
+            ConfigCache::new(config),
+            Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("x"))))),
+            Arc::new(Mutex::new(None)),
+            Arc::new(NoopWindowController),
+            emitter.clone() as Arc<dyn EventEmitter>,
+            Arc::new(MockReviewProvider::new()),
+        );
+        (ps, emitter)
+    }
+
+    fn record_only_config(dir: &Path) -> AppConfig {
+        AppConfig {
+            record_only_enabled: true,
+            data_saving_path: dir.to_string_lossy().to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dl-vt-ro-session-{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(fs::create_dir_all(&dir).is_ok());
+        dir
+    }
+
+    fn emitted(emitter: &MockEmitter, event: &str) -> bool {
+        emitter.take_events().iter().any(|(e, _)| e == event)
+    }
+
+    /// Session stem recorded by the most recent record-only-started event.
+    fn started_stem(emitter: &MockEmitter) -> Option<String> {
+        let events = emitter.take_events();
+        let mut stem = None;
+        for (e, payload) in events {
+            if e == "record-only-started" {
+                stem = payload
+                    .get("stem")
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+            }
+        }
+        stem
+    }
+
+    #[test]
+    fn test_press_starts_session() {
+        let dir = temp_dir("press-starts");
+        let (ps, emitter) = build_ps(record_only_config(&dir));
+        on_press(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::RecordOnly));
+        assert!(ps.take_record_only_session().is_some());
+        assert!(started_stem(&emitter).is_some());
+        ps.sm_reset();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_press_rejected_when_not_idle() {
+        let dir = temp_dir("press-rejected");
+        let (ps, _) = build_ps(record_only_config(&dir));
+        ps.force_state_tag(StateTag::Recording);
+        on_press(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Recording));
+        assert!(ps.take_record_only_session().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_press_ignored_when_disabled() {
+        let dir = temp_dir("press-disabled");
+        let mut cfg = record_only_config(&dir);
+        cfg.record_only_enabled = false;
+        let (ps, _) = build_ps(cfg);
+        on_press(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert!(ps.take_record_only_session().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_press_empty_path_errors_and_resets() {
+        let mut cfg = record_only_config(Path::new(""));
+        cfg.data_saving_path = String::new();
+        let (ps, emitter) = build_ps(cfg);
+        on_press(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert!(emitted(&emitter, "record-only-error"));
+        assert!(ps.take_record_only_session().is_none());
+    }
+
+    #[test]
+    fn test_recover_happy_path_writes_pending_json() {
+        let dir = temp_dir("recover-happy");
+        let (ps, emitter) = build_ps(record_only_config(&dir));
+        on_press(&ps);
+        let stem = started_stem(&emitter);
+        assert!(stem.is_some());
+        let Some(stem) = stem else { return };
+
+        recover_session(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert!(ps.take_record_only_session().is_none());
+
+        let json_path = dir.join(format!("{stem}.json"));
+        let wav_path = dir.join(format!("{stem}.wav"));
+        assert!(json_path.exists());
+        assert!(wav_path.exists());
+        let content = fs::read_to_string(&json_path);
+        assert!(content.is_ok());
+        let Ok(content) = content else { return };
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        assert_eq!(parsed["source"], "record_only");
+        assert_eq!(parsed["transcription_status"], "pending");
+        assert_eq!(parsed["dropped_blocks"], 0);
+        assert!(parsed["segments"].is_array());
+        assert!(parsed["transcription"].is_null());
+        assert!(emitted(&emitter, "record-only-finished"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_recover_json_failure_still_returns_idle() {
+        let dir = temp_dir("recover-json-fail");
+        let (ps, emitter) = build_ps(record_only_config(&dir));
+        on_press(&ps);
+        let stem = started_stem(&emitter);
+        assert!(stem.is_some());
+        let Some(stem) = stem else { return };
+        // Force the atomic JSON write to fail: a directory named stem.json
+        // cannot be removed by remove_file nor overwritten by rename.
+        assert!(fs::create_dir(dir.join(format!("{stem}.json"))).is_ok());
+
+        recover_session(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert!(ps.take_record_only_session().is_none());
+        let events: Vec<String> = emitter.take_events().into_iter().map(|(e, _)| e).collect();
+        assert!(events.iter().any(|e| e == "record-only-error"));
+        // The finished event still fires so the UI can refresh.
+        assert!(events.iter().any(|e| e == "record-only-finished"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_recover_is_idempotent() {
+        let dir = temp_dir("recover-idempotent");
+        let (ps, _) = build_ps(record_only_config(&dir));
+        on_press(&ps);
+        recover_session(&ps);
+        recover_session(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_recover_orphaned_state_resets() {
+        let dir = temp_dir("recover-orphan");
+        let (ps, _) = build_ps(record_only_config(&dir));
+        // RecordOnly tag with no active session (cross-session leak).
+        ps.force_state_tag(StateTag::RecordOnly);
+        recover_session(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_backpressure_monitor_controlled_stop() {
+        let dir = temp_dir("backpressure");
+        let (ps, _) = build_ps(record_only_config(&dir));
+        on_press(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::RecordOnly));
+
+        // Drive the dropped-block counter past the threshold; the monitor
+        // (spawned at press, 250ms poll) must stop the session on its own.
+        let counter = crate::util::lock_mutex(&ps.record_only, "record_only")
+            .and_then(|g| g.as_ref().map(|s| s.recorder.dropped_counter()));
+        assert!(counter.is_some());
+        let Some(counter) = counter else { return };
+        counter.fetch_add(51, Ordering::Relaxed);
+
+        // Wait (up to ~4s) for the monitor to run the cleanup DAG.
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while ps.sm_state() == Some(StateTag::RecordOnly) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+        // JSON must carry the failed status and the dropped count.
+        let entries: Vec<_> = fs::read_dir(&dir)
+            .map(|rd| rd.flatten().collect())
+            .unwrap_or_default();
+        let json_entry = entries
+            .iter()
+            .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"));
+        assert!(json_entry.is_some());
+        let Some(json_entry) = json_entry else { return };
+        let content = fs::read_to_string(json_entry.path());
+        assert!(content.is_ok());
+        let Ok(content) = content else { return };
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        assert_eq!(parsed["transcription_status"], "failed");
+        assert!(parsed["dropped_blocks"].as_u64().unwrap_or(0) >= 51);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_on_release_ignores_non_record_only_state() {
+        let dir = temp_dir("release-ignore");
+        let (ps, _) = build_ps(record_only_config(&dir));
+        // Idle: release must be a no-op (no thread, no state change).
+        on_release(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

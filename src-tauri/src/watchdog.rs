@@ -75,7 +75,7 @@ impl RecoveryActions for TauriRecoveryActions {
             .app
             .try_state::<super::commands::pipeline_state::PipelineState>()
         {
-            ps.stop_record_only();
+            super::commands::record_only_session::recover_session(&ps);
         }
     }
 }

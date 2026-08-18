@@ -72,7 +72,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 // WAV stays playable via finalize or next-startup salvage).
                 if let Some(ps) = app.try_state::<crate::commands::pipeline_state::PipelineState>()
                 {
-                    ps.stop_record_only();
+                    crate::commands::record_only_session::recover_session(&ps);
                 }
                 // Emit event
                 let _ = app.emit("tray-reset", ());
