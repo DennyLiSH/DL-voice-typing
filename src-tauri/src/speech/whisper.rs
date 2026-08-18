@@ -1,7 +1,8 @@
 use crate::config::Language;
 use crate::error::AppError;
-use crate::speech::SpeechEngine;
+use crate::speech::{CANCELLED_MESSAGE, Segment, SpeechEngine};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -153,6 +154,40 @@ impl WhisperEngine {
         params
     }
 
+    /// Build transcription params for long-form segmented transcription.
+    ///
+    /// MUST NOT reuse `build_base_params`: that one enables `no_timestamps`
+    /// and `single_segment`, which would erase segment boundaries and
+    /// timestamps. This builder keeps timestamps enabled and multi-segment
+    /// output, and wires cancellation + progress callbacks.
+    fn build_segment_params(
+        &self,
+        cancel: Arc<AtomicBool>,
+        progress: Box<dyn Fn(u8) + Send + Sync>,
+    ) -> FullParams<'_, '_> {
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some(self.language.code()));
+        params.set_print_progress(false);
+        params.set_print_timestamps(false);
+        params.set_no_timestamps(false);
+        params.set_single_segment(false);
+        params.set_translate(false);
+        if let Some(prompt) = initial_prompt_for_lang(self.language) {
+            params.set_initial_prompt(prompt);
+        }
+        // whisper-rs 0.16 callback setters take O: Into<Option<F>>, which
+        // defeats closure type inference — spell out both type parameters.
+        type AbortCb = Box<dyn FnMut() -> bool>;
+        type ProgressCb = Box<dyn FnMut(i32)>;
+        let abort_cb: AbortCb = Box::new(move || cancel.load(Ordering::Relaxed));
+        params.set_abort_callback_safe::<Option<AbortCb>, AbortCb>(Some(abort_cb));
+        let progress_cb: ProgressCb = Box::new(move |p: i32| {
+            progress(p.clamp(0, 100) as u8);
+        });
+        params.set_progress_callback_safe::<Option<ProgressCb>, ProgressCb>(Some(progress_cb));
+        params
+    }
+
     /// Core transcription logic shared by `transcribe_sync` and `transcribe_with_context`.
     fn transcribe_with_params(
         &self,
@@ -279,6 +314,62 @@ impl SpeechEngine for WhisperEngine {
         context: Option<&str>,
     ) -> Result<String, AppError> {
         self.transcribe_with_context(samples, context)
+    }
+
+    fn transcribe_with_segments_sync(
+        &self,
+        samples: &[f32],
+        cancel: Arc<AtomicBool>,
+        progress: Box<dyn Fn(u8) + Send + Sync>,
+    ) -> Result<Vec<Segment>, AppError> {
+        let ctx = self.get_ctx()?;
+        let mut state = self.pop_state(&ctx);
+        let params = self.build_segment_params(cancel.clone(), progress);
+
+        let run = state
+            .full(params, samples)
+            .map_err(|e| AppError::Speech(format!("transcription failed: {e}")));
+
+        let result = match run {
+            Err(e) => Err(e),
+            Ok(()) => {
+                if cancel.load(Ordering::Relaxed) {
+                    Err(AppError::Speech(CANCELLED_MESSAGE.to_string()))
+                } else {
+                    let num_segments = state.full_n_segments();
+                    debug!("Whisper segments: {num_segments}");
+                    let mut segments = Vec::new();
+                    for i in 0..num_segments {
+                        let Some(segment) = state.get_segment(i) else {
+                            continue;
+                        };
+                        // Skip segments Whisper identifies as no-speech
+                        // (hallucination guard).
+                        if segment.no_speech_probability() > NO_SPEECH_PROB_THRESHOLD {
+                            continue;
+                        }
+                        let text = segment
+                            .to_str()
+                            .map_err(|e| AppError::Speech(format!("segment text failed: {e}")))?
+                            .trim()
+                            .to_string();
+                        if text.is_empty() {
+                            continue;
+                        }
+                        segments.push(Segment::from_whisper(
+                            text,
+                            segment.start_timestamp(),
+                            segment.end_timestamp(),
+                        ));
+                    }
+                    info!("Whisper segment transcription: {} segments", segments.len());
+                    Ok(segments)
+                }
+            }
+        };
+
+        self.push_state(state);
+        result
     }
 
     fn name(&self) -> &str {
