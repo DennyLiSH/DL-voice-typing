@@ -107,7 +107,7 @@ pub fn update_json_with_text(
 }
 
 /// Convert f32 samples to i16 with clamping. NaN/Inf → 0.
-fn f32_to_i16_clamped(samples: &[f32]) -> Vec<i16> {
+pub(crate) fn f32_to_i16_clamped(samples: &[f32]) -> Vec<i16> {
     samples
         .iter()
         .map(|&s| {
@@ -169,7 +169,7 @@ fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Resu
 }
 
 /// Generate a timestamp-based filename (e.g., "2026-04-02_14-30-25").
-fn generate_timestamp_filename() -> String {
+pub(crate) fn generate_timestamp_filename() -> String {
     use time::format_description::well_known::Rfc3339;
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     // Format as "YYYY-MM-DD_HH-MM-SS" for filename safety.

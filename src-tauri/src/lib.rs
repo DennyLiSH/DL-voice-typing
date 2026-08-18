@@ -11,6 +11,7 @@ pub mod perf;
 pub mod realtime;
 pub mod speech;
 pub mod state;
+pub mod streaming_recorder;
 pub mod tray;
 pub mod util;
 pub mod watchdog;
