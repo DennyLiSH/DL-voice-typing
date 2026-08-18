@@ -137,6 +137,14 @@ impl Watchdog {
                 return;
             }
 
+            // RecordOnly is a legitimate long-lived state (meetings can run for
+            // tens of minutes): exempt it from the stuck threshold. Clear any
+            // stale timer so a following non-Idle state gets a fresh window.
+            if matches!(sm.state(), crate::state::StateTag::RecordOnly) {
+                self.last_non_idle_at = None;
+                return;
+            }
+
             // Non-Idle state
             let elapsed = match self.last_non_idle_at {
                 Some(t) => now.duration_since(t),
@@ -330,5 +338,38 @@ mod tests {
         assert!(!wd.stopped.load(Ordering::Relaxed));
         wd.stop();
         assert!(wd.stopped.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_record_only_is_exempt_from_stuck_reset() {
+        let (mut wd, actions) = make_watchdog();
+        assert!(wd.sm.lock().map(|mut s| s.start_record_only()).is_ok());
+        let t0 = Instant::now();
+        wd.tick(t0);
+        // Well past the stuck threshold: RecordOnly must NOT trigger reset.
+        wd.tick(t0 + Duration::from_secs(300));
+        assert!(actions.lock().map(|a| a.is_empty()).unwrap_or(false));
+        assert!(wd.last_non_idle_at.is_none());
+    }
+
+    #[test]
+    fn test_record_only_clears_stale_timer_from_prior_state() {
+        let (mut wd, actions) = make_watchdog();
+        // Simulate a prior non-Idle state that started the stuck timer.
+        assert!(wd.sm.lock().map(|mut s| s.start_recording()).is_ok());
+        let t0 = Instant::now();
+        wd.tick(t0);
+        assert!(wd.last_non_idle_at.is_some());
+        // Transition into RecordOnly: timer must be cleared, no reset.
+        {
+            let Ok(mut sm) = wd.sm.lock() else {
+                panic!("state machine lock poisoned");
+            };
+            sm.reset();
+            assert!(sm.start_record_only().is_ok());
+        }
+        wd.tick(t0 + Duration::from_secs(300));
+        assert!(actions.lock().map(|a| a.is_empty()).unwrap_or(false));
+        assert!(wd.last_non_idle_at.is_none());
     }
 }

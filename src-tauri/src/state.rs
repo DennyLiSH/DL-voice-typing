@@ -31,6 +31,9 @@ pub enum StateTag {
     Reviewing,
     /// Text is ready, injecting via clipboard paste.
     Injecting,
+    /// Record-only mode: second hotkey held, audio streaming to disk.
+    /// No transcription/injection follows; release finalizes the WAV.
+    RecordOnly,
 }
 
 /// Error for invalid state transitions.
@@ -69,6 +72,34 @@ impl StateMachine {
             _ => Err(TransitionError {
                 from: self.state_name(),
                 to: "Recording".to_string(),
+            }),
+        }
+    }
+
+    /// Transition to RecordOnly (from Idle only).
+    pub fn start_record_only(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::Idle => {
+                self.tag = StateTag::RecordOnly;
+                Ok(())
+            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "RecordOnly".to_string(),
+            }),
+        }
+    }
+
+    /// Transition from RecordOnly back to Idle (hotkey released).
+    pub fn finish_record_only(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::RecordOnly => {
+                self.tag = StateTag::Idle;
+                Ok(())
+            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Idle".to_string(),
             }),
         }
     }
@@ -212,6 +243,7 @@ impl StateMachine {
             StateTag::LLMRefining => "LLMRefining".to_string(),
             StateTag::Reviewing => "Reviewing".to_string(),
             StateTag::Injecting => "Injecting".to_string(),
+            StateTag::RecordOnly => "RecordOnly".to_string(),
         }
     }
 }
@@ -368,5 +400,46 @@ mod tests {
         assert!(sm.llm_to_reviewing().is_err());
         assert!(sm.reviewing_to_injecting().is_err());
         assert!(sm.cancel_reviewing().is_err());
+    }
+
+    #[test]
+    fn test_record_only_happy_path() {
+        let mut sm = StateMachine::new();
+        assert!(sm.start_record_only().is_ok());
+        assert_eq!(sm.state(), StateTag::RecordOnly);
+        assert!(sm.finish_record_only().is_ok());
+        assert_eq!(sm.state(), StateTag::Idle);
+    }
+
+    #[test]
+    fn test_record_only_rejects_invalid_transitions() {
+        let mut sm = StateMachine::new();
+        // finish without start
+        assert!(sm.finish_record_only().is_err());
+        // double start
+        assert!(sm.start_record_only().is_ok());
+        assert!(sm.start_record_only().is_err());
+        // pipeline transitions not allowed from RecordOnly
+        assert!(sm.stop_recording().is_err());
+        assert!(sm.transcribing_to_injecting().is_err());
+    }
+
+    #[test]
+    fn test_record_only_and_recording_mutually_exclusive() {
+        let mut sm = StateMachine::new();
+        assert!(sm.start_record_only().is_ok());
+        assert!(sm.start_recording().is_err());
+        assert!(sm.finish_record_only().is_ok());
+
+        assert!(sm.start_recording().is_ok());
+        assert!(sm.start_record_only().is_err());
+    }
+
+    #[test]
+    fn test_reset_from_record_only() {
+        let mut sm = StateMachine::new();
+        assert!(sm.start_record_only().is_ok());
+        sm.reset();
+        assert_eq!(sm.state(), StateTag::Idle);
     }
 }
