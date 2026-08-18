@@ -179,6 +179,30 @@ pub(crate) fn generate_timestamp_filename() -> String {
         .unwrap_or_else(|_| now.format(&Rfc3339).unwrap())
 }
 
+/// Backfill a record-only JSON with segment transcription results.
+/// Sets `segments`, `transcription` (merged segment text), `llm_corrected`
+/// (null when LLM was unused or failed), and marks `transcription_status`
+/// as "done". Written atomically (temp file + rename).
+pub(crate) fn update_json_with_segments(
+    json_path: &std::path::Path,
+    segments: &[crate::speech::Segment],
+    transcription: &str,
+    llm_corrected: Option<&str>,
+) -> Result<(), AppError> {
+    let content = fs::read_to_string(json_path)?;
+    let mut metadata: serde_json::Value = serde_json::from_str(&content)?;
+
+    metadata["segments"] = serde_json::to_value(segments)?;
+    metadata["transcription"] = serde_json::Value::String(transcription.to_string());
+    metadata["llm_corrected"] = match llm_corrected {
+        Some(text) => serde_json::Value::String(text.to_string()),
+        None => serde_json::Value::Null,
+    };
+    metadata["transcription_status"] = serde_json::Value::String("done".to_string());
+
+    atomic_write_json(json_path, &metadata)
+}
+
 /// Write JSON metadata atomically: temp file + rename, so a crash mid-write
 /// never leaves a truncated JSON. The destination is removed first because
 /// Windows `rename` fails when it already exists.

@@ -53,6 +53,10 @@ pub trait ClipboardProvider: Send + Sync {
     /// subsequent `restore()` is benign: the second `restore()` finds
     /// `saved_content` already taken and no-ops.
     fn was_saved(&self) -> bool;
+    /// Write text to the clipboard WITHOUT simulating paste. Used by
+    /// injection-fallback paths (target window gone / focus failed) to leave
+    /// the transcript in the clipboard for a manual paste.
+    fn set_text(&self, text: &str) -> Result<(), AppError>;
 }
 
 /// Clipboard manager for save/restore + Ctrl+V simulation.
@@ -151,6 +155,11 @@ impl ClipboardProvider for ClipboardManager {
         crate::util::lock_mutex(&self.saved_content, "ClipboardManager::saved_content")
             .is_some_and(|guard| guard.is_some())
     }
+
+    fn set_text(&self, text: &str) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        write_clipboard_with_retry(text)
+    }
 }
 
 impl Default for ClipboardManager {
@@ -169,6 +178,8 @@ pub struct MockClipboard {
     save_error: Mutex<Option<String>>,
     inject_error: Mutex<Option<String>>,
     restore_error: Mutex<Option<String>>,
+    /// Texts written via `set_text` (fallback clipboard留底 assertions).
+    set_texts: Mutex<Vec<String>>,
     /// Serializes whole clipboard operations (save / inject / restore /
     /// save_and_inject) against each other — mirrors production shape per
     /// ADR-0010 test-fidelity rationale. Helpers (`save_inner`/`inject_inner`/
@@ -187,6 +198,7 @@ impl MockClipboard {
             save_error: Mutex::new(None),
             inject_error: Mutex::new(None),
             restore_error: Mutex::new(None),
+            set_texts: Mutex::new(Vec::new()),
             op: Mutex::new(()),
         }
     }
@@ -225,6 +237,10 @@ impl MockClipboard {
 
     pub fn injected(&self) -> Vec<String> {
         self.injected.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    pub fn set_texts(&self) -> Vec<String> {
+        self.set_texts.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
@@ -302,6 +318,16 @@ impl ClipboardProvider for MockClipboard {
 
     fn was_saved(&self) -> bool {
         self.saved.load(Ordering::SeqCst)
+    }
+
+    fn set_text(&self, text: &str) -> Result<(), AppError> {
+        let _op = self.lock_op()?;
+        if let Some(mut guard) =
+            crate::util::lock_mutex(&self.set_texts, "MockClipboard::set_texts")
+        {
+            guard.push(text.to_string());
+        }
+        Ok(())
     }
 }
 

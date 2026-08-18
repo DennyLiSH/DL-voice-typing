@@ -83,6 +83,7 @@ pub fn run() {
             app.manage(Mutex::new(hotkey_manager));
             app.manage(DownloadState::new());
             app.manage(commands::PendingReview::new());
+            app.manage(commands::transcribe_cmd::PendingTranscribe::new());
             start_watchdog(app.handle(), state_machine.clone());
             Ok(())
         })
@@ -106,6 +107,11 @@ pub fn run() {
             commands::review::confirm_inject,
             commands::review::cancel_review,
             commands::review::get_review_text,
+            commands::transcribe_cmd::open_transcribe_window,
+            commands::transcribe_cmd::transcribe_recording,
+            commands::transcribe_cmd::cancel_transcription,
+            commands::transcribe_cmd::get_recording_segments,
+            commands::transcribe_cmd::inject_transcript_text,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -115,6 +121,13 @@ pub fn run() {
                     return; // allow close during shutdown
                 }
                 api.prevent_close();
+                if window.label() == "transcribe" {
+                    // Cancel any in-flight transcription and clear the
+                    // take-once HWND so later injects are rejected until the
+                    // window is reopened.
+                    let pt = window.state::<commands::transcribe_cmd::PendingTranscribe>();
+                    commands::transcribe_cmd::on_transcribe_window_closed(&pt);
+                }
                 let _ = window.hide();
             }
         })
@@ -287,6 +300,18 @@ fn create_overlay_windows(app: &mut tauri::App) -> Result<(), tauri::Error> {
     .always_on_top(true)
     .focusable(true)
     .skip_taskbar(true)
+    .visible(false)
+    .center()
+    .build()?;
+
+    let _transcribe = tauri::webview::WebviewWindowBuilder::new(
+        app,
+        "transcribe",
+        tauri::WebviewUrl::App("transcribe.html".into()),
+    )
+    .title("录音转录")
+    .inner_size(720.0, 560.0)
+    .resizable(true)
     .visible(false)
     .center()
     .build()?;

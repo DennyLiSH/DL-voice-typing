@@ -12,6 +12,7 @@ use tauri::{
 /// Setup the system tray.
 pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Error>> {
     let reset = MenuItem::with_id(app, "reset", "重置状态", true, None::<&str>)?;
+    let transcribe = MenuItem::with_id(app, "transcribe", "录音转录...", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置...", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
@@ -19,6 +20,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
         app,
         &[
             &reset as &dyn tauri::menu::IsMenuItem<R>,
+            &transcribe as &dyn tauri::menu::IsMenuItem<R>,
             &settings as &dyn tauri::menu::IsMenuItem<R>,
             &PredefinedMenuItem::separator(app)?,
             &quit,
@@ -79,6 +81,15 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 // Update tooltip
                 if let Some(tray) = app.tray_by_id("default") {
                     let _ = tray.set_tooltip(Some("语文兔 - 就绪"));
+                }
+            }
+            "transcribe" => {
+                if let Some(pt) =
+                    app.try_state::<crate::commands::transcribe_cmd::PendingTranscribe>()
+                {
+                    if let Err(e) = crate::commands::transcribe_cmd::open_window_impl(app, &pt) {
+                        info!("Tray: open transcribe window failed: {e}");
+                    }
                 }
             }
             "quit" => {

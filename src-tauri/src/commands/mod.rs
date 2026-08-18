@@ -11,6 +11,7 @@ pub(crate) mod record_only_session;
 pub(crate) mod recording_session;
 pub mod review;
 pub(crate) mod review_provider;
+pub mod transcribe_cmd;
 pub mod window_controller;
 
 use tauri::Emitter as TauriEmitter;

@@ -136,14 +136,25 @@ pub fn get_foreground_hwnd() -> isize {
     hwnd.0 as isize
 }
 
-/// Restore focus to a saved window handle.
+/// Check whether a window handle still refers to a live window.
+pub fn is_window_valid(hwnd_val: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+    let hwnd = HWND(hwnd_val as *mut _);
+    // SAFETY: IsWindow has no preconditions; an invalid/dangling HWND value
+    // simply returns FALSE.
+    unsafe { IsWindow(hwnd).as_bool() }
+}
+
+/// Restore focus to a saved window handle, reporting whether
+/// `SetForegroundWindow` actually succeeded.
 ///
 /// Uses `AttachThreadInput` to share input state with the foreground window's
 /// thread, then calls `SetForegroundWindow` + `BringWindowToTop`. This is
 /// necessary because `SetForegroundWindow` may fail when called from a
 /// non-UI thread (e.g., Tokio runtime) even if the process is the foreground
 /// process — Windows restricts which threads can change the foreground window.
-pub fn restore_foreground_hwnd(hwnd_val: isize) {
+pub fn restore_foreground_hwnd_checked(hwnd_val: isize) -> bool {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -173,12 +184,24 @@ pub fn restore_foreground_hwnd(hwnd_val: isize) {
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
         }
-        let _ = SetForegroundWindow(hwnd);
+        let ok = SetForegroundWindow(hwnd).as_bool();
         let _ = BringWindowToTop(hwnd);
 
         // Detach input processing.
         if attached {
             let _ = AttachThreadInput(cur_tid, fg_tid, false);
         }
+        ok
     }
+}
+
+/// Restore focus to a saved window handle.
+///
+/// Uses `AttachThreadInput` to share input state with the foreground window's
+/// thread, then calls `SetForegroundWindow` + `BringWindowToTop`. This is
+/// necessary because `SetForegroundWindow` may fail when called from a
+/// non-UI thread (e.g., Tokio runtime) even if the process is the foreground
+/// process — Windows restricts which threads can change the foreground window.
+pub fn restore_foreground_hwnd(hwnd_val: isize) {
+    let _ = restore_foreground_hwnd_checked(hwnd_val);
 }
