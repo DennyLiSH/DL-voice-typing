@@ -8,10 +8,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSKEYUP,
 };
 
+type SlotCallback = Arc<dyn Fn(HotkeyEvent) + Send + Sync>;
+
 /// Global state shared between WindowsHotkeyManager and the hook procedure.
+/// Two independent slots (primary voice-input hotkey + record-only hotkey)
+/// dispatched by virtual key code from a single low-level hook.
+#[derive(Default)]
 struct HookState {
-    key_code: u32,
-    callback: Option<Arc<dyn Fn(HotkeyEvent) + Send + Sync>>,
+    primary: Option<(u32, SlotCallback)>,
+    record_only: Option<(u32, SlotCallback)>,
 }
 
 static HOOK_STATE: Mutex<Option<HookState>> = Mutex::new(None);
@@ -58,28 +63,84 @@ impl HotkeyManager for WindowsHotkeyManager {
         let vk_code = WindowsHotkeyManager::parse_key_code(key)
             .ok_or_else(|| AppError::Hotkey(format!("unknown key: {key}")))?;
 
-        // Store callback + key_code in global state for the hook proc to access.
-        {
-            let mut state = HOOK_STATE
-                .lock()
-                .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
-            *state = Some(HookState {
-                key_code: vk_code,
-                callback: Some(Arc::from(callback)),
-            });
+        self.ensure_hook()?;
+        let mut state = HOOK_STATE
+            .lock()
+            .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
+        let hook_state = state.get_or_insert_with(HookState::default);
+        hook_state.primary = Some((vk_code, Arc::from(callback)));
+        Ok(())
+    }
+
+    fn register_record_only(
+        &mut self,
+        key: &str,
+        callback: HotkeyCallback,
+    ) -> Result<(), AppError> {
+        let vk_code = WindowsHotkeyManager::parse_key_code(key)
+            .ok_or_else(|| AppError::Hotkey(format!("unknown key: {key}")))?;
+
+        self.ensure_hook()?;
+        let mut state = HOOK_STATE
+            .lock()
+            .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
+        let hook_state = state.get_or_insert_with(HookState::default);
+        if let Some((primary_vk, _)) = &hook_state.primary {
+            if *primary_vk == vk_code {
+                return Err(AppError::Hotkey(
+                    "record-only hotkey must differ from the primary hotkey".to_string(),
+                ));
+            }
         }
-
-        unsafe {
-            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), None, 0)
-                .map_err(|e| AppError::Hotkey(format!("failed to set hook: {e}")))?;
-
-            self.hook = Some(hook);
-        }
-
+        hook_state.record_only = Some((vk_code, Arc::from(callback)));
         Ok(())
     }
 
     fn unregister(&mut self) -> Result<(), AppError> {
+        self.remove_hook()?;
+        // Clear global state (both slots).
+        if let Ok(mut state) = HOOK_STATE.lock() {
+            *state = None;
+        }
+        Ok(())
+    }
+
+    fn unregister_record_only(&mut self) -> Result<(), AppError> {
+        if let Ok(mut state) = HOOK_STATE.lock() {
+            if let Some(hook_state) = state.as_mut() {
+                hook_state.record_only = None;
+                // Remove the hook entirely when no slot remains.
+                if hook_state.primary.is_none() {
+                    *state = None;
+                    drop(state);
+                    self.remove_hook()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn is_registered(&self) -> bool {
+        self.hook.is_some()
+    }
+}
+
+impl WindowsHotkeyManager {
+    /// Install the low-level keyboard hook if not already installed.
+    fn ensure_hook(&mut self) -> Result<(), AppError> {
+        if self.hook.is_some() {
+            return Ok(());
+        }
+        unsafe {
+            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook_proc), None, 0)
+                .map_err(|e| AppError::Hotkey(format!("failed to set hook: {e}")))?;
+            self.hook = Some(hook);
+        }
+        Ok(())
+    }
+
+    /// Remove the low-level keyboard hook if installed.
+    fn remove_hook(&mut self) -> Result<(), AppError> {
         if let Some(hook) = self.hook.take() {
             // SAFETY: UnhookWindowsHookEx removes a hook installed by SetWindowsHookExW.
             // `hook` is a valid HHOOK from a successful SetWindowsHookExW call.
@@ -88,15 +149,7 @@ impl HotkeyManager for WindowsHotkeyManager {
                     .map_err(|e| AppError::Hotkey(format!("failed to unhook: {e}")))?;
             }
         }
-        // Clear global state.
-        if let Ok(mut state) = HOOK_STATE.lock() {
-            *state = None;
-        }
         Ok(())
-    }
-
-    fn is_registered(&self) -> bool {
-        self.hook.is_some()
     }
 }
 
@@ -162,39 +215,21 @@ unsafe extern "system" fn keyboard_hook_proc(
         };
 
         if let Some(event) = event {
-            // Access global state — match key and invoke callback.
+            // Find the matching slot and clone its callback out of the lock.
             // We must not hold the Mutex while calling the callback (deadlock risk
-            // if the callback tries to unregister), so clone what we need.
-            let matched = {
+            // if the callback tries to unregister or triggers window operations
+            // that re-enter the message loop, e.g., SetFocus, ShowWindow).
+            // The callback still runs on the main thread (required for Win32
+            // window operations and cpal audio capture).
+            let callback = {
                 let state = HOOK_STATE.lock();
                 match state {
-                    Ok(guard) => {
-                        if let Some(ref hook_state) = *guard {
-                            hook_state.key_code == vk
-                        } else {
-                            false
-                        }
-                    }
-                    Err(_) => false,
+                    Ok(guard) => guard.as_ref().and_then(|hs| find_callback(hs, vk)),
+                    Err(_) => None,
                 }
             };
-
-            if matched {
-                // Clone the Arc callback out of the lock, then release the lock.
-                // This prevents deadlock if the callback triggers window operations
-                // that re-enter the message loop (e.g., SetFocus, ShowWindow).
-                // The callback still runs on the main thread (required for Win32
-                // window operations and cpal audio capture).
-                let callback = {
-                    let state = HOOK_STATE.lock();
-                    match state {
-                        Ok(guard) => guard.as_ref().and_then(|hs| hs.callback.clone()),
-                        Err(_) => None,
-                    }
-                };
-                if let Some(cb) = callback {
-                    cb(event);
-                }
+            if let Some(cb) = callback {
+                cb(event);
             }
         }
     }
@@ -202,6 +237,23 @@ unsafe extern "system" fn keyboard_hook_proc(
     // SAFETY: CallNextHookEx passes the event to the next hook in the chain.
     // All parameters are forwarded unchanged from our hook proc.
     unsafe { CallNextHookEx(None, n_code, w_param, l_param) }
+}
+
+/// Dispatch a virtual key code to the matching slot's callback.
+/// Primary slot wins if both slots somehow hold the same vk (config
+/// validation and register_record_only both reject that case).
+fn find_callback(hs: &HookState, vk: u32) -> Option<SlotCallback> {
+    if let Some((vk_code, cb)) = &hs.primary {
+        if *vk_code == vk {
+            return Some(cb.clone());
+        }
+    }
+    if let Some((vk_code, cb)) = &hs.record_only {
+        if *vk_code == vk {
+            return Some(cb.clone());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -227,5 +279,52 @@ mod tests {
     fn test_hotkey_manager_is_send_sync_via_mutex() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<std::sync::Mutex<WindowsHotkeyManager>>();
+    }
+
+    fn dummy_callback() -> SlotCallback {
+        Arc::new(|_event: HotkeyEvent| {})
+    }
+
+    #[test]
+    fn test_find_callback_dispatches_by_vk() {
+        let primary_cb = dummy_callback();
+        let record_cb = dummy_callback();
+        let hs = HookState {
+            primary: Some((0xA3, primary_cb.clone())),
+            record_only: Some((0xA5, record_cb.clone())),
+        };
+        let found_primary = find_callback(&hs, 0xA3);
+        assert!(found_primary.is_some());
+        let found_record = find_callback(&hs, 0xA5);
+        assert!(found_record.is_some());
+        // Distinct slots: the two callbacks are different allocations.
+        if let (Some(p), Some(r)) = (found_primary, found_record) {
+            assert!(!Arc::ptr_eq(&p, &r));
+            assert!(Arc::ptr_eq(&p, &primary_cb));
+            assert!(Arc::ptr_eq(&r, &record_cb));
+        }
+    }
+
+    #[test]
+    fn test_find_callback_returns_none_for_unregistered_vk() {
+        let hs = HookState {
+            primary: Some((0xA3, dummy_callback())),
+            record_only: Some((0xA5, dummy_callback())),
+        };
+        assert!(find_callback(&hs, 0x70).is_none());
+    }
+
+    #[test]
+    fn test_find_callback_handles_empty_slots() {
+        let hs = HookState::default();
+        assert!(find_callback(&hs, 0xA3).is_none());
+
+        let only_record = HookState {
+            primary: None,
+            record_only: Some((0xA5, dummy_callback())),
+        };
+        assert!(only_record.primary.is_none());
+        assert!(find_callback(&only_record, 0xA3).is_none());
+        assert!(find_callback(&only_record, 0xA5).is_some());
     }
 }

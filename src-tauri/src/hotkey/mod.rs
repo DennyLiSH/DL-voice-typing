@@ -26,8 +26,18 @@ pub trait HotkeyManager: Send {
     /// Calls the callback on press/release events.
     fn register(&mut self, key: &str, callback: HotkeyCallback) -> Result<(), AppError>;
 
-    /// Unregister the hotkey.
+    /// Register the record-only hotkey (second, independent slot).
+    /// Shares the same low-level keyboard hook as the primary hotkey;
+    /// events are dispatched by virtual key code.
+    fn register_record_only(&mut self, key: &str, callback: HotkeyCallback)
+    -> Result<(), AppError>;
+
+    /// Unregister all hotkeys (primary + record-only) and remove the hook.
     fn unregister(&mut self) -> Result<(), AppError>;
+
+    /// Unregister only the record-only hotkey slot, leaving the primary
+    /// hotkey active. Used when settings change just the record-only key.
+    fn unregister_record_only(&mut self) -> Result<(), AppError>;
 
     /// Check if hotkey is currently registered.
     fn is_registered(&self) -> bool;
