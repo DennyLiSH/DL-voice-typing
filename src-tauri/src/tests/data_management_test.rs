@@ -286,3 +286,43 @@ fn test_failed_delete_serialize() {
     assert!(json.contains("2026-06-24_14-30-25"));
     assert!(json.contains("文件被占用"));
 }
+
+#[test]
+fn test_scan_maps_record_only_fields() {
+    let dir = temp_dir("scan-record-only");
+    let metadata = serde_json::json!({
+        "timestamp": "2026-08-17T10:00:00+08:00",
+        "language": "zh",
+        "source": "record_only",
+        "transcription_status": "failed",
+        "dropped_blocks": 12_u64,
+        "transcription": serde_json::Value::Null,
+    });
+    fs::write(
+        dir.join("2026-08-17_10-00-00.json"),
+        serde_json::to_string(&metadata).unwrap(),
+    )
+    .unwrap();
+
+    let entries = scan_and_collect(&dir, None).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].source, "record_only");
+    assert_eq!(entries[0].transcription_status.as_deref(), Some("failed"));
+    assert_eq!(entries[0].dropped_blocks, 12);
+
+    cleanup(&dir);
+}
+
+#[test]
+fn test_scan_defaults_classic_source_when_missing() {
+    let dir = temp_dir("scan-classic-default");
+    write_recording(&dir, "2026-06-24_14-30-25", Some("hello"));
+
+    let entries = scan_and_collect(&dir, None).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].source, "classic");
+    assert!(entries[0].transcription_status.is_none());
+    assert_eq!(entries[0].dropped_blocks, 0);
+
+    cleanup(&dir);
+}

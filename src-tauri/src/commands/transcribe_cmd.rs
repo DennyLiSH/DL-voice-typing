@@ -133,17 +133,24 @@ pub fn get_recording_segments(
 
 /// Inject text into the window that was foreground when the transcribe
 /// window opened. Fallback: leave the text in the clipboard with a warning
-/// when the target window is gone or cannot be focused.
+/// when the target window is gone or cannot be focused. After the delivery
+/// attempt (success or clipboard fallback), the recording JSON `final_text`
+/// is updated with the injected text — write failure is logged, not fatal,
+/// because the delivery already happened and cannot be rolled back.
 #[tauri::command]
 pub async fn inject_transcript_text(
     pt: tauri::State<'_, PendingTranscribe>,
     ps: tauri::State<'_, PipelineState>,
+    filename: String,
     text: String,
 ) -> Result<(), CommandError> {
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() {
         return Err(CommandError::validation("注入文本不能为空"));
     }
+    // Validate the filename BEFORE consuming the take-once HWND.
+    let base = recordings_base_dir(&ps)?;
+    let json_path = resolve_child(&base, &filename, "json")?;
     let hwnd = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd").and_then(|mut g| g.take());
     let Some(hwnd) = hwnd else {
         return Err(CommandError::state(
@@ -151,9 +158,32 @@ pub async fn inject_transcript_text(
         ));
     };
     let ps_owned = ps.inner().clone();
-    tokio::task::spawn_blocking(move || do_inject(&ps_owned, hwnd, &trimmed, &WIN32_FOCUS_OPS))
-        .await
-        .map_err(|e| CommandError::new("INTERNAL", format!("inject task failed: {e}")))?
+    let text_for_task = trimmed.clone();
+    let inject_result = tokio::task::spawn_blocking(move || {
+        do_inject(&ps_owned, hwnd, &text_for_task, &WIN32_FOCUS_OPS)
+    })
+    .await
+    .map_err(|e| CommandError::new("INTERNAL", format!("inject task failed: {e}")))?;
+    if let Err(e) = write_final_text(&json_path, &trimmed) {
+        warn!("transcribe inject: final_text write failed for {filename}: {e}");
+    }
+    inject_result
+}
+
+/// Persist the injected text as `final_text` in the recording JSON,
+/// preserving the existing transcription / llm_corrected fields.
+fn write_final_text(json_path: &Path, text: &str) -> Result<(), CommandError> {
+    let content = std::fs::read_to_string(json_path)
+        .map_err(|e| CommandError::io(e, "failed to read recording metadata"))?;
+    let metadata: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| CommandError::io(e, "failed to parse recording metadata"))?;
+    let transcription = metadata
+        .get("transcription")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let llm_corrected = metadata.get("llm_corrected").and_then(|v| v.as_str());
+    crate::data_saving::update_json_with_text(json_path, transcription, llm_corrected, Some(text))
+        .map_err(CommandError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -846,6 +876,50 @@ mod tests {
         assert!(result.is_err());
         let result = resolve_child(&dir, "not-a-stem", "wav");
         assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- write_final_text ---
+
+    #[test]
+    fn test_write_final_text_preserves_transcription() {
+        let dir = temp_dir("final-text");
+        let json_path = write_pending_json(&dir, "2026-08-18_11-00-00");
+        // Simulate a completed transcription.
+        let segments = [crate::speech::Segment {
+            text: "原始转录".to_string(),
+            start_ms: 0,
+            end_ms: 1000,
+        }];
+        assert!(
+            crate::data_saving::update_json_with_segments(
+                &json_path,
+                &segments,
+                "原始转录",
+                Some("LLM纠正"),
+            )
+            .is_ok()
+        );
+
+        let result = write_final_text(&json_path, "编辑后注入文本");
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(&json_path);
+        assert!(content.is_ok());
+        let Ok(content) = content else { return };
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        assert_eq!(parsed["final_text"], "编辑后注入文本");
+        assert_eq!(parsed["transcription"], "原始转录");
+        assert_eq!(parsed["llm_corrected"], "LLM纠正");
+        assert_eq!(parsed["transcription_status"], "done");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_final_text_missing_json_errors() {
+        let dir = temp_dir("final-text-missing");
+        let json_path = dir.join("2026-08-18_11-00-01.json");
+        assert!(write_final_text(&json_path, "x").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

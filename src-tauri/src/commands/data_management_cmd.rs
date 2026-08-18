@@ -25,6 +25,11 @@ struct RecordingMeta {
     transcription: Option<String>,
     llm_corrected: Option<String>,
     final_text: Option<String>,
+    /// "classic" | "record_only"; missing means classic (pre-feature JSONs).
+    source: Option<String>,
+    /// "pending" | "done" | "failed"; record-only recordings only.
+    transcription_status: Option<String>,
+    dropped_blocks: Option<u64>,
 }
 
 /// One recording entry returned to the frontend.
@@ -40,6 +45,12 @@ pub struct RecordingEntry {
     pub transcription: Option<String>,
     pub llm_corrected: Option<String>,
     pub final_text: Option<String>,
+    /// "classic" | "record_only"; defaults to "classic" when JSON predates the field.
+    pub source: String,
+    /// "pending" | "done" | "failed"; `None` for classic recordings.
+    pub transcription_status: Option<String>,
+    /// Number of audio blocks dropped by backpressure (record-only only).
+    pub dropped_blocks: u64,
     /// 0 indicates the `.wav` file is missing.
     pub wav_size: u64,
     pub json_size: u64,
@@ -333,6 +344,9 @@ pub(crate) fn scan_and_collect(
             transcription: meta.transcription,
             llm_corrected: meta.llm_corrected,
             final_text: meta.final_text,
+            source: meta.source.unwrap_or_else(|| "classic".to_string()),
+            transcription_status: meta.transcription_status,
+            dropped_blocks: meta.dropped_blocks.unwrap_or(0),
             wav_size,
             json_size,
         });
@@ -647,6 +661,9 @@ impl Clone for RecordingEntry {
             transcription: self.transcription.clone(),
             llm_corrected: self.llm_corrected.clone(),
             final_text: self.final_text.clone(),
+            source: self.source.clone(),
+            transcription_status: self.transcription_status.clone(),
+            dropped_blocks: self.dropped_blocks,
             wav_size: self.wav_size,
             json_size: self.json_size,
         }

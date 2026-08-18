@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>录音转录</title>
+    <link rel="stylesheet" href="common.css">
+    <link rel="stylesheet" href="transcribe.css">
+</head>
+<body>
+    <div class="layout">
+        <aside class="list-pane">
+            <div class="list-header">
+                <span class="list-title">录音列表</span>
+                <button id="btn-refresh" class="btn-secondary" aria-label="刷新列表">刷新</button>
+            </div>
+            <div id="list-error" class="error-bar" hidden></div>
+            <div id="rec-list" class="rec-list"></div>
+            <div id="rec-empty" class="rec-empty" hidden>暂无录音模式录音</div>
+        </aside>
+
+        <main class="detail-pane">
+            <div id="detail-empty" class="detail-empty">从左侧选择一段录音</div>
+
+            <div id="detail" class="detail" hidden>
+                <div class="detail-header">
+                    <span id="detail-title" class="detail-title"></span>
+                    <span id="detail-badges" class="badges"></span>
+                </div>
+
+                <div class="player-row">
+                    <audio id="audio" controls></audio>
+                    <span id="audio-error" class="audio-error-badge" hidden>音频加载失败</span>
+                </div>
+
+                <div class="action-row">
+                    <button id="btn-transcribe" class="btn-primary">转录</button>
+                    <label class="llm-toggle">
+                        <input type="checkbox" id="chk-llm"> LLM 纠错
+                    </label>
+                    <button id="btn-cancel" class="btn-secondary" hidden>取消转录</button>
+                </div>
+
+                <div id="progress-wrap" class="progress-wrap" hidden>
+                    <div class="progress-track">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <span id="progress-label" class="progress-label"></span>
+                </div>
+
+                <div id="segments" class="segments"></div>
+                <div id="segments-empty" class="segments-empty" hidden>转录未产生任何段落</div>
+
+                <div class="merged-row">
+                    <div class="merged-label">合并文本</div>
+                    <textarea id="merged" readonly rows="3" aria-label="合并文本"></textarea>
+                </div>
+
+                <div class="inject-row">
+                    <button id="btn-inject" class="btn-primary">注入文本</button>
+                    <span id="inject-spinner" class="spinner" hidden></span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="transcribe.js"></script>
+</body>
+</html>

@@ -62,6 +62,9 @@ const MINIMAL_DOM = `
   <div id="review-toggle"></div>
   <div id="autostart-toggle"></div>
   <div id="realtime-transcription-toggle"></div>
+  <div id="record-only-toggle"></div>
+  <div id="record-only-hotkey-group"></div>
+  <select id="record-only-hotkey"></select>
   <div id="version-info"></div>
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
@@ -105,6 +108,8 @@ async function loadFresh() {
                 review_before_paste: false,
                 autostart: false,
                 realtime_transcription: false,
+                record_only_enabled: false,
+                record_only_hotkey: 'RightAlt',
             };
         }
         if (cmd === 'get_whisper_models') {
