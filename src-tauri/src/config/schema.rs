@@ -349,6 +349,18 @@ pub struct AppConfig {
     /// Whether real-time transcription is enabled.
     #[serde(default)]
     pub realtime_transcription: bool,
+
+    /// Whether record-only mode (hold to record, release to save, no transcription) is enabled.
+    #[serde(default)]
+    pub record_only_enabled: bool,
+
+    /// Hotkey keycode name for record-only mode (default: "RightAlt").
+    #[serde(default = "default_record_only_hotkey")]
+    pub record_only_hotkey: String,
+}
+
+fn default_record_only_hotkey() -> String {
+    "RightAlt".to_string()
 }
 
 impl fmt::Debug for AppConfig {
@@ -374,6 +386,8 @@ impl fmt::Debug for AppConfig {
             .field("review_before_paste", &self.review_before_paste)
             .field("autostart", &self.autostart)
             .field("realtime_transcription", &self.realtime_transcription)
+            .field("record_only_enabled", &self.record_only_enabled)
+            .field("record_only_hotkey", &self.record_only_hotkey)
             .finish()
     }
 }
@@ -394,6 +408,8 @@ impl Default for AppConfig {
             review_before_paste: false,
             autostart: false,
             realtime_transcription: false,
+            record_only_enabled: false,
+            record_only_hotkey: default_record_only_hotkey(),
         }
     }
 }
@@ -405,6 +421,17 @@ impl AppConfig {
         if parse_key_code(&self.hotkey).is_none() {
             let hotkey = &self.hotkey;
             return Err(AppError::Config(format!("invalid hotkey: {hotkey}")));
+        }
+        if parse_key_code(&self.record_only_hotkey).is_none() {
+            let key = &self.record_only_hotkey;
+            return Err(AppError::Config(format!(
+                "invalid record_only_hotkey: {key}"
+            )));
+        }
+        if self.record_only_enabled && self.hotkey.eq_ignore_ascii_case(&self.record_only_hotkey) {
+            return Err(AppError::Config(
+                "hotkey and record_only_hotkey must be different".to_string(),
+            ));
         }
         if self.llm_enabled
             && (self.llm_api_url.is_empty()
@@ -418,6 +445,11 @@ impl AppConfig {
         if self.data_saving_enabled && self.data_saving_path.trim().is_empty() {
             return Err(AppError::Config(
                 "Data saving path is required when data saving is enabled".to_string(),
+            ));
+        }
+        if self.record_only_enabled && self.data_saving_path.trim().is_empty() {
+            return Err(AppError::Config(
+                "Data saving path is required when record-only mode is enabled".to_string(),
             ));
         }
         Ok(())
@@ -685,5 +717,83 @@ mod tests {
         assert_eq!(WhisperModel::BaseQ8.size_str(), "base-q8_0");
         assert!(WhisperModel::BaseQ8.is_q8());
         assert!(!WhisperModel::Base.is_q8());
+    }
+
+    #[test]
+    fn test_record_only_defaults() {
+        let config = AppConfig::default();
+        assert!(!config.record_only_enabled);
+        assert_eq!(config.record_only_hotkey, "RightAlt");
+    }
+
+    #[test]
+    fn test_old_config_without_record_only_fields_deserializes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Config JSON written by a version before record-only mode existed.
+        let old_json = r#"{
+            "hotkey": "RightCtrl",
+            "language": "zh",
+            "whisper_model": "base",
+            "llm_enabled": false,
+            "llm_api_url": "",
+            "llm_api_key": "",
+            "llm_model": "",
+            "download_mirror": "hf-mirror",
+            "data_saving_enabled": true,
+            "data_saving_path": "D:\\recordings",
+            "review_before_paste": true,
+            "autostart": true,
+            "realtime_transcription": false
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(old_json)?;
+        assert_eq!(parsed.hotkey, "RightCtrl");
+        assert!(parsed.data_saving_enabled);
+        assert_eq!(parsed.data_saving_path, "D:\\recordings");
+        assert!(parsed.review_before_paste);
+        assert!(parsed.autostart);
+        assert!(!parsed.record_only_enabled);
+        assert_eq!(parsed.record_only_hotkey, "RightAlt");
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_rejects_same_hotkeys_when_record_only_enabled() {
+        let config = AppConfig {
+            record_only_enabled: true,
+            record_only_hotkey: "RightCtrl".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_record_only_hotkey() {
+        let config = AppConfig {
+            record_only_hotkey: "NoSuchKey".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_record_only_with_distinct_hotkey() {
+        let config = AppConfig {
+            record_only_enabled: true,
+            record_only_hotkey: "RightAlt".to_string(),
+            data_saving_path: "D:\\recordings".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_record_only_without_path() {
+        let config = AppConfig {
+            record_only_enabled: true,
+            record_only_hotkey: "RightAlt".to_string(),
+            data_saving_path: String::new(),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
     }
 }

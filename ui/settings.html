@@ -93,6 +93,37 @@
                     </select>
                     <div class="hint">按住说话，松开转写。切换需重启生效。</div>
                 </div>
+                <div class="form-group">
+                    <div class="toggle-row">
+                        <span class="toggle-label">录音模式（只录不转）</span>
+                        <div class="toggle-switch" id="record-only-toggle" role="switch" aria-checked="false" aria-label="录音模式" tabindex="0"></div>
+                    </div>
+                    <div class="hint">按住录音快捷键开始录音，松开保存到数据目录，不做转写。之后可在转录窗口择时转写。</div>
+                </div>
+                <div class="form-group" id="record-only-hotkey-group">
+                    <label for="record-only-hotkey">录音快捷键</label>
+                    <select id="record-only-hotkey" aria-label="录音快捷键">
+                        <option value="RightAlt">Right Alt</option>
+                        <option value="LeftAlt">Left Alt</option>
+                        <option value="RightCtrl">Right Ctrl</option>
+                        <option value="LeftCtrl">Left Ctrl</option>
+                        <option value="RightShift">Right Shift</option>
+                        <option value="LeftShift">Left Shift</option>
+                        <option value="F1">F1</option>
+                        <option value="F2">F2</option>
+                        <option value="F3">F3</option>
+                        <option value="F4">F4</option>
+                        <option value="F5">F5</option>
+                        <option value="F6">F6</option>
+                        <option value="F7">F7</option>
+                        <option value="F8">F8</option>
+                        <option value="F9">F9</option>
+                        <option value="F10">F10</option>
+                        <option value="F11">F11</option>
+                        <option value="F12">F12</option>
+                    </select>
+                    <div class="hint">不能与语音输入快捷键相同。切换需重启生效。</div>
+                </div>
             </div>
 
             <!-- Page: Model -->

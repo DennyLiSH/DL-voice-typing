@@ -21,6 +21,8 @@ export function isConfigDirty(current, loaded) {
         current.data_saving_path !== loaded.data_saving_path ||
         current.review_before_paste !== loaded.review_before_paste ||
         current.realtime_transcription !== loaded.realtime_transcription ||
+        current.record_only_enabled !== loaded.record_only_enabled ||
+        current.record_only_hotkey !== loaded.record_only_hotkey ||
         current.autostart !== loaded.autostart
     );
 }
@@ -45,6 +47,21 @@ export function validateSettings(config, modelStatus) {
     }
     if (config.data_saving_enabled && !config.data_saving_path) {
         return { valid: false, error: '启用数据保存时，必须设置保存路径' };
+    }
+    if (
+        config.record_only_enabled &&
+        config.record_only_hotkey === config.hotkey
+    ) {
+        return {
+            valid: false,
+            error: '录音快捷键不能与语音输入快捷键相同',
+        };
+    }
+    if (config.record_only_enabled && !config.data_saving_path) {
+        return {
+            valid: false,
+            error: '启用录音模式时，必须设置数据保存路径（录音文件保存在此）',
+        };
     }
     return { valid: true, error: null };
 }

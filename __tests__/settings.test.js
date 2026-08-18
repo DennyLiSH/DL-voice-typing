@@ -93,6 +93,16 @@ describe('isConfigDirty', () => {
             }),
         ).toBe(false);
     });
+
+    it('returns true when record_only_enabled differs', () => {
+        const current = { ...baseConfig, record_only_enabled: true };
+        expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
+
+    it('returns true when record_only_hotkey differs', () => {
+        const current = { ...baseConfig, record_only_hotkey: 'F9' };
+        expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
 });
 
 describe('validateSettings', () => {
@@ -192,6 +202,41 @@ describe('validateSettings', () => {
             whisper_model: 'custom:path/to/model.bin',
         };
         const result = validateSettings(config, {});
+        expect(result.valid).toBe(true);
+    });
+
+    it('returns invalid when record-only hotkey equals main hotkey', () => {
+        const config = {
+            ...baseConfig,
+            record_only_enabled: true,
+            record_only_hotkey: 'RightCtrl',
+            data_saving_path: 'D:\\recordings',
+        };
+        const result = validateSettings(config, modelStatus);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('录音快捷键');
+    });
+
+    it('returns invalid when record-only enabled but data saving path empty', () => {
+        const config = {
+            ...baseConfig,
+            record_only_enabled: true,
+            record_only_hotkey: 'RightAlt',
+            data_saving_path: '',
+        };
+        const result = validateSettings(config, modelStatus);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('数据保存路径');
+    });
+
+    it('returns valid when record-only enabled with distinct hotkey and path', () => {
+        const config = {
+            ...baseConfig,
+            record_only_enabled: true,
+            record_only_hotkey: 'RightAlt',
+            data_saving_path: 'D:\\recordings',
+        };
+        const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(true);
     });
 });

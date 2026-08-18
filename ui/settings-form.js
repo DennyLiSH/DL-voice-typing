@@ -30,6 +30,11 @@ const btnBrowsePath = document.getElementById('btn-browse-path');
 const reviewToggle = document.getElementById('review-toggle');
 const autostartToggle = document.getElementById('autostart-toggle');
 const realtimeToggle = document.getElementById('realtime-transcription-toggle');
+const recordOnlyToggle = document.getElementById('record-only-toggle');
+const recordOnlyHotkeyGroup = document.getElementById(
+    'record-only-hotkey-group',
+);
+const recordOnlyHotkeySelect = document.getElementById('record-only-hotkey');
 
 // State
 let loadedConfig = null;
@@ -162,6 +167,22 @@ const FIELDS = [
             );
         },
     },
+    {
+        key: 'record_only_enabled',
+        get: () => recordOnlyToggle.classList.contains('active'),
+        set: (v) => {
+            recordOnlyToggle.classList.toggle('active', !!v);
+            recordOnlyToggle.setAttribute('aria-checked', String(!!v));
+            updateRecordOnlyHotkeyState(!!v);
+        },
+    },
+    {
+        key: 'record_only_hotkey',
+        get: () => recordOnlyHotkeySelect.value,
+        set: (v) => {
+            recordOnlyHotkeySelect.value = v || 'RightAlt';
+        },
+    },
 ];
 
 export function populateFields(config) {
@@ -248,6 +269,15 @@ bindToggle(autostartToggle, {
 // --- Realtime Transcription Toggle ---
 
 bindToggle(realtimeToggle);
+
+// --- Record-Only Mode Toggle ---
+
+function updateRecordOnlyHotkeyState(enabled) {
+    recordOnlyHotkeyGroup.classList.toggle('disabled', !enabled);
+    recordOnlyHotkeySelect.disabled = !enabled;
+}
+
+bindToggle(recordOnlyToggle, { onToggle: updateRecordOnlyHotkeyState });
 
 // --- Folder Browser ---
 
@@ -337,6 +367,7 @@ export function getCurrentConfig() {
 // Track changes on all inputs
 languageSelect.addEventListener('change', updateDirtyState);
 hotkeySelect.addEventListener('change', updateDirtyState);
+recordOnlyHotkeySelect.addEventListener('change', updateDirtyState);
 downloadMirrorSelect.addEventListener('change', updateDirtyState);
 apiUrlInput.addEventListener('input', updateDirtyState);
 apiKeyInput.addEventListener('input', updateDirtyState);
