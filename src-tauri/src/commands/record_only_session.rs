@@ -459,6 +459,68 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Dropped audio never reaches the WAV: after a threshold stop the file
+    /// duration reflects only written samples, while `dropped_blocks` records
+    /// the lost wall-clock audio. The two numbers legitimately diverge.
+    #[test]
+    fn test_dropped_blocks_wav_shorter_than_wall_clock() {
+        let dir = temp_dir("drop-duration");
+        let (ps, _) = build_ps(record_only_config(&dir));
+        on_press(&ps);
+        assert_eq!(ps.sm_state(), Some(StateTag::RecordOnly));
+
+        // Push 1 second of real audio through the recorder (48kHz device
+        // rate → resampled to 16kHz by the recorder).
+        if let Some(mut g) = crate::util::lock_mutex(&ps.record_only, "record_only") {
+            if let Some(s) = g.as_mut() {
+                s.recorder.push_samples(&vec![0.3f32; 48000]);
+            }
+        }
+        // Simulate 51 lost blocks (~3.2s of audio that never made it to disk).
+        let counter = crate::util::lock_mutex(&ps.record_only, "record_only")
+            .and_then(|g| g.as_ref().map(|s| s.recorder.dropped_counter()));
+        assert!(counter.is_some());
+        let Some(counter) = counter else { return };
+        counter.fetch_add(51, Ordering::Relaxed);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while ps.sm_state() == Some(StateTag::RecordOnly) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+        // WAV on disk: ~1s (written samples only), not ~4.2s (wall clock).
+        let entries: Vec<_> = fs::read_dir(&dir)
+            .map(|rd| rd.flatten().collect())
+            .unwrap_or_default();
+        let wav_entry = entries
+            .iter()
+            .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("wav"));
+        assert!(wav_entry.is_some());
+        let Some(wav_entry) = wav_entry else { return };
+        let wav_len = wav_entry.metadata().map(|m| m.len()).unwrap_or(0);
+        assert!(wav_len >= 44);
+        let data_size = wav_len - 44;
+        let duration_ms = data_size * 1000 / (16_000 * 2);
+        // ~1s of written audio (resampler block granularity), not the ~4.2s
+        // wall clock including the 51 dropped blocks.
+        assert!((900..=1100).contains(&duration_ms));
+
+        // JSON remembers the lost audio separately.
+        let json_entry = entries
+            .iter()
+            .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"));
+        assert!(json_entry.is_some());
+        let Some(json_entry) = json_entry else { return };
+        let content = fs::read_to_string(json_entry.path());
+        assert!(content.is_ok());
+        let Ok(content) = content else { return };
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        assert_eq!(parsed["transcription_status"], "failed");
+        assert!(parsed["dropped_blocks"].as_u64().unwrap_or(0) >= 51);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_backpressure_monitor_controlled_stop() {
         let dir = temp_dir("backpressure");

@@ -315,6 +315,36 @@ describe('audio error event', () => {
     });
 });
 
+describe('zero-segment transcription', () => {
+    it('shows the empty state and disables inject when whisper returns 0 segments', async () => {
+        await loadFresh((cmd) => {
+            if (cmd === 'get_recording_segments') {
+                return Promise.resolve({
+                    segments: [],
+                    duration_ms: 4000,
+                    transcription_status: 'done',
+                    dropped_blocks: 0,
+                });
+            }
+            return defaultInvoke(cmd);
+        });
+        await selectFirstRecording();
+        expect(get('segments-empty').hidden).toBe(false);
+        expect(document.querySelectorAll('.segment-row').length).toBe(0);
+        expect(get('btn-inject').disabled).toBe(true);
+        // And injection is never attempted with empty merged text.
+        get('btn-inject').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        await flush();
+        expect(
+            invokeMock.mock.calls.some(
+                ([cmd]) => cmd === 'inject_transcript_text',
+            ),
+        ).toBe(false);
+    });
+});
+
 describe('segment interactions', () => {
     it('renders stored segments for a done recording (rule 8)', async () => {
         await loadFresh(defaultInvoke);

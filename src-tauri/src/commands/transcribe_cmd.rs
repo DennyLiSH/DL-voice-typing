@@ -761,6 +761,117 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn test_run_transcription_zero_segments() {
+        let dir = temp_dir("run-zero-seg");
+        let emitter = Arc::new(MockEmitter::new());
+        let clipboard = Arc::new(MockClipboard::new());
+        let ps = PipelineState::new(
+            Arc::new(Mutex::new(StateMachine::new())),
+            Arc::new(Mutex::new(MockAudioCapture::new())),
+            // Whisper produced zero segments (all filtered / silence).
+            Arc::new(MockEngine::new("").with_segments(vec![])),
+            clipboard,
+            Arc::new(PerfHistory::new()),
+            ConfigCache::new(AppConfig::default()),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(NoopWindowController),
+            emitter.clone() as Arc<dyn EventEmitter>,
+            Arc::new(MockReviewProvider::new()),
+        );
+        let json_path = write_pending_json(&dir, "2026-08-18_10-00-03");
+        let samples = vec![0.0f32; 16000];
+
+        run_transcription(
+            &ps,
+            &json_path,
+            "2026-08-18_10-00-03",
+            &samples,
+            false,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        // Zero segments is not an error: done, empty segments, empty text.
+        let events = event_names(&emitter);
+        assert!(events.iter().any(|e| e == "transcription-done"));
+        assert!(!events.iter().any(|e| e == "transcription-error"));
+        let content = std::fs::read_to_string(&json_path);
+        assert!(content.is_ok());
+        let Ok(content) = content else { return };
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        assert_eq!(parsed["transcription_status"], "done");
+        assert_eq!(parsed["transcription"], "");
+        assert_eq!(parsed["segments"].as_array().map(|a| a.len()), Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// LLM regression: a 5xx from the LLM endpoint must keep the raw
+    /// whisper transcription (status=done, llm_corrected=null) and surface
+    /// a user-friendly error event.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_transcription_llm_http_5xx_keeps_raw() {
+        use std::io::{Read, Write};
+        let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(l) => l,
+            Err(_) => return, // sandbox without network: skip gracefully
+        };
+        let addr = match listener.local_addr() {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        let dir = temp_dir("run-llm-5xx");
+        let cfg = AppConfig {
+            llm_enabled: true,
+            llm_api_url: format!("http://{addr}/v1/chat/completions"),
+            llm_api_key: "k".to_string(),
+            llm_model: "m".to_string(),
+            ..Default::default()
+        };
+        // No cached corrector → run_llm_correction builds a fresh LLMClient
+        // that hits the 5xx mock server.
+        let (ps, emitter, _) = build_ps(cfg, None);
+        let json_path = write_pending_json(&dir, "2026-08-18_10-00-04");
+        let samples = vec![0.0f32; 16000];
+
+        run_transcription(
+            &ps,
+            &json_path,
+            "2026-08-18_10-00-04",
+            &samples,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let events = emitter.take_events();
+        let names: Vec<&str> = events.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"transcription-done"));
+        let llm_err = events.iter().find(|(n, _)| n == "transcription-error");
+        assert!(llm_err.is_some());
+        if let Some((_, payload)) = llm_err {
+            assert_eq!(payload["message"], "LLM 纠错失败，已保留原始转录");
+        }
+
+        let content = std::fs::read_to_string(&json_path);
+        assert!(content.is_ok());
+        let Ok(content) = content else { return };
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        assert_eq!(parsed["transcription_status"], "done");
+        assert_eq!(parsed["transcription"], "测试转录文本");
+        assert!(parsed["llm_corrected"].is_null());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // --- segments_from_metadata ---
 
     #[test]
@@ -920,6 +1031,78 @@ mod tests {
         let dir = temp_dir("final-text-missing");
         let json_path = dir.join("2026-08-18_11-00-01.json");
         assert!(write_final_text(&json_path, "x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Mock E2E chain: record-only press → push audio → release (cleanup DAG)
+    /// → on-demand transcribe → inject with a dead target window (clipboard
+    /// fallback) → final_text persisted.
+    #[test]
+    fn test_record_only_to_inject_chain() {
+        let dir = temp_dir("e2e-chain");
+        let cfg = AppConfig {
+            record_only_enabled: true,
+            data_saving_path: dir.to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        let (ps, emitter, clipboard) = build_ps(cfg, None);
+
+        // 1. Record: press → 1s of audio → cleanup DAG (release path).
+        // MockAudioCapture runs at 48kHz; the recorder resamples to 16kHz.
+        crate::commands::record_only_session::on_press(&ps);
+        assert_eq!(ps.sm_state(), Some(crate::state::StateTag::RecordOnly));
+        if let Some(mut g) = crate::util::lock_mutex(&ps.record_only, "record_only") {
+            if let Some(s) = g.as_mut() {
+                s.recorder.push_samples(&vec![0.4f32; 48000]);
+            }
+        }
+        crate::commands::record_only_session::recover_session(&ps);
+        assert_eq!(ps.sm_state(), Some(crate::state::StateTag::Idle));
+
+        let stem = emitter
+            .take_events()
+            .into_iter()
+            .find(|(e, _)| e == "record-only-finished")
+            .and_then(|(_, p)| p["stem"].as_str().map(str::to_string));
+        assert!(stem.is_some());
+        let Some(stem) = stem else { return };
+        let json_path = dir.join(format!("{stem}.json"));
+        let read_json = |path: &Path| -> serde_json::Value {
+            std::fs::read_to_string(path)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_default()
+        };
+        assert_eq!(read_json(&json_path)["transcription_status"], "pending");
+
+        // 2. Transcribe on demand.
+        let wav_path = dir.join(format!("{stem}.wav"));
+        let read = read_wav_samples(&wav_path);
+        assert!(read.is_ok());
+        let Ok((samples, _)) = read else { return };
+        // 48kHz → 16kHz resampling: ~1s of audio (block-granularity tolerance).
+        assert!(samples.len() > 16000 - 2048 && samples.len() <= 16000 + 1024);
+        run_transcription(
+            &ps,
+            &json_path,
+            &stem,
+            &samples,
+            false,
+            Arc::new(AtomicBool::new(false)),
+        );
+        let after = read_json(&json_path);
+        assert_eq!(after["transcription_status"], "done");
+        assert_eq!(after["transcription"], "测试转录文本");
+
+        // 3. Inject with a dead target window: clipboard fallback holds the text.
+        let result = do_inject(&ps, 0, "测试转录文本", &INVALID_HWND_OPS);
+        assert!(result.is_err());
+        assert_eq!(clipboard.set_texts(), vec!["测试转录文本".to_string()]);
+        assert!(clipboard.injected().is_empty());
+
+        // 4. The delivered text is persisted as final_text.
+        assert!(write_final_text(&json_path, "测试转录文本").is_ok());
+        assert_eq!(read_json(&json_path)["final_text"], "测试转录文本");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

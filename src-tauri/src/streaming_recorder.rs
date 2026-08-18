@@ -481,6 +481,53 @@ mod tests {
     }
 
     #[test]
+    fn test_finalize_empty_wav() {
+        let dir = temp_dir("finalize-empty");
+        let rec = StreamingRecorder::start(&dir, TARGET_SAMPLE_RATE);
+        assert!(rec.is_ok());
+        let rec = match rec {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        // No samples pushed at all (press + immediate release).
+        let info = rec.finalize();
+        assert!(info.is_ok());
+        let info = match info {
+            Ok(i) => i,
+            Err(_) => return,
+        };
+        assert_eq!(info.data_size, 0);
+        assert_eq!(info.duration_ms(), 0);
+        let bytes = fs::read(&info.wav_path);
+        assert!(bytes.is_ok());
+        let bytes = match bytes {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        // Valid 44-byte header with zero data.
+        assert_eq!(bytes.len() as u64, WAV_HEADER_LEN);
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(read_u32_le(&bytes, 4), 36);
+        assert_eq!(read_u32_le(&bytes, 40), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_start_creates_missing_directory() {
+        let base = temp_dir("start-mkdir");
+        let nested = base.join("deep").join("nested");
+        let rec = StreamingRecorder::start(&nested, TARGET_SAMPLE_RATE);
+        assert!(rec.is_ok());
+        let rec = match rec {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        assert!(rec.wav_path().exists());
+        assert!(rec.finalize().is_ok());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn test_resampling_from_48k() {
         let dir = temp_dir("resample-48k");
         let rec = StreamingRecorder::start(&dir, 48_000);
