@@ -8,6 +8,8 @@
  * access, no side effects. The imperative glue lives in settings.js.
  */
 
+import { statusBadge } from './transcribe.js';
+
 /**
  * Format a byte count as a compact human-readable string.
  * Uses binary units (KB = 1024) and 1 decimal place above 1024.
@@ -108,6 +110,33 @@ export function buildRecordingRow(entry, opts = {}) {
     langSpan.className = 'data-row-lang';
     langSpan.textContent = entry.language || '—';
     row.appendChild(langSpan);
+
+    // Source badge (classic pipeline vs record-only mode)
+    const srcSpan = document.createElement('span');
+    if (entry.source === 'record_only') {
+        srcSpan.className = 'badge badge-source-record';
+        srcSpan.textContent = '录音';
+    } else {
+        srcSpan.className = 'badge badge-source-classic';
+        srcSpan.textContent = '经典';
+    }
+    row.appendChild(srcSpan);
+
+    // Transcription status + dropped-blocks badges (record-only only)
+    if (entry.source === 'record_only') {
+        const st = statusBadge(entry.transcription_status);
+        const stSpan = document.createElement('span');
+        stSpan.className = st.className;
+        stSpan.textContent = st.text;
+        row.appendChild(stSpan);
+
+        if (entry.dropped_blocks > 0) {
+            const warnSpan = document.createElement('span');
+            warnSpan.className = 'badge badge-warning';
+            warnSpan.textContent = '录音有洞';
+            row.appendChild(warnSpan);
+        }
+    }
 
     // Duration
     const durSpan = document.createElement('span');

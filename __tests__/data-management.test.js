@@ -278,6 +278,55 @@ describe('buildRecordingRow', () => {
         expect(preview.length).toBeLessThan(long.length);
         expect(preview.endsWith('…')).toBe(true);
     });
+
+    it('shows classic source badge and no status badge for classic entries', () => {
+        const row = buildRecordingRow({ ...baseEntry, source: 'classic' });
+        expect(row.querySelector('.badge-source-classic').textContent).toBe(
+            '经典',
+        );
+        expect(row.querySelector('.badge-done')).toBeNull();
+        expect(row.querySelector('.badge-warning')).toBeNull();
+    });
+
+    it('shows record source + status badges for record_only entries', () => {
+        const entry = {
+            ...baseEntry,
+            source: 'record_only',
+            transcription_status: 'done',
+            dropped_blocks: 0,
+        };
+        const row = buildRecordingRow(entry);
+        expect(row.querySelector('.badge-source-record').textContent).toBe(
+            '录音',
+        );
+        expect(row.querySelector('.badge-done').textContent).toBe('已转录');
+        expect(row.querySelector('.badge-warning')).toBeNull();
+    });
+
+    it('shows pending status badge for untranscribed record_only entries', () => {
+        const entry = {
+            ...baseEntry,
+            source: 'record_only',
+            transcription_status: 'pending',
+            dropped_blocks: 0,
+        };
+        const row = buildRecordingRow(entry);
+        expect(row.querySelector('.badge-pending').textContent).toBe('待转录');
+    });
+
+    it('shows dropped-blocks warning badge when dropped_blocks > 0', () => {
+        const entry = {
+            ...baseEntry,
+            source: 'record_only',
+            transcription_status: 'failed',
+            dropped_blocks: 12,
+        };
+        const row = buildRecordingRow(entry);
+        expect(row.querySelector('.badge-failed').textContent).toBe('转录失败');
+        expect(row.querySelector('.badge-warning').textContent).toBe(
+            '录音有洞',
+        );
+    });
 });
 
 describe('buildExpandedMetadata', () => {
