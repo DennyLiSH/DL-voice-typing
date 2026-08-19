@@ -1,0 +1,5 @@
+# Force LF on checkout. GitHub Windows runners (and default Git-for-Windows
+# clones) set core.autocrlf=true, which smudges LF blobs to CRLF on checkout
+# and breaks `biome check` (formatter lineEnding=lf) in CI. The eol attribute
+# takes precedence over core.autocrlf, so text files always check out as LF.
+* text=auto eol=lf
