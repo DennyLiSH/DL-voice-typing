@@ -52,7 +52,7 @@ impl PendingReview {
     pub fn consume_and_save(&self, final_text: Option<&str>) {
         if let Some(mut guard) = crate::util::lock_mutex(&self.data_saving, "pending_data") {
             if let Some(review_data) = guard.take() {
-                let _ = crate::data_saving::update_json_with_text(
+                let _ = crate::data_saving::set_transcription_result(
                     &review_data.json_path,
                     &review_data.raw_transcription,
                     review_data.llm_text.as_deref(),

@@ -174,17 +174,14 @@ pub async fn inject_transcript_text(
 /// Persist the injected text as `final_text` in the recording JSON,
 /// preserving the existing transcription / llm_corrected fields.
 fn write_final_text(json_path: &Path, text: &str) -> Result<(), CommandError> {
-    let content = std::fs::read_to_string(json_path)
-        .map_err(|e| CommandError::io(e, "failed to read recording metadata"))?;
-    let metadata: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| CommandError::io(e, "failed to parse recording metadata"))?;
-    let transcription = metadata
-        .get("transcription")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let llm_corrected = metadata.get("llm_corrected").and_then(|v| v.as_str());
-    crate::data_saving::update_json_with_text(json_path, transcription, llm_corrected, Some(text))
-        .map_err(CommandError::from)
+    let metadata = crate::data_saving::load_metadata(json_path)?;
+    crate::data_saving::set_transcription_result(
+        json_path,
+        metadata.transcription.as_deref().unwrap_or(""),
+        metadata.llm_corrected.as_deref(),
+        Some(text),
+    )
+    .map_err(CommandError::from)
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +313,7 @@ fn run_transcription(
         None
     };
 
-    if let Err(e) = crate::data_saving::update_json_with_segments(
+    if let Err(e) = crate::data_saving::set_segment_result(
         json_path,
         &segments,
         &transcription,
@@ -774,7 +771,12 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
         assert_eq!(parsed["transcription_status"], "done");
         assert_eq!(parsed["transcription"], "");
-        assert_eq!(parsed["segments"].as_array().map(|a| a.len()), Some(0));
+        // Empty segments are omitted on serialize (readers treat missing as empty).
+        assert!(
+            parsed
+                .get("segments")
+                .is_none_or(|s| s.as_array().is_some_and(|a| a.is_empty()))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -899,7 +901,7 @@ mod tests {
             end_ms: 1000,
         }];
         assert!(
-            crate::data_saving::update_json_with_segments(
+            crate::data_saving::set_segment_result(
                 &json_path,
                 &segments,
                 "原始转录",

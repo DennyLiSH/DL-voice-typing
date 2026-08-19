@@ -86,8 +86,6 @@ pub(crate) fn write_metadata_atomic(
 }
 
 /// Read-modify-write core shared by the semantic update entry points.
-// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
-#[allow(dead_code)]
 fn update_metadata_with(
     path: &std::path::Path,
     f: impl FnOnce(&mut RecordingMetadata),
@@ -99,8 +97,6 @@ fn update_metadata_with(
 
 /// Backfill a recording's JSON with transcription text (atomic).
 /// Replaces the former non-atomic `update_json_with_text`.
-// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
-#[allow(dead_code)]
 pub(crate) fn set_transcription_result(
     json_path: &std::path::Path,
     transcription: &str,
@@ -116,8 +112,6 @@ pub(crate) fn set_transcription_result(
 
 /// Backfill a record-only JSON with segment results, marking status "done"
 /// (atomic). Replaces `update_json_with_segments`.
-// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
-#[allow(dead_code)]
 pub(crate) fn set_segment_result(
     json_path: &std::path::Path,
     segments: &[crate::speech::Segment],
@@ -133,7 +127,7 @@ pub(crate) fn set_segment_result(
 }
 
 /// Save raw audio samples as a 16kHz mono WAV file with a companion JSON metadata file.
-/// The JSON initially has `transcription: null` — call `update_json_with_text()` after transcription.
+/// The JSON initially has no transcription — call `set_transcription_result()` after transcription.
 pub fn save_audio(
     samples: &[f32],
     original_sample_rate: u32,
@@ -159,50 +153,23 @@ pub fn save_audio(
     // Write WAV file.
     write_wav(&wav_path, &pcm_data, TARGET_SAMPLE_RATE)?;
 
-    // Write JSON metadata (transcription = null for now).
+    // Write JSON metadata atomically (no transcription yet).
     let duration_seconds = resampled.len() as f64 / TARGET_SAMPLE_RATE as f64;
-    let metadata = serde_json::json!({
-        "timestamp": now_rfc3339(),
-        "language": config.language,
-        "whisper_model": config.whisper_model,
-        "sample_rate": TARGET_SAMPLE_RATE,
-        "original_sample_rate": original_sample_rate,
-        "duration_seconds": (duration_seconds * 1000.0).round() / 1000.0,
-        "transcription": serde_json::Value::Null,
-        "llm_corrected": serde_json::Value::Null,
-    });
-    let json_content = serde_json::to_string_pretty(&metadata)?;
-    fs::write(&json_path, json_content)?;
+    let metadata = RecordingMetadata {
+        timestamp: Some(now_rfc3339()),
+        language: Some(config.language),
+        whisper_model: Some(config.whisper_model.clone()),
+        sample_rate: Some(TARGET_SAMPLE_RATE),
+        original_sample_rate: Some(original_sample_rate),
+        duration_seconds: Some((duration_seconds * 1000.0).round() / 1000.0),
+        ..Default::default()
+    };
+    write_metadata_atomic(&json_path, &metadata)?;
 
     Ok(SaveResult {
         wav_path,
         json_path,
     })
-}
-
-/// Update the JSON metadata file with transcription text.
-pub fn update_json_with_text(
-    json_path: &std::path::Path,
-    transcription: &str,
-    llm_corrected: Option<&str>,
-    final_text: Option<&str>,
-) -> Result<(), AppError> {
-    let content = fs::read_to_string(json_path)?;
-    let mut metadata: serde_json::Value = serde_json::from_str(&content)?;
-
-    metadata["transcription"] = serde_json::Value::String(transcription.to_string());
-    metadata["llm_corrected"] = match llm_corrected {
-        Some(text) => serde_json::Value::String(text.to_string()),
-        None => serde_json::Value::Null,
-    };
-    metadata["final_text"] = match final_text {
-        Some(text) => serde_json::Value::String(text.to_string()),
-        None => serde_json::Value::Null,
-    };
-
-    let updated = serde_json::to_string_pretty(&metadata)?;
-    fs::write(json_path, updated)?;
-    Ok(())
 }
 
 /// Convert f32 samples to i16 with clamping. NaN/Inf → 0.
@@ -276,30 +243,6 @@ pub(crate) fn generate_timestamp_filename() -> String {
         .unwrap_or_else(|_| time::format_description::parse("[year]-[month]-[day]").unwrap());
     now.format(&format)
         .unwrap_or_else(|_| now.format(&Rfc3339).unwrap())
-}
-
-/// Backfill a record-only JSON with segment transcription results.
-/// Sets `segments`, `transcription` (merged segment text), `llm_corrected`
-/// (null when LLM was unused or failed), and marks `transcription_status`
-/// as "done". Written atomically (temp file + rename).
-pub(crate) fn update_json_with_segments(
-    json_path: &std::path::Path,
-    segments: &[crate::speech::Segment],
-    transcription: &str,
-    llm_corrected: Option<&str>,
-) -> Result<(), AppError> {
-    let content = fs::read_to_string(json_path)?;
-    let mut metadata: serde_json::Value = serde_json::from_str(&content)?;
-
-    metadata["segments"] = serde_json::to_value(segments)?;
-    metadata["transcription"] = serde_json::Value::String(transcription.to_string());
-    metadata["llm_corrected"] = match llm_corrected {
-        Some(text) => serde_json::Value::String(text.to_string()),
-        None => serde_json::Value::Null,
-    };
-    metadata["transcription_status"] = serde_json::Value::String("done".to_string());
-
-    atomic_write_json(json_path, &metadata)
 }
 
 /// Write JSON metadata atomically: temp file + rename, so a crash mid-write
@@ -468,7 +411,7 @@ mod tests {
         });
         fs::write(&json_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
-        update_json_with_text(&json_path, "你好世界", Some("你好世界"), None).unwrap();
+        set_transcription_result(&json_path, "你好世界", Some("你好世界"), None).unwrap();
 
         let updated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();
@@ -492,7 +435,7 @@ mod tests {
         });
         fs::write(&json_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
-        update_json_with_text(
+        set_transcription_result(
             &json_path,
             "原始转录",
             Some("LLM纠正"),
@@ -523,7 +466,7 @@ mod tests {
         fs::write(&json_path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
         // Cancel: final_text is None
-        update_json_with_text(&json_path, "原始转录", None, None).unwrap();
+        set_transcription_result(&json_path, "原始转录", None, None).unwrap();
 
         let updated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&json_path).unwrap()).unwrap();

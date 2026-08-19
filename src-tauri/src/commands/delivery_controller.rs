@@ -699,7 +699,7 @@ impl DeliveryController {
         let Some(rd) = review_data else {
             return Ok(());
         };
-        crate::data_saving::update_json_with_text(
+        crate::data_saving::set_transcription_result(
             &rd.json_path,
             &rd.raw_transcription,
             rd.llm_text.as_deref(),
@@ -715,7 +715,7 @@ impl DeliveryController {
         let Some(rd) = review_data else {
             return Ok(());
         };
-        crate::data_saving::update_json_with_text(
+        crate::data_saving::set_transcription_result(
             &rd.json_path,
             &rd.raw_transcription,
             rd.llm_text.as_deref(),
