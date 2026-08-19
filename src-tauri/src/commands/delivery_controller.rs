@@ -177,46 +177,15 @@ impl DeliveryController {
             return;
         }
 
-        let t_inject = Instant::now();
-        let inject_result = self.save_and_inject(&text).await;
-
-        perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-        perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
-        perf.text_length = text.len();
-
-        if let Err(ref e) = inject_result {
-            warn!("inject_direct: injection failed: {e}");
-            // Deliberately not routed through finish(): failure timing/side-effects don't match
-            // any FinishOutcome variant — paste did not complete, so best-effort cleanup + reset
-            // happens inline.
-            self.emitter.emit(
-                "injection-error",
-                serde_json::to_value(e).unwrap_or_default(),
-            );
-            let _ = self.restore_clipboard();
-            self.window_controller.hide_floating();
-            ps.sm_reset();
-            return;
-        }
-
-        let review_data = save_result.map(|sr| ReviewData {
-            json_path: sr.json_path,
-            raw_transcription: transcription,
-            llm_text: if policy.llm_enabled {
-                Some(text.clone())
-            } else {
-                None
-            },
-        });
-        self.store_context(review_data, perf.clone(), t_press_for_e2e);
-        let ctx = self.take_context();
-        self.finish(
+        self.inject_via_finish(
             ps,
-            ctx,
-            FinishOutcome::Deliver {
-                final_text: text,
-                hide_review: false,
-            },
+            text,
+            transcription,
+            save_result,
+            policy,
+            perf,
+            t_press_for_e2e,
+            false,
             "inject_direct",
         )
         .await;
@@ -238,7 +207,7 @@ impl DeliveryController {
         transcription: String,
         save_result: Option<SaveResult>,
         policy: &SessionPolicy,
-        perf: PerfMetrics,
+        mut perf: PerfMetrics,
         t_press_for_e2e: Instant,
         llm_transition: bool,
     ) {
@@ -356,49 +325,20 @@ impl DeliveryController {
             self.store_context(review_data, perf, t_press_for_e2e);
         } else {
             warn!("show_review: review window not found. Falling back to direct injection.");
-            // Clear residual context from any prior cycle; the inline inject path below calls take_context + finish(Deliver) for the rest.
+            // Clear residual context from any prior cycle; the inject path below
+            // stores fresh context and finishes with Deliver.
             let _ = self.take_context();
             // Reviewing -> Injecting, then inject.
             ps.sm_reviewing_to_injecting();
-            let mut fallback_perf = perf;
-            let t_inject = Instant::now();
-            let inject_result = self.save_and_inject(&final_text).await;
-
-            fallback_perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-            fallback_perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
-            fallback_perf.text_length = final_text.len();
-
-            if let Err(ref e) = inject_result {
-                warn!("show_review: fallback injection failed: {e}");
-                self.emitter.emit(
-                    "injection-error",
-                    serde_json::to_value(e).unwrap_or_default(),
-                );
-                let _ = self.restore_clipboard();
-                self.window_controller.hide_review();
-                self.window_controller.hide_floating();
-                ps.sm_reset();
-                return;
-            }
-
-            let review_data = save_result.map(|sr| ReviewData {
-                json_path: sr.json_path,
-                raw_transcription: transcription,
-                llm_text: if policy.llm_enabled {
-                    Some(final_text.clone())
-                } else {
-                    None
-                },
-            });
-            self.store_context(review_data, fallback_perf.clone(), t_press_for_e2e);
-            let ctx = self.take_context();
-            self.finish(
+            self.inject_via_finish(
                 ps,
-                ctx,
-                FinishOutcome::Deliver {
-                    final_text,
-                    hide_review: true,
-                },
+                final_text,
+                transcription,
+                save_result,
+                policy,
+                &mut perf,
+                t_press_for_e2e,
+                true,
                 "show_review_fallback",
             )
             .await;
@@ -590,6 +530,73 @@ impl DeliveryController {
                 hide_review: true,
             },
             "confirm_from_reviewing",
+        )
+        .await;
+    }
+
+    /// Shared tail of the two direct-injection sites (`inject_direct` and
+    /// the `show_review` fallback): inject → perf fill → error cleanup →
+    /// ReviewData build → store_context → finish(Deliver). Entry transitions
+    /// and context preparation stay at the callers. `review_ui_active`
+    /// controls both the finish hide_review flag and the error-path review
+    /// window hide (the two sites differ in exactly this).
+    #[allow(clippy::too_many_arguments)]
+    async fn inject_via_finish(
+        &self,
+        ps: &PipelineState,
+        text: String,
+        transcription: String,
+        save_result: Option<SaveResult>,
+        policy: &SessionPolicy,
+        perf: &mut PerfMetrics,
+        t_press_for_e2e: Instant,
+        review_ui_active: bool,
+        site_label: &'static str,
+    ) {
+        let t_inject = Instant::now();
+        let inject_result = self.save_and_inject(&text).await;
+
+        perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
+        perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
+        perf.text_length = text.len();
+
+        if let Err(ref e) = inject_result {
+            warn!("{site_label}: injection failed: {e}");
+            // Deliberately not routed through finish(): failure timing/side-effects
+            // don't match any FinishOutcome variant — paste did not complete, so
+            // best-effort cleanup + reset happens inline.
+            self.emitter.emit(
+                "injection-error",
+                serde_json::to_value(e).unwrap_or_default(),
+            );
+            let _ = self.restore_clipboard();
+            if review_ui_active {
+                self.window_controller.hide_review();
+            }
+            self.window_controller.hide_floating();
+            ps.sm_reset();
+            return;
+        }
+
+        let review_data = save_result.map(|sr| ReviewData {
+            json_path: sr.json_path,
+            raw_transcription: transcription,
+            llm_text: if policy.llm_enabled {
+                Some(text.clone())
+            } else {
+                None
+            },
+        });
+        self.store_context(review_data, perf.clone(), t_press_for_e2e);
+        let ctx = self.take_context();
+        self.finish(
+            ps,
+            ctx,
+            FinishOutcome::Deliver {
+                final_text: text,
+                hide_review: review_ui_active,
+            },
+            site_label,
         )
         .await;
     }
