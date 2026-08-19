@@ -14,7 +14,7 @@ use std::fs;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -65,14 +65,59 @@ pub fn exceeds_drop_threshold(dropped: u64) -> bool {
 /// the shared counter (the session layer polls `dropped_blocks` /
 /// `exceeds_drop_threshold` to trigger a controlled stop).
 pub struct StreamingRecorder {
-    sender: Option<mpsc::SyncSender<Vec<i16>>>,
+    core: Arc<Mutex<PushCore>>,
     result_rx: Option<mpsc::Receiver<Result<u64, AppError>>>,
     writer_handle: Option<JoinHandle<()>>,
-    resampler: Option<Resampler>,
-    pending_block: Vec<i16>,
     dropped: Arc<AtomicU64>,
     wav_path: PathBuf,
     stem: String,
+}
+
+/// Push-side state shared between the audio callback (via `PushHandle`)
+/// and the recorder's shutdown path. `sender` is taken (None) on shutdown;
+/// after that, pushes are no-ops.
+struct PushCore {
+    sender: Option<mpsc::SyncSender<Vec<i16>>>,
+    resampler: Option<Resampler>,
+    pending_block: Vec<i16>,
+    dropped: Arc<AtomicU64>,
+}
+
+/// Cloneable handle to a running recorder's push side. Held by the cpal
+/// audio callback so the audio hot path never locks the session slot in
+/// `PipelineState` — only this recorder-internal core.
+// Dead in non-test builds until the cpal callback adopts it (next task).
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone)]
+pub(crate) struct PushHandle(Arc<Mutex<PushCore>>);
+
+impl PushHandle {
+    /// Feed device-rate f32 samples (audio-callback context). Resamples to
+    /// 16kHz, converts to i16, ships full blocks to the writer thread.
+    /// Full channel → block dropped + counted. No-op after shutdown.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn push(&self, samples: &[f32]) {
+        if let Some(mut core) = crate::util::lock_mutex(&self.0, "recorder_push") {
+            push_into_core(&mut core, samples);
+        }
+    }
+}
+
+/// Shared push logic for both `PushHandle::push` and `StreamingRecorder::push_samples`.
+fn push_into_core(core: &mut PushCore, samples: &[f32]) {
+    let Some(sender) = &core.sender else {
+        return;
+    };
+    let resampled: &[f32] = match &mut core.resampler {
+        Some(r) => r.process(samples),
+        None => samples,
+    };
+    let pcm = f32_to_i16_clamped(resampled);
+    core.pending_block.extend_from_slice(&pcm);
+    while core.pending_block.len() >= BLOCK_SAMPLES {
+        let block: Vec<i16> = core.pending_block.drain(..BLOCK_SAMPLES).collect();
+        try_send_block(sender, block, &core.dropped);
+    }
 }
 
 impl StreamingRecorder {
@@ -96,16 +141,20 @@ impl StreamingRecorder {
             .spawn(move || writer_main(writer, &rx, &result_tx))
             .map_err(AppError::Io)?;
 
-        let resampler = (device_sample_rate != TARGET_SAMPLE_RATE)
-            .then(|| Resampler::new(device_sample_rate, TARGET_SAMPLE_RATE));
+        let dropped = Arc::new(AtomicU64::new(0));
+        let core = Arc::new(Mutex::new(PushCore {
+            sender: Some(tx),
+            resampler: (device_sample_rate != TARGET_SAMPLE_RATE)
+                .then(|| Resampler::new(device_sample_rate, TARGET_SAMPLE_RATE)),
+            pending_block: Vec::with_capacity(BLOCK_SAMPLES * 2),
+            dropped: dropped.clone(),
+        }));
 
         Ok(Self {
-            sender: Some(tx),
+            core,
             result_rx: Some(result_rx),
             writer_handle: Some(handle),
-            resampler,
-            pending_block: Vec::with_capacity(BLOCK_SAMPLES * 2),
-            dropped: Arc::new(AtomicU64::new(0)),
+            dropped,
             wav_path,
             stem,
         })
@@ -132,19 +181,15 @@ impl StreamingRecorder {
     /// Resamples to 16kHz, converts to i16, and ships full blocks to the
     /// writer thread. Full channel → block dropped + counted.
     pub fn push_samples(&mut self, samples: &[f32]) {
-        let Some(sender) = &self.sender else {
-            return;
-        };
-        let resampled: &[f32] = match &mut self.resampler {
-            Some(r) => r.process(samples),
-            None => samples,
-        };
-        let pcm = f32_to_i16_clamped(resampled);
-        self.pending_block.extend_from_slice(&pcm);
-        while self.pending_block.len() >= BLOCK_SAMPLES {
-            let block: Vec<i16> = self.pending_block.drain(..BLOCK_SAMPLES).collect();
-            try_send_block(sender, block, &self.dropped);
+        if let Some(mut core) = crate::util::lock_mutex(&self.core, "recorder_push") {
+            push_into_core(&mut core, samples);
         }
+    }
+
+    /// Cloneable push-side handle for the audio callback (see `PushHandle`).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn push_handle(&self) -> PushHandle {
+        PushHandle(self.core.clone())
     }
 
     /// Normal stop: close the channel, wait for the writer to flush and
@@ -161,15 +206,19 @@ impl StreamingRecorder {
     }
 
     fn shutdown(mut self, timeout: Option<Duration>) -> Result<FinalizeInfo, AppError> {
-        // Ship the pending tail (partial block) so no audio is lost.
-        if let Some(sender) = &self.sender {
-            if !self.pending_block.is_empty() {
-                let tail = std::mem::take(&mut self.pending_block);
-                try_send_block(sender, tail, &self.dropped);
+        // Ship the pending tail (partial block) so no audio is lost, then
+        // close the data channel so the writer sees EOF and finalizes.
+        // After the sender is taken, callback pushes (via PushHandle) are
+        // no-ops — late callbacks cannot corrupt the finalized file.
+        if let Some(mut core) = crate::util::lock_mutex(&self.core, "recorder_push") {
+            if !core.pending_block.is_empty() {
+                let tail = std::mem::take(&mut core.pending_block);
+                if let Some(sender) = &core.sender {
+                    try_send_block(sender, tail, &core.dropped);
+                }
             }
+            core.sender.take();
         }
-        // Close the data channel so the writer sees EOF and finalizes.
-        drop(self.sender.take());
         let Some(result_rx) = self.result_rx.take() else {
             return Err(AppError::Audio(
                 "record-only recorder already shut down".to_string(),
@@ -751,6 +800,71 @@ mod tests {
             Err(_) => return,
         };
         assert_eq!(info.data_size, 16000);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_push_handle_feeds_writer() {
+        let dir = temp_dir("handle-feed");
+        let rec = StreamingRecorder::start(&dir, 16_000).unwrap();
+        let handle = rec.push_handle();
+        handle.push(&vec![0.5f32; 16_000]);
+        let info = rec.finalize().unwrap();
+        assert!((900..=1100).contains(&info.duration_ms()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_push_handle_resamples_48k() {
+        let dir = temp_dir("handle-48k");
+        let rec = StreamingRecorder::start(&dir, 48_000).unwrap();
+        let handle = rec.push_handle();
+        handle.push(&vec![0.3f32; 48_000]);
+        let info = rec.finalize().unwrap();
+        assert!((900..=1100).contains(&info.duration_ms()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_push_handle_clones_share_core() {
+        let dir = temp_dir("handle-clone");
+        let rec = StreamingRecorder::start(&dir, 16_000).unwrap();
+        let h1 = rec.push_handle();
+        let h2 = h1.clone();
+        h1.push(&vec![0.25f32; 8_000]);
+        h2.push(&vec![0.25f32; 8_000]);
+        let info = rec.finalize().unwrap();
+        assert!((900..=1100).contains(&info.duration_ms()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_push_handle_noop_after_finalize() {
+        let dir = temp_dir("handle-noop");
+        let rec = StreamingRecorder::start(&dir, 16_000).unwrap();
+        let handle = rec.push_handle();
+        let _ = rec.finalize().unwrap();
+        handle.push(&vec![0.5f32; 100]); // sender already taken; must no-op, not panic
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_push_handle_concurrent_push_vs_finalize() {
+        let dir = temp_dir("handle-concurrent");
+        let rec = StreamingRecorder::start(&dir, 16_000).unwrap();
+        let handle = rec.push_handle();
+        let pusher = std::thread::spawn(move || {
+            for _ in 0..20 {
+                handle.push(&vec![0.5f32; 1_600]);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        });
+        std::thread::sleep(Duration::from_millis(10));
+        let info = rec.finalize().unwrap();
+        pusher.join().unwrap();
+        // Regardless of interleaving, the WAV must parse and be non-empty
+        // (late pushes are no-ops).
+        assert!(info.data_size > 0);
         let _ = fs::remove_dir_all(&dir);
     }
 }
