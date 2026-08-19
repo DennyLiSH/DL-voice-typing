@@ -33,3 +33,6 @@ pgo-data/
 .flake-diagnostic.diff
 .pre-c1-anchor
 .tmp/
+
+# stray cargo target dir from CARGO_TARGET_DIR=t typos
+src-tauri/t/
