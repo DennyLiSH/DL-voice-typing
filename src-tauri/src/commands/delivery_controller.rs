@@ -66,20 +66,15 @@ pub(crate) struct DeliveryController {
 }
 
 /// Focus-settle delay after SetForegroundWindow before SendInput (Ctrl+V).
-// 临时过渡（Task 2 切换调用点后移除）：见 inject_to_hwnd 注释。
-#[cfg_attr(not(test), allow(dead_code))]
 const FOCUS_SETTLE_MS: Duration = Duration::from_millis(100);
 
 /// Win32 focus operations for detached delivery, injectable for tests
 /// (production: `WIN32_FOCUS_OPS`; tests pass plain fn pointers).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct FocusOps {
     pub(crate) is_valid: fn(isize) -> bool,
     pub(crate) focus: fn(isize) -> bool,
 }
 
-// 临时过渡（Task 2 切换调用点后移除）：测试 target 下也无引用，需无条件豁免。
-#[allow(dead_code)]
 pub(crate) const WIN32_FOCUS_OPS: FocusOps = FocusOps {
     is_valid: crate::win32::is_window_valid,
     focus: crate::win32::restore_foreground_hwnd_checked,
@@ -89,8 +84,6 @@ pub(crate) const WIN32_FOCUS_OPS: FocusOps = FocusOps {
 /// paste was never attempted — the text stays in the clipboard as 留底.
 /// `Clipboard` means the paste was attempted and failed — the saved clipboard
 /// content has been restored.
-// 临时过渡（Task 2 切换调用点后移除）：Clipboard 变体字段暂无读取方。
-#[allow(dead_code)]
 pub(crate) enum InjectError {
     WindowGone,
     FocusFailed,
@@ -775,8 +768,6 @@ impl DeliveryController {
     /// recover()). Three-tier failure contract: window gone / focus failed →
     /// text left in the clipboard as 留底 (manual paste fallback); inject
     /// failed → saved content restored.
-    // 临时过渡（Task 2 切换调用点后移除）：lib target 下暂无生产调用方。
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn inject_to_hwnd(
         &self,
         hwnd: isize,
@@ -784,12 +775,16 @@ impl DeliveryController {
         ops: &FocusOps,
     ) -> Result<(), InjectError> {
         if !(ops.is_valid)(hwnd) {
-            let _ = self.clipboard.set_text(text);
+            if let Err(e) = self.clipboard.set_text(text) {
+                warn!(target: "delivery", "inject_to_hwnd: fallback set_text failed: {e}");
+            }
             return Err(InjectError::WindowGone);
         }
         if !(ops.focus)(hwnd) {
             // Do NOT restore: the transcript stays in the clipboard as 留底.
-            let _ = self.clipboard.set_text(text);
+            if let Err(e) = self.clipboard.set_text(text) {
+                warn!(target: "delivery", "inject_to_hwnd: fallback set_text failed: {e}");
+            }
             return Err(InjectError::FocusFailed);
         }
         // Let the OS process the focus change before simulating keystrokes —

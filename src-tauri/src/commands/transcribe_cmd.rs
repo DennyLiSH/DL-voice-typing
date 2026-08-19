@@ -9,6 +9,7 @@
 //! (validation, paths, re-entry) return `CommandError`.
 
 use crate::commands::data_management_cmd::resolve_child;
+use crate::commands::delivery_controller::{InjectError, WIN32_FOCUS_OPS};
 use crate::commands::pipeline_state::PipelineState;
 use crate::error::CommandError;
 use crate::speech::Segment;
@@ -159,11 +160,11 @@ pub async fn inject_transcript_text(
     };
     let ps_owned = ps.inner().clone();
     let text_for_task = trimmed.clone();
-    let inject_result = tokio::task::spawn_blocking(move || {
-        do_inject(&ps_owned, hwnd, &text_for_task, &WIN32_FOCUS_OPS)
-    })
-    .await
-    .map_err(|e| CommandError::new("INTERNAL", format!("inject task failed: {e}")))?;
+    let inject_result = ps_owned
+        .delivery
+        .inject_to_hwnd(hwnd, &text_for_task, &WIN32_FOCUS_OPS)
+        .await
+        .map_err(inject_error_to_command);
     if let Err(e) = write_final_text(&json_path, &trimmed) {
         warn!("transcribe inject: final_text write failed for {filename}: {e}");
     }
@@ -375,49 +376,19 @@ fn run_llm_correction(
 // Injection
 // ---------------------------------------------------------------------------
 
-/// Win32 focus operations, injectable for tests.
-pub(crate) struct FocusOps {
-    pub(crate) is_valid: fn(isize) -> bool,
-    pub(crate) focus: fn(isize) -> bool,
-}
-
-pub(crate) const WIN32_FOCUS_OPS: FocusOps = FocusOps {
-    is_valid: crate::win32::is_window_valid,
-    focus: crate::win32::restore_foreground_hwnd_checked,
-};
-
-/// Blocking injection body: IsWindow check → clipboard save → checked
-/// SetForeground → Ctrl+V paste → clipboard restore. Fallback paths leave
-/// the text in the clipboard (PII warning is part of the error message).
-fn do_inject(
-    ps: &PipelineState,
-    hwnd: isize,
-    text: &str,
-    ops: &FocusOps,
-) -> Result<(), CommandError> {
-    if !(ops.is_valid)(hwnd) {
-        let _ = ps.clipboard.set_text(text);
-        return Err(CommandError::state(
-            "目标窗口已关闭，文本已复制到剪贴板，请尽快粘贴并覆盖",
-        ));
+/// Map the detached-delivery domain error to command-layer `CommandError`.
+/// The two Chinese messages are a byte-identical frontend contract
+/// (toast display) — guarded by test_inject_error_messages_byte_identical.
+fn inject_error_to_command(e: InjectError) -> CommandError {
+    match e {
+        InjectError::WindowGone => {
+            CommandError::state("目标窗口已关闭，文本已复制到剪贴板，请尽快粘贴并覆盖")
+        }
+        InjectError::FocusFailed => {
+            CommandError::state("无法聚焦目标窗口，文本已复制到剪贴板，请尽快粘贴并覆盖")
+        }
+        InjectError::Clipboard(e) => CommandError::from(e),
     }
-    ps.clipboard.save().map_err(CommandError::from)?;
-    if !(ops.focus)(hwnd) {
-        // Do NOT restore: the transcript stays in the clipboard as留底.
-        let _ = ps.clipboard.set_text(text);
-        return Err(CommandError::state(
-            "无法聚焦目标窗口，文本已复制到剪贴板，请尽快粘贴并覆盖",
-        ));
-    }
-    if let Err(e) = ps.clipboard.inject_text(text) {
-        let _ = ps.clipboard.restore();
-        return Err(CommandError::from(e));
-    }
-    if let Err(e) = ps.clipboard.restore() {
-        warn!("transcribe inject: clipboard restore failed: {e}");
-    }
-    info!("transcript_injected: {} chars", text.chars().count());
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -902,82 +873,6 @@ mod tests {
         assert_eq!(out.dropped_blocks, 3);
     }
 
-    // --- do_inject ---
-
-    const INVALID_HWND_OPS: FocusOps = FocusOps {
-        is_valid: |_| false,
-        focus: |_| false,
-    };
-
-    #[test]
-    fn test_do_inject_invalid_hwnd_leaves_clipboard() {
-        let (ps, _, clipboard) = build_ps(AppConfig::default(), None);
-        let result = do_inject(&ps, 0, "注入文本", &INVALID_HWND_OPS);
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(e.message.contains("剪贴板"));
-        }
-        // Fallback: text left in the clipboard, no paste simulated.
-        assert_eq!(clipboard.set_texts(), vec!["注入文本".to_string()]);
-        assert!(clipboard.injected().is_empty());
-    }
-
-    #[test]
-    fn test_do_inject_focus_failure_leaves_clipboard() {
-        let (ps, _, clipboard) = build_ps(AppConfig::default(), None);
-        let ops = FocusOps {
-            is_valid: |_| true,
-            focus: |_| false,
-        };
-        let result = do_inject(&ps, 1, "聚焦失败文本", &ops);
-        assert!(result.is_err());
-        // Clipboard was saved first, then text left as留底, no restore/paste.
-        assert!(clipboard.saved());
-        assert_eq!(clipboard.set_texts(), vec!["聚焦失败文本".to_string()]);
-        assert!(clipboard.injected().is_empty());
-        assert!(!clipboard.restored());
-    }
-
-    #[test]
-    fn test_do_inject_success_path() {
-        let (ps, _, clipboard) = build_ps(AppConfig::default(), None);
-        let ops = FocusOps {
-            is_valid: |_| true,
-            focus: |_| true,
-        };
-        let result = do_inject(&ps, 1, "成功文本", &ops);
-        assert!(result.is_ok());
-        assert!(clipboard.saved());
-        assert_eq!(clipboard.injected(), vec!["成功文本".to_string()]);
-        assert!(clipboard.restored());
-    }
-
-    #[test]
-    fn test_do_inject_save_failure_aborts() {
-        let emitter = Arc::new(MockEmitter::new());
-        let clipboard = Arc::new(MockClipboard::new().with_save_error("clipboard busy"));
-        let ps = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("x")),
-            clipboard.clone(),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            emitter as Arc<dyn EventEmitter>,
-            Arc::new(MockReviewProvider::new()),
-        );
-        let ops = FocusOps {
-            is_valid: |_| true,
-            focus: |_| true,
-        };
-        let result = do_inject(&ps, 1, "文本", &ops);
-        assert!(result.is_err());
-        assert!(clipboard.injected().is_empty());
-    }
-
     // --- path traversal ---
 
     #[test]
@@ -1034,11 +929,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    use crate::commands::delivery_controller::{FocusOps, InjectError};
+
+    // --- inject error mapping (byte-identical frontend contract) ---
+
+    #[test]
+    fn test_inject_error_messages_byte_identical() {
+        assert_eq!(
+            inject_error_to_command(InjectError::WindowGone).message,
+            "目标窗口已关闭，文本已复制到剪贴板，请尽快粘贴并覆盖"
+        );
+        assert_eq!(
+            inject_error_to_command(InjectError::FocusFailed).message,
+            "无法聚焦目标窗口，文本已复制到剪贴板，请尽快粘贴并覆盖"
+        );
+        // Clipboard variant: only `.code` asserted — the message comes from
+        // the unchanged legacy From<AppError> conversion, not a fixed contract.
+        assert_eq!(
+            inject_error_to_command(InjectError::Clipboard(crate::error::AppError::Clipboard(
+                "x".to_string()
+            )))
+            .code,
+            CommandError::from(crate::error::AppError::Clipboard("x".to_string())).code
+        );
+    }
+
     /// Mock E2E chain: record-only press → push audio → release (cleanup DAG)
     /// → on-demand transcribe → inject with a dead target window (clipboard
     /// fallback) → final_text persisted.
-    #[test]
-    fn test_record_only_to_inject_chain() {
+    const DEAD_WINDOW_OPS: FocusOps = FocusOps {
+        is_valid: |_| false,
+        focus: |_| false,
+    };
+
+    #[tokio::test]
+    async fn test_record_only_to_inject_chain() {
         let dir = temp_dir("e2e-chain");
         let cfg = AppConfig {
             record_only_enabled: true,
@@ -1095,7 +1020,10 @@ mod tests {
         assert_eq!(after["transcription"], "测试转录文本");
 
         // 3. Inject with a dead target window: clipboard fallback holds the text.
-        let result = do_inject(&ps, 0, "测试转录文本", &INVALID_HWND_OPS);
+        let result = ps
+            .delivery
+            .inject_to_hwnd(0, "测试转录文本", &DEAD_WINDOW_OPS)
+            .await;
         assert!(result.is_err());
         assert_eq!(clipboard.set_texts(), vec!["测试转录文本".to_string()]);
         assert!(clipboard.injected().is_empty());
