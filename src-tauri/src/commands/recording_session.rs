@@ -144,13 +144,13 @@ impl RecordingSession {
     /// Runs on the Win32 hook thread — must be synchronous and non-blocking.
     pub(crate) fn on_press(&self) {
         let t_press = Instant::now();
-        let cycle_id = self.ps.perf_history.next_cycle_id();
+        let cycle_id = self.ps.perf_history().next_cycle_id();
 
         let can_record = self.ps.sm_start_recording();
 
-        if can_record && !self.ps.engine.is_ready() {
+        if can_record && !self.ps.engine().is_ready() {
             reset_to_idle(&self.ps);
-            self.ps.emitter.emit(
+            self.ps.emitter().emit(
                 "speech-error",
                 serde_json::to_value("模型加载中，请稍候...").unwrap_or_default(),
             );
@@ -159,9 +159,9 @@ impl RecordingSession {
 
         if can_record {
             // === Session state cleanup: prevent leaks from previous session ===
-            self.ps.review.set_shown_on_press(false);
+            self.ps.review().set_shown_on_press(false);
             if let Some(mut rt_guard) =
-                crate::util::lock_mutex(&self.ps.realtime_transcriber, "realtime_transcriber")
+                crate::util::lock_mutex(&self.ps.realtime_transcriber(), "realtime_transcriber")
             {
                 if let Some(ref mut rt) = *rt_guard {
                     rt.stop();
@@ -169,7 +169,7 @@ impl RecordingSession {
                 }
             }
 
-            let policy = SessionPolicy::from_config(&self.ps.config_cache.read_cached());
+            let policy = SessionPolicy::from_config(&self.ps.config_cache().read_cached());
             let mode = policy.mode;
 
             // Show floating window near text caret (RealtimeReview shows review instead).
@@ -179,24 +179,22 @@ impl RecordingSession {
                 mode, show_floating
             );
             if show_floating {
-                self.ps.window_controller.show_floating_near_caret();
+                self.ps.window_controller().show_floating_near_caret();
             }
             self.ps
-                .emitter
+                .emitter()
                 .emit("recording-start", serde_json::Value::Null);
 
             // Clear ring buffer for new recording session.
-            if let Some(mut buf) =
-                crate::util::lock_mutex(&self.ps.audio_ring_buffer, "audio_ring_buffer")
-            {
-                buf.clear();
-            }
+            self.ps.clear_ring();
 
             // Start audio capture with RMS-emitting callback (~30 fps).
             let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
-            if let Some(mut ac_guard) = crate::util::lock_mutex(&self.ps.ac, "audio_capture") {
-                let ring_buf_for_audio = Arc::clone(&self.ps.audio_ring_buffer);
-                let emitter_for_rms = self.ps.emitter.clone();
+            if let Some(mut ac_guard) =
+                crate::util::lock_mutex(&self.ps.audio_capture(), "audio_capture")
+            {
+                let ring_buf_for_audio = self.ps.ring_buffer();
+                let emitter_for_rms = self.ps.emitter();
                 let last_rms_for_cb = Arc::clone(&last_rms_emit);
                 let start_result = ac_guard.start(Box::new(move |data: &[f32]| {
                     if let Some(mut buf) =
@@ -221,7 +219,7 @@ impl RecordingSession {
                 if let Err(e) = start_result {
                     warn!("audio capture start failed: {e}");
                     reset_to_idle(&self.ps);
-                    self.ps.emitter.emit(
+                    self.ps.emitter().emit(
                         "speech-error",
                         serde_json::to_value(format!("录音启动失败: {e}")).unwrap_or_default(),
                     );
@@ -235,16 +233,16 @@ impl RecordingSession {
                 ) {
                     if let Some(sr) = ac_guard.sample_rate() {
                         let audio = Arc::new(crate::realtime::AudioRingBufferSource::new(
-                            self.ps.audio_ring_buffer.clone(),
+                            self.ps.ring_buffer(),
                         ));
                         let rt = crate::realtime::RealtimeTranscriber::start(
                             audio,
-                            self.ps.engine.clone(),
-                            self.ps.emitter.clone(),
+                            self.ps.engine(),
+                            self.ps.emitter(),
                             sr,
                         );
                         if let Some(mut rt_guard) = crate::util::lock_mutex(
-                            &self.ps.realtime_transcriber,
+                            &self.ps.realtime_transcriber(),
                             "realtime_transcriber",
                         ) {
                             *rt_guard = Some(rt);
@@ -255,9 +253,9 @@ impl RecordingSession {
 
             // Show review window on press for RealtimeReview mode.
             if matches!(mode, PipelineMode::RealtimeReview) {
-                self.ps.review.save_foreground();
-                self.ps.review.set_shown_on_press(true);
-                self.ps.window_controller.show_review_near_caret();
+                self.ps.review().save_foreground();
+                self.ps.review().set_shown_on_press(true);
+                self.ps.window_controller().show_review_near_caret();
             }
 
             let press_latency = t_press.elapsed().as_millis() as u64;
@@ -278,16 +276,16 @@ impl RecordingSession {
 
         let mut perf = crate::util::lock_mutex(&self.perf_slot, "perf")
             .and_then(|mut s| s.take())
-            .unwrap_or_else(|| PerfMetrics::new(self.ps.perf_history.next_cycle_id()));
+            .unwrap_or_else(|| PerfMetrics::new(self.ps.perf_history().next_cycle_id()));
         perf.audio_duration_ms = Some(t_release.elapsed().as_millis() as u64);
 
-        let sample_rate =
-            crate::util::lock_mutex(&self.ps.ac, "audio_capture").and_then(|a| a.sample_rate());
+        let sample_rate = crate::util::lock_mutex(&self.ps.audio_capture(), "audio_capture")
+            .and_then(|a| a.sample_rate());
 
         // Stop audio capture and realtime transcriber, get accumulated text.
         let realtime_accumulated = self.ps.stop_recording_resources();
 
-        let policy = SessionPolicy::from_config(&self.ps.config_cache.read_cached());
+        let policy = SessionPolicy::from_config(&self.ps.config_cache().read_cached());
         let mode = policy.mode;
 
         let t_press_for_e2e =
@@ -301,7 +299,7 @@ impl RecordingSession {
                     realtime_accumulated.as_ref().map(|s| s.len()).unwrap_or(0)
                 );
                 self.ps
-                    .delivery
+                    .delivery()
                     .realtime_review_handoff(&self.ps, realtime_accumulated);
                 ReleaseAction::Done
             }
@@ -309,7 +307,7 @@ impl RecordingSession {
                 let Some(accumulated) = realtime_accumulated else {
                     warn!("hotkey release: DeliverFast missing accumulated text, resetting");
                     self.ps.sm_reset();
-                    self.ps.window_controller.hide_floating();
+                    self.ps.window_controller().hide_floating();
                     return ReleaseAction::Done;
                 };
                 info!(
@@ -322,7 +320,7 @@ impl RecordingSession {
                 if !stop_ok {
                     info!("hotkey release: RealtimeDirect stop_recording failed");
                     self.ps.sm_reset();
-                    self.ps.window_controller.hide_floating();
+                    self.ps.window_controller().hide_floating();
                     return ReleaseAction::Done;
                 }
                 perf.audio_samples = audio_data.len();
@@ -353,10 +351,10 @@ impl RecordingSession {
                             audio_data.len()
                         );
                         self.ps.sm_reset();
-                        self.ps.window_controller.hide_floating();
-                        if self.ps.review.was_shown_on_press() {
-                            self.ps.window_controller.hide_review();
-                            self.ps.review.set_shown_on_press(false);
+                        self.ps.window_controller().hide_floating();
+                        if self.ps.review().was_shown_on_press() {
+                            self.ps.window_controller().hide_review();
+                            self.ps.review().set_shown_on_press(false);
                         }
                         return ReleaseAction::Done;
                     }
@@ -364,7 +362,7 @@ impl RecordingSession {
                 let stop_ok = self.ps.sm_stop_recording();
                 if !stop_ok {
                     info!("hotkey release: stop_recording failed (state already reset)");
-                    self.ps.window_controller.hide_floating();
+                    self.ps.window_controller().hide_floating();
                     return ReleaseAction::Done;
                 }
                 perf.audio_samples = audio_data.len();
@@ -426,11 +424,11 @@ impl RecordingSession {
     /// the post-inject case and cleans up leaked text in the pre-inject case.
     pub(crate) fn recover(&self) {
         self.ps.sm_reset();
-        self.ps.window_controller.hide_floating();
-        if self.ps.clipboard.was_saved() {
-            let _ = self.ps.clipboard.restore();
+        self.ps.window_controller().hide_floating();
+        if self.ps.clipboard().was_saved() {
+            let _ = self.ps.clipboard().restore();
         }
-        self.ps.emitter.emit(
+        self.ps.emitter().emit(
             "speech-error",
             serde_json::to_value("转录流程异常，已恢复").unwrap_or_default(),
         );
@@ -503,7 +501,7 @@ impl RecordingSession {
                 final_text.len()
             );
             self.ps
-                .delivery
+                .delivery()
                 .show_review(
                     &self.ps,
                     final_text,
@@ -522,7 +520,7 @@ impl RecordingSession {
             final_text.len()
         );
         self.ps
-            .delivery
+            .delivery()
             .inject_direct(
                 &self.ps,
                 final_text,
@@ -593,7 +591,7 @@ impl RecordingSession {
         };
 
         self.ps
-            .delivery
+            .delivery()
             .inject_direct(
                 &self.ps,
                 final_text,
@@ -610,9 +608,7 @@ impl RecordingSession {
 
 /// Take all accumulated audio samples from the ring buffer.
 fn take_audio(ps: &PipelineState) -> Vec<f32> {
-    crate::util::lock_mutex(&ps.audio_ring_buffer, "audio_ring_buffer")
-        .map(|mut buf| buf.take_all())
-        .unwrap_or_default()
+    ps.take_ring_samples()
 }
 
 /// Parallel save audio to disk + transcribe via speech engine.
@@ -635,7 +631,7 @@ async fn transcribe_and_save(
         }
     });
 
-    let engine_ref = ps.engine.clone();
+    let engine_ref = ps.engine();
     let transcribe_handle =
         tokio::task::spawn_blocking(move || engine_ref.transcribe_sync(&resampled));
 
@@ -644,14 +640,14 @@ async fn transcribe_and_save(
 
     let transcription = match transcription_result {
         Ok(Ok(text)) => {
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "transcription-complete",
                 serde_json::to_value(&text).unwrap_or_default(),
             );
             text
         }
         Ok(Err(e)) => {
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "speech-error",
                 serde_json::to_value(e.to_string()).unwrap_or_default(),
             );
@@ -659,7 +655,7 @@ async fn transcribe_and_save(
             return (save_result, String::new());
         }
         Err(e) => {
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "speech-error",
                 serde_json::to_value(e.to_string()).unwrap_or_default(),
             );
@@ -718,18 +714,18 @@ async fn resolve_llm_text(
     perf: &mut PerfMetrics,
 ) -> Result<String, AppError> {
     ps.sm_start_llm_refining();
-    ps.emitter.emit("llm-refining", serde_json::Value::Null);
+    ps.emitter().emit("llm-refining", serde_json::Value::Null);
 
     let t_llm = Instant::now();
 
     // Live-read API key per call (rotation-friendly; not in snapshot).
-    let live_api_key = ps.config_cache.read_cached().llm_api_key.clone();
+    let live_api_key = ps.config_cache().read_cached().llm_api_key.clone();
 
     // Ensure the cached corrector matches config, creating a new one if needed.
     // live_api_key is still read live per call (line above) so a rotated key
     // forces a rebuild — see refresh_cached_llm doc for the boundary contract.
     refresh_cached_llm(
-        &ps.cached_llm,
+        &ps.cached_llm(),
         &policy.llm_api_url,
         &live_api_key,
         &policy.llm_api_model,
@@ -737,7 +733,8 @@ async fn resolve_llm_text(
 
     // Call correct_sync while re-acquiring the lock (holds lock for HTTP duration).
     let result = {
-        let cached = crate::util::lock_mutex(&ps.cached_llm, "cached_llm")
+        let cached_llm = ps.cached_llm();
+        let cached = crate::util::lock_mutex(&cached_llm, "cached_llm")
             .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
         let corrector = cached
             .as_ref()
@@ -749,14 +746,14 @@ async fn resolve_llm_text(
 
     match result {
         Ok(corrected) => {
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "llm-complete",
                 serde_json::to_value(&corrected).unwrap_or_default(),
             );
             Ok(corrected)
         }
         Err(e) => {
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "llm-error",
                 serde_json::to_value(e.to_string()).unwrap_or_default(),
             );
@@ -768,10 +765,10 @@ async fn resolve_llm_text(
 /// Reset state machine to Idle and hide floating window.
 fn reset_to_idle(ps: &PipelineState) {
     ps.sm_reset();
-    ps.window_controller.hide_floating();
-    if ps.review.was_shown_on_press() {
-        ps.window_controller.hide_review();
-        ps.review.set_shown_on_press(false);
+    ps.window_controller().hide_floating();
+    if ps.review().was_shown_on_press() {
+        ps.window_controller().hide_review();
+        ps.review().set_shown_on_press(false);
     }
 }
 

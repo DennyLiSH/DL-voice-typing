@@ -161,7 +161,7 @@ pub async fn inject_transcript_text(
     let ps_owned = ps.inner().clone();
     let text_for_task = trimmed.clone();
     let inject_result = ps_owned
-        .delivery
+        .delivery()
         .inject_to_hwnd(hwnd, &text_for_task, &WIN32_FOCUS_OPS)
         .await
         .map_err(inject_error_to_command);
@@ -262,7 +262,7 @@ fn run_transcription(
     cancel: Arc<AtomicBool>,
 ) {
     info!("transcription_requested: {filename} use_llm={use_llm}");
-    let emitter = ps.emitter.clone();
+    let emitter = ps.emitter();
     let progress: Box<dyn Fn(u8) + Send + Sync> = Box::new(move |p: u8| {
         emitter.emit(
             "transcription-progress",
@@ -271,12 +271,12 @@ fn run_transcription(
     });
 
     let result = ps
-        .engine
+        .engine()
         .transcribe_with_segments_sync(samples, cancel.clone(), progress);
 
     if cancel.load(Ordering::Relaxed) {
         info!("transcription_cancelled: {filename}");
-        ps.emitter.emit(
+        ps.emitter().emit(
             "transcription-cancelled",
             serde_json::json!({"filename": filename}),
         );
@@ -287,7 +287,7 @@ fn run_transcription(
         Ok(s) => s,
         Err(e) => {
             error!("transcription failed for {filename}: {e}");
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "transcription-error",
                 serde_json::json!({"message": "转录失败，请查看日志"}),
             );
@@ -301,7 +301,7 @@ fn run_transcription(
             Some(Ok(corrected)) => Some(corrected),
             Some(Err(e)) => {
                 warn!("transcribe: LLM correction failed for {filename}: {e}");
-                ps.emitter.emit(
+                ps.emitter().emit(
                     "transcription-error",
                     serde_json::json!({"message": "LLM 纠错失败，已保留原始转录"}),
                 );
@@ -320,13 +320,13 @@ fn run_transcription(
         llm_corrected.as_deref(),
     ) {
         error!("transcribe: failed to write results for {filename}: {e}");
-        ps.emitter.emit(
+        ps.emitter().emit(
             "transcription-error",
             serde_json::json!({"message": "转录结果写入失败"}),
         );
         return;
     }
-    ps.emitter.emit(
+    ps.emitter().emit(
         "transcription-done",
         serde_json::json!({"filename": filename}),
     );
@@ -339,7 +339,7 @@ fn run_llm_correction(
     ps: &PipelineState,
     text: &str,
 ) -> Option<Result<String, crate::error::AppError>> {
-    let cfg = ps.config_cache.read_cached();
+    let cfg = ps.config_cache().read_cached();
     if !cfg.llm_enabled
         || cfg.llm_api_url.is_empty()
         || cfg.llm_api_key.is_empty()
@@ -347,14 +347,14 @@ fn run_llm_correction(
     {
         return None;
     }
-    ps.emitter.emit(
+    ps.emitter().emit(
         "transcription-progress",
         serde_json::json!({"percent": 100, "stage": "llm"}),
     );
     // Prefer the cached corrector when it matches the current config (tests
     // inject a mock there); otherwise build a fresh client. The LLM API key
     // stays in-process — never logged, never sent to the frontend.
-    if let Some(guard) = crate::util::lock_mutex(&ps.cached_llm, "cached_llm") {
+    if let Some(guard) = crate::util::lock_mutex(&ps.cached_llm(), "cached_llm") {
         if let Some(corrector) = guard.as_ref() {
             if corrector.matches_config(&cfg.llm_api_url, &cfg.llm_api_key, &cfg.llm_model) {
                 return Some(corrector.correct_sync(text));
@@ -394,7 +394,7 @@ fn inject_error_to_command(e: InjectError) -> CommandError {
 
 /// Base directory for recordings (config data_saving_path).
 fn recordings_base_dir(ps: &PipelineState) -> Result<PathBuf, CommandError> {
-    let cfg = ps.config_cache.read_cached();
+    let cfg = ps.config_cache().read_cached();
     if cfg.data_saving_path.trim().is_empty() {
         return Err(CommandError::validation("未设置数据保存路径"));
     }
@@ -980,7 +980,7 @@ mod tests {
         RecordOnlySession::on_press(&ps);
         assert_eq!(ps.sm_state(), Some(crate::state::StateTag::RecordOnly));
         // Deliver 1s of audio through the real cpal callback path.
-        if let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
+        if let Some(mut ac) = crate::util::lock_mutex(&ps.audio_capture(), "audio_capture") {
             ac.deliver(&vec![0.4f32; 48_000]);
         }
         RecordOnlySession::recover(&ps);
@@ -1023,7 +1023,7 @@ mod tests {
 
         // 3. Inject with a dead target window: clipboard fallback holds the text.
         let result = ps
-            .delivery
+            .delivery()
             .inject_to_hwnd(0, "测试转录文本", &DEAD_WINDOW_OPS)
             .await;
         assert!(result.is_err());

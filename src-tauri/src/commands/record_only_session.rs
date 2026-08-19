@@ -99,7 +99,7 @@ impl RecordOnlySession {
     /// Hotkey press: gate on the state machine (mutual exclusion with the
     /// classic pipeline), snapshot the policy, start capture + streaming writer.
     pub(crate) fn on_press(ps: &PipelineState) {
-        let cfg = ps.config_cache.read_cached();
+        let cfg = ps.config_cache().read_cached();
         if !cfg.record_only_enabled {
             // Hotkey should not be registered when disabled; defense in depth.
             return;
@@ -117,7 +117,7 @@ impl RecordOnlySession {
 
         if let Err(e) = Self::start_session(ps, &policy) {
             error!("record-only: failed to start session: {e}");
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "record-only-error",
                 serde_json::json!({"message": "录音启动失败，请检查数据保存路径"}),
             );
@@ -176,14 +176,14 @@ impl RecordOnlySession {
 
         if let Err(e) = Self::write_session_json(&session.policy, &stem, &outcome) {
             error!("record-only: failed to write metadata for {stem}: {e}");
-            ps.emitter.emit(
+            ps.emitter().emit(
                 "record-only-error",
                 serde_json::json!({"message": "录音元数据写入失败"}),
             );
         }
 
         let (status, dropped) = Self::session_outcome(&outcome);
-        ps.emitter.emit(
+        ps.emitter().emit(
             "record-only-finished",
             serde_json::json!({
                 "stem": stem,
@@ -224,7 +224,8 @@ impl RecordOnlySession {
         // Start capture first so the device sample rate is known before the
         // recorder (and its resampler) is constructed.
         let sample_rate = {
-            let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") else {
+            let ac_handle = ps.audio_capture();
+            let Some(mut ac) = crate::util::lock_mutex(&ac_handle, "audio_capture") else {
                 return Err(AppError::Audio("audio capture lock poisoned".to_string()));
             };
             ac.start(on_data)?;
@@ -244,7 +245,7 @@ impl RecordOnlySession {
             push_cell,
         });
         Self::spawn_backpressure_monitor(ps.clone(), dropped);
-        ps.emitter
+        ps.emitter()
             .emit("record-only-started", serde_json::json!({"stem": stem}));
         info!("record_only_started: {stem}");
         Ok(())
@@ -272,7 +273,7 @@ impl RecordOnlySession {
     }
 
     fn stop_capture(ps: &PipelineState) {
-        if let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
+        if let Some(mut ac) = crate::util::lock_mutex(&ps.audio_capture(), "audio_capture") {
             ac.stop();
         }
     }
@@ -530,7 +531,7 @@ mod tests {
 
         // Push 1 second of real audio through the cpal callback path
         // (MockAudioCapture delivers straight into the registered callback).
-        if let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
+        if let Some(mut ac) = crate::util::lock_mutex(&ps.audio_capture(), "audio_capture") {
             ac.deliver(&vec![0.3f32; 48_000]);
         }
         // Simulate 51 lost blocks (~3.2s of audio that never made it to disk).

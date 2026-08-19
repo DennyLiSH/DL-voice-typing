@@ -91,7 +91,7 @@ pub async fn confirm_inject(
     text: String,
     ps: tauri::State<'_, PipelineState>,
 ) -> Result<(), CommandError> {
-    ps.delivery.confirm_review(&ps, text).await
+    ps.delivery().confirm_review(&ps, text).await
 }
 
 /// Cancel the review and return to idle.
@@ -102,7 +102,7 @@ pub async fn confirm_inject(
 /// Runs async on the Tokio runtime to avoid blocking the main thread.
 #[tauri::command]
 pub async fn cancel_review(ps: tauri::State<'_, PipelineState>) -> Result<(), CommandError> {
-    ps.delivery.cancel_review(&ps).await
+    ps.delivery().cancel_review(&ps).await
 }
 
 #[cfg(test)]

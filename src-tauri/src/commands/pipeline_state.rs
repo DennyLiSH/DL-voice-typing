@@ -183,6 +183,83 @@ impl PipelineState {
     }
 
     // ========================================================================
+    // Component accessors
+    //
+    // Fields are private to PipelineState (aggregation per ADR-0004);
+    // collaborators reach components through these methods only.
+    // ========================================================================
+
+    pub(crate) fn emitter(&self) -> Arc<dyn EventEmitter> {
+        self.emitter.clone()
+    }
+
+    pub(crate) fn window_controller(
+        &self,
+    ) -> Arc<dyn crate::commands::window_controller::WindowController> {
+        self.window_controller.clone()
+    }
+
+    pub(crate) fn review(&self) -> Arc<dyn ReviewProvider> {
+        self.review.clone()
+    }
+
+    pub(crate) fn engine(&self) -> Arc<dyn SpeechEngine> {
+        self.engine.clone()
+    }
+
+    pub(crate) fn clipboard(&self) -> Arc<dyn ClipboardProvider> {
+        self.clipboard.clone()
+    }
+
+    pub(crate) fn cached_llm(&self) -> Arc<Mutex<Option<Box<dyn TextCorrector>>>> {
+        self.cached_llm.clone()
+    }
+
+    pub(crate) fn perf_history(&self) -> Arc<crate::perf::PerfHistory> {
+        self.perf_history.clone()
+    }
+
+    pub(crate) fn realtime_transcriber(&self) -> Arc<Mutex<Option<RealtimeTranscriber>>> {
+        self.realtime_transcriber.clone()
+    }
+
+    pub(crate) fn audio_capture(&self) -> Arc<Mutex<dyn AudioCaptureProvider>> {
+        self.ac.clone()
+    }
+
+    pub(crate) fn config_cache(&self) -> ConfigCache {
+        self.config_cache.clone()
+    }
+
+    pub(crate) fn delivery(&self) -> Arc<DeliveryController> {
+        self.delivery.clone()
+    }
+
+    /// Clear the ring buffer (new recording session).
+    pub(crate) fn clear_ring(&self) {
+        if let Some(mut buf) = crate::util::lock_mutex(&self.audio_ring_buffer, "audio_ring_buffer")
+        {
+            buf.clear();
+        }
+    }
+
+    /// Take all accumulated audio samples from the ring buffer.
+    pub(crate) fn take_ring_samples(&self) -> Vec<f32> {
+        crate::util::lock_mutex(&self.audio_ring_buffer, "audio_ring_buffer")
+            .map(|mut buf| buf.take_all())
+            .unwrap_or_default()
+    }
+
+    /// Shared ring-buffer handle. **Only** for the two call sites that
+    /// genuinely need the shared Arc (cpal callback lock+push, and the
+    /// `AudioRingBufferSource` adapter construction) — same shared-handle
+    /// shape as C2's PushHandle (ADR-0015). Pure operations go through
+    /// `clear_ring` / `take_ring_samples` instead.
+    pub(crate) fn ring_buffer(&self) -> Arc<Mutex<AudioRingBuffer>> {
+        self.audio_ring_buffer.clone()
+    }
+
+    // ========================================================================
     // Record-only resource management
     // ========================================================================
 
