@@ -538,7 +538,7 @@ impl DeliveryController {
             // Wait for OS to fully process the focus change before simulating
             // keyboard input. Without this delay, SendInput (Ctrl+V) may still
             // be dispatched to the review window.
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(FOCUS_SETTLE_MS);
         }
 
         // 2. Inject text in a blocking thread to avoid starving the runtime.
