@@ -5,7 +5,7 @@
 
 use crate::config::ConfigCache;
 use crate::error::CommandError;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::ipc::Response;
 use tracing::warn;
@@ -13,24 +13,6 @@ use tracing::warn;
 /// Pattern: `YYYY-MM-DD_HH-MM-SS` (19 chars total). Validated without regex
 /// to avoid pulling in the regex crate for one fixed pattern.
 const FILENAME_LEN: usize = 19;
-
-/// Metadata subset extracted from each saved JSON file.
-/// Missing fields stay `None` — corrupted or partial JSON does not fail the whole list.
-#[derive(Deserialize)]
-struct RecordingMeta {
-    timestamp: Option<String>,
-    language: Option<String>,
-    whisper_model: Option<String>,
-    duration_seconds: Option<f32>,
-    transcription: Option<String>,
-    llm_corrected: Option<String>,
-    final_text: Option<String>,
-    /// "classic" | "record_only"; missing means classic (pre-feature JSONs).
-    source: Option<String>,
-    /// "pending" | "done" | "failed"; record-only recordings only.
-    transcription_status: Option<String>,
-    dropped_blocks: Option<u64>,
-}
 
 /// One recording entry returned to the frontend.
 #[derive(Serialize)]
@@ -95,6 +77,20 @@ pub struct FailedDelete {
 /// Validate that `filename` is a `YYYY-MM-DD_HH-MM-SS` stem and contains no
 /// path separators or other escape characters. Combined with canonicalize-based
 /// checks at resolve time, this is defense-in-depth against path traversal.
+/// Serialize a typed metadata enum field back to its on-disk string form
+/// (language / whisper_model are enums at rest as strings). Non-string
+/// shapes are logged (schema drift must be observable, not silent).
+fn enum_field<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
+    let value = serde_json::to_value(v).ok()?;
+    match value.as_str() {
+        Some(s) => Some(s.to_string()),
+        None => {
+            tracing::debug!("recording meta enum field serialized to non-string shape");
+            None
+        }
+    }
+}
+
 pub(crate) fn is_valid_stem(filename: &str) -> bool {
     if filename.len() != FILENAME_LEN {
         return false;
@@ -298,10 +294,7 @@ pub(crate) fn scan_and_collect(
         let json_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
 
         // Parse JSON; skip on error (single corrupt file must not break the list).
-        let meta = match std::fs::read_to_string(&path).and_then(|content| {
-            serde_json::from_str::<RecordingMeta>(&content)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        }) {
+        let meta = match crate::data_saving::load_metadata(&path) {
             Ok(m) => m,
             Err(e) => {
                 warn!(filename = stem, error = %e, "skip unreadable recording json");
@@ -338,15 +331,15 @@ pub(crate) fn scan_and_collect(
         entries.push(RecordingEntry {
             filename: stem.to_string(),
             timestamp: meta.timestamp,
-            language: meta.language,
-            whisper_model: meta.whisper_model,
-            duration_seconds: meta.duration_seconds,
+            language: enum_field(&meta.language),
+            whisper_model: enum_field(&meta.whisper_model),
+            duration_seconds: meta.duration_seconds.map(|d| d as f32),
             transcription: meta.transcription,
             llm_corrected: meta.llm_corrected,
             final_text: meta.final_text,
             source: meta.source.unwrap_or_else(|| "classic".to_string()),
             transcription_status: meta.transcription_status,
-            dropped_blocks: meta.dropped_blocks.unwrap_or(0),
+            dropped_blocks: meta.dropped_blocks,
             wav_size,
             json_size,
         });
