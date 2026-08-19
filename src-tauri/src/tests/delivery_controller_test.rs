@@ -373,6 +373,63 @@ async fn test_clipboard_restore_on_inject_failure() {
 
 /// Window controller that simulates a missing review window so the fallback
 /// direct-injection path in `show_review` is exercised.
+/// Window controller that records every call name (cleanup-ordering asserts).
+struct CallRecordingWindowController {
+    calls: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl WindowController for CallRecordingWindowController {
+    fn show_floating_near_caret(&self) -> bool {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("show_floating");
+        }
+        true
+    }
+    fn hide_floating(&self) {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("hide_floating");
+        }
+    }
+    fn show_review_near_caret(&self) -> bool {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("show_review");
+        }
+        true
+    }
+    fn hide_review(&self) {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("hide_review");
+        }
+    }
+    fn focus_review(&self) -> bool {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("focus_review");
+        }
+        true
+    }
+    fn eval_review_js(&self, _js: &str) -> bool {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("eval_review_js");
+        }
+        true
+    }
+    fn emit_review_show(&self) {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("emit_review_show");
+        }
+    }
+    fn emit_review_final_text(&self, _text: &str) {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("emit_review_final_text");
+        }
+    }
+    fn restore_foreground_hwnd(&self, _hwnd: isize) {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("restore_foreground");
+        }
+    }
+}
+
 struct HiddenReviewWindowController;
 
 impl WindowController for HiddenReviewWindowController {
@@ -971,4 +1028,96 @@ async fn test_inject_to_hwnd_save_failure_no_restore() {
     assert!(clipboard.injected().is_empty());
     assert!(!clipboard.restored());
     assert!(clipboard.set_texts().is_empty());
+}
+
+#[tokio::test]
+async fn catchall_confirm_from_injecting_resets_clears_context() {
+    let (ps, _) = build_ps();
+    ps.force_state_tag(StateTag::Injecting);
+    let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
+    assert!(result.is_err());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+    let (hwnd, data, _, _) = ps.delivery().take_context();
+    assert!(hwnd.is_none());
+    assert!(data.is_none());
+}
+
+#[tokio::test]
+async fn catchall_confirm_from_llm_refining_resets_clears_context() {
+    let (ps, _) = build_ps();
+    ps.force_state_tag(StateTag::LLMRefining);
+    let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
+    assert!(result.is_err());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+    let (hwnd, data, _, _) = ps.delivery().take_context();
+    assert!(hwnd.is_none());
+    assert!(data.is_none());
+}
+
+#[tokio::test]
+async fn catchall_cancel_from_injecting_hides_windows_and_clears_context() {
+    let (ps, _) = build_ps();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let c = ps.test_components();
+    let ps = PipelineState::new(
+        c.sm,
+        c.ac,
+        c.engine,
+        c.clipboard,
+        c.perf_history,
+        c.config_cache,
+        c.cached_llm,
+        c.realtime_transcriber,
+        Arc::new(CallRecordingWindowController {
+            calls: calls.clone(),
+        }),
+        c.emitter,
+        c.review,
+    );
+    ps.force_state_tag(StateTag::Injecting);
+    let result = ps.delivery().cancel_review(&ps).await;
+    assert!(result.is_err());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+    let (hwnd, data, _, _) = ps.delivery().take_context();
+    assert!(hwnd.is_none());
+    assert!(data.is_none());
+    let recorded = crate::util::lock_mutex(&calls, "rw_controller")
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    assert!(recorded.contains(&"hide_review"));
+    assert!(recorded.contains(&"hide_floating"));
+}
+
+#[tokio::test]
+async fn catchall_cancel_from_llm_refining_hides_windows_and_clears_context() {
+    let (ps, _) = build_ps();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let c = ps.test_components();
+    let ps = PipelineState::new(
+        c.sm,
+        c.ac,
+        c.engine,
+        c.clipboard,
+        c.perf_history,
+        c.config_cache,
+        c.cached_llm,
+        c.realtime_transcriber,
+        Arc::new(CallRecordingWindowController {
+            calls: calls.clone(),
+        }),
+        c.emitter,
+        c.review,
+    );
+    ps.force_state_tag(StateTag::LLMRefining);
+    let result = ps.delivery().cancel_review(&ps).await;
+    assert!(result.is_err());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+    let (hwnd, data, _, _) = ps.delivery().take_context();
+    assert!(hwnd.is_none());
+    assert!(data.is_none());
+    let recorded = crate::util::lock_mutex(&calls, "rw_controller")
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    assert!(recorded.contains(&"hide_review"));
+    assert!(recorded.contains(&"hide_floating"));
 }
