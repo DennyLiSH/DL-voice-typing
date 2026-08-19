@@ -1121,3 +1121,46 @@ async fn catchall_cancel_from_llm_refining_hides_windows_and_clears_context() {
     assert!(recorded.contains(&"hide_review"));
     assert!(recorded.contains(&"hide_floating"));
 }
+
+/// was_shown_on_press=true path: show_review stores context with the
+/// migrated foreground handle; confirm consumes it end-to-end — context
+/// cleared, review UI hidden, state Idle, delivery events emitted, and the
+/// shown-on-press flag reset for the next cycle.
+#[tokio::test]
+async fn was_shown_on_press_confirm_clears_context_and_resets_flag() {
+    let (ps, emitter) = build_ps();
+    // show_review's entry transition moves Transcribing -> Reviewing; starting
+    // from Reviewing would fail the transition and reset to Idle.
+    to_transcribing(&ps);
+    let perf = crate::perf::PerfMetrics::new(0);
+    let policy = build_policy();
+    ps.review().set_shown_on_press(true);
+
+    ps.delivery()
+        .show_review(
+            &ps,
+            "text".to_string(),
+            "text".to_string(),
+            None,
+            &policy,
+            perf,
+            Instant::now(),
+            false,
+        )
+        .await;
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
+
+    let result = ps
+        .delivery()
+        .confirm_review(&ps, "confirmed".to_string())
+        .await;
+    assert!(result.is_ok());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+    let (hwnd, data, _, _) = ps.delivery().take_context();
+    assert!(hwnd.is_none());
+    assert!(data.is_none());
+    assert!(!ps.review().was_shown_on_press());
+    let names = event_names(&emitter);
+    assert!(names.contains(&"injection-complete".to_string()));
+}
