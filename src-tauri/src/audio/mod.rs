@@ -89,6 +89,7 @@ pub trait AudioCaptureProvider: Send {
     fn sample_rate(&self) -> Option<u32>;
     /// Test-only hook: deliver synthetic samples through the registered
     /// callback (the real cpal capture is driven by the audio device).
+    #[cfg(test)]
     fn deliver(&mut self, _samples: &[f32]) {}
 }
 
@@ -290,6 +291,7 @@ impl AudioCaptureProvider for MockAudioCapture {
         self.callback = None;
     }
 
+    #[cfg(test)]
     fn deliver(&mut self, samples: &[f32]) {
         if let Some(cb) = self.callback.as_mut() {
             cb(samples);

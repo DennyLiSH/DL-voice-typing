@@ -52,8 +52,10 @@ pub(crate) struct ActiveRecordOnly {
 }
 
 impl ActiveRecordOnly {
-    /// Shared dropped-block counter (session-layer stop polling / tests).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Shared dropped-block counter. Test-only: consumed by
+    /// `PipelineState::test_record_only_dropped_counter` (the session-layer
+    /// monitor holds its own independent `Arc` from the recorder).
+    #[cfg(test)]
     pub(crate) fn dropped_counter(&self) -> Arc<AtomicU64> {
         self.recorder.dropped_counter()
     }
