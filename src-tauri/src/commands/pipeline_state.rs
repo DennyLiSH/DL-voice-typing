@@ -314,8 +314,9 @@ impl PipelineState {
     // ========================================================================
 
     /// Current state-machine tag, or None if the lock is poisoned.
-    /// The only production query surface (DeliveryController confirm/cancel
-    /// guards); tests assert through it as the audit view of the verb layer.
+    /// Query surface for production state guards (DeliveryController
+    /// confirm/cancel, record-only release/recover/monitor) and the
+    /// test audit view of the verb layer.
     pub(crate) fn sm_state(&self) -> Option<StateTag> {
         #[cfg(test)]
         {
