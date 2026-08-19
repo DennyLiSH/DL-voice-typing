@@ -314,8 +314,8 @@ impl PipelineState {
     // ========================================================================
 
     /// Current state-machine tag, or None if the lock is poisoned.
-    /// Used by sm_verb_tests; kept for future query-style callers.
-    #[allow(dead_code)]
+    /// The only production query surface (DeliveryController confirm/cancel
+    /// guards); tests assert through it as the audit view of the verb layer.
     pub(crate) fn sm_state(&self) -> Option<StateTag> {
         #[cfg(test)]
         {
