@@ -371,8 +371,6 @@ async fn test_clipboard_restore_on_inject_failure() {
     );
 }
 
-/// Window controller that simulates a missing review window so the fallback
-/// direct-injection path in `show_review` is exercised.
 /// Window controller that records every call name (cleanup-ordering asserts).
 struct CallRecordingWindowController {
     calls: Arc<Mutex<Vec<&'static str>>>,
@@ -430,6 +428,8 @@ impl WindowController for CallRecordingWindowController {
     }
 }
 
+/// Window controller that simulates a missing review window so the fallback
+/// direct-injection path in `show_review` is exercised.
 struct HiddenReviewWindowController;
 
 impl WindowController for HiddenReviewWindowController {

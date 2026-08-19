@@ -314,7 +314,7 @@ impl RecordingSession {
                     "hotkey release: RealtimeDirect fast path, {} chars",
                     accumulated.len()
                 );
-                let audio_data = take_audio(&self.ps);
+                let audio_data = self.ps.take_ring_samples();
                 let native_rate = sample_rate.unwrap_or(48000);
                 let stop_ok = self.ps.sm_stop_recording();
                 if !stop_ok {
@@ -341,7 +341,7 @@ impl RecordingSession {
             }
             ReleaseActionKind::DeliverFull => {
                 // Classic modes, or realtime modes with no accumulated text.
-                let audio_data = take_audio(&self.ps);
+                let audio_data = self.ps.take_ring_samples();
                 let native_rate = sample_rate.unwrap_or(48000);
                 let resampled = match preprocess_audio(&audio_data, native_rate) {
                     Some(r) => r,
@@ -604,11 +604,6 @@ impl RecordingSession {
             )
             .await;
     }
-}
-
-/// Take all accumulated audio samples from the ring buffer.
-fn take_audio(ps: &PipelineState) -> Vec<f32> {
-    ps.take_ring_samples()
 }
 
 /// Parallel save audio to disk + transcribe via speech engine.

@@ -858,8 +858,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         let info = rec.finalize().unwrap();
         pusher.join().unwrap();
-        // Regardless of interleaving, the WAV must parse and be non-empty
-        // (late pushes are no-ops).
+        // Regardless of interleaving, the WAV must be non-empty; late pushes
+        // are no-ops.
         assert!(info.data_size > 0);
         let _ = fs::remove_dir_all(&dir);
     }

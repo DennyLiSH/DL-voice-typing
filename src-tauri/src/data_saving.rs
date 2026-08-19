@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_json_with_text() {
+    fn test_set_transcription_result() {
         let dir = std::env::temp_dir().join("dl-voice-typing-test-update-json");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_json_with_final_text() {
+    fn test_set_transcription_result_with_final_text() {
         let dir = std::env::temp_dir().join("dl-voice-typing-test-final-text");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -453,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_json_cancelled_review() {
+    fn test_set_transcription_result_cancelled_review() {
         let dir = std::env::temp_dir().join("dl-voice-typing-test-cancelled");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();

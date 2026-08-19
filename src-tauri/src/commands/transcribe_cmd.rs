@@ -174,7 +174,8 @@ pub async fn inject_transcript_text(
 /// Persist the injected text as `final_text` in the recording JSON,
 /// preserving the existing transcription / llm_corrected fields.
 fn write_final_text(json_path: &Path, text: &str) -> Result<(), CommandError> {
-    let metadata = crate::data_saving::load_metadata(json_path)?;
+    let metadata = crate::data_saving::load_metadata(json_path)
+        .map_err(|e| CommandError::io(e, "failed to read recording metadata"))?;
     crate::data_saving::set_transcription_result(
         json_path,
         metadata.transcription.as_deref().unwrap_or(""),

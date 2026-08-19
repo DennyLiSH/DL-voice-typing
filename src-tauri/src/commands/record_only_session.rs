@@ -157,7 +157,7 @@ impl RecordOnlySession {
         // (2)+(3) Take + finalize + JSON. Only the first caller wins the take.
         let Some(session) = ps.take_record_only_session() else {
             if ps.sm_state() == Some(StateTag::RecordOnly) {
-                warn!("recover_session: RecordOnly state without an active session; resetting");
+                warn!("recover: RecordOnly state without an active session; resetting");
                 ps.sm_reset();
             }
             return;
@@ -195,7 +195,7 @@ impl RecordOnlySession {
 
         // (4) State machine must return to Idle regardless of earlier failures.
         if !ps.sm_finish_record_only() {
-            warn!("recover_session: sm_finish_record_only failed; forcing reset");
+            warn!("recover: sm_finish_record_only failed; forcing reset");
             ps.sm_reset();
         }
     }
@@ -312,6 +312,7 @@ impl RecordOnlySession {
                     info.dropped_blocks,
                 )
             }
+            // Finalize failed: caller (recover) already error!-logged the cause.
             Err(_) => ("failed", 0.0, 0),
         };
         let metadata = crate::data_saving::RecordingMetadata {
@@ -467,9 +468,9 @@ mod tests {
         assert_eq!(parsed["source"], "record_only");
         assert_eq!(parsed["transcription_status"], "pending");
         assert_eq!(parsed["dropped_blocks"], 0);
-        // Lenient shape: empty segments are omitted on serialize (readers
-        // treat missing and empty identically).
-        assert!(parsed["segments"].is_array() || parsed.get("segments").is_none());
+        // Lenient shape: skip_serializing_if omits empty segments on serialize
+        // (readers treat missing and empty identically).
+        assert!(parsed.get("segments").is_none_or(|v| v.is_array()));
         assert!(parsed["transcription"].is_null());
         assert!(emitted(&emitter, "record-only-finished"));
         let _ = fs::remove_dir_all(&dir);
@@ -641,6 +642,7 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
         assert_eq!(parsed["transcription_status"], "failed");
+        assert_eq!(parsed["source"], "record_only");
         assert_eq!(parsed["duration_seconds"], 0.0);
         assert_eq!(parsed["dropped_blocks"], 0);
         let _ = std::fs::remove_dir_all(&dir);
