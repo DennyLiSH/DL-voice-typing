@@ -87,6 +87,9 @@ pub trait AudioCaptureProvider: Send {
     fn stop(&mut self);
     fn is_capturing(&self) -> bool;
     fn sample_rate(&self) -> Option<u32>;
+    /// Test-only hook: deliver synthetic samples through the registered
+    /// callback (the real cpal capture is driven by the audio device).
+    fn deliver(&mut self, _samples: &[f32]) {}
 }
 
 /// Audio capture using cpal.
@@ -259,6 +262,7 @@ impl AudioRingBuffer {
 pub struct MockAudioCapture {
     capturing: bool,
     sample_rate_val: Option<u32>,
+    callback: Option<AudioCallback>,
 }
 
 impl MockAudioCapture {
@@ -267,20 +271,29 @@ impl MockAudioCapture {
         Self {
             capturing: false,
             sample_rate_val: None,
+            callback: None,
         }
     }
 }
 
 impl AudioCaptureProvider for MockAudioCapture {
-    fn start(&mut self, _on_data: AudioCallback) -> Result<(), AppError> {
+    fn start(&mut self, on_data: AudioCallback) -> Result<(), AppError> {
         self.capturing = true;
         self.sample_rate_val = Some(48000);
+        self.callback = Some(on_data);
         Ok(())
     }
 
     fn stop(&mut self) {
         self.capturing = false;
         self.sample_rate_val = None;
+        self.callback = None;
+    }
+
+    fn deliver(&mut self, samples: &[f32]) {
+        if let Some(cb) = self.callback.as_mut() {
+            cb(samples);
+        }
     }
 
     fn is_capturing(&self) -> bool {

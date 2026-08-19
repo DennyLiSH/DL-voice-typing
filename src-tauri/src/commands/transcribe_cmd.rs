@@ -976,10 +976,9 @@ mod tests {
         // MockAudioCapture runs at 48kHz; the recorder resamples to 16kHz.
         crate::commands::record_only_session::on_press(&ps);
         assert_eq!(ps.sm_state(), Some(crate::state::StateTag::RecordOnly));
-        if let Some(mut g) = crate::util::lock_mutex(&ps.record_only, "record_only") {
-            if let Some(s) = g.as_mut() {
-                s.recorder.push_samples(&vec![0.4f32; 48000]);
-            }
+        // Deliver 1s of audio through the real cpal callback path.
+        if let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
+            ac.deliver(&vec![0.4f32; 48_000]);
         }
         crate::commands::record_only_session::recover_session(&ps);
         assert_eq!(ps.sm_state(), Some(crate::state::StateTag::Idle));

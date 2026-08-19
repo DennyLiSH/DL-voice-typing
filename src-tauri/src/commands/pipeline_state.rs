@@ -38,10 +38,8 @@ pub struct PipelineState {
     /// Capacity: 60 seconds @ 48kHz = 2,880,000 samples.
     pub(crate) audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
     /// Active record-only session (Some only while a record-only session is
-    /// capturing). Set after `sm_start_record_only` succeeds; taken by
-    /// release / reset paths.
-    pub(crate) record_only:
-        Arc<Mutex<Option<crate::commands::record_only_session::RecordOnlySession>>>,
+    /// capturing). Private; access goes through set/take_record_only_session.
+    record_only: Arc<Mutex<Option<crate::commands::record_only_session::ActiveRecordOnly>>>,
 }
 
 impl PipelineState {
@@ -192,7 +190,7 @@ impl PipelineState {
     /// `sm_start_record_only()` succeeded (transition is the atomic gate).
     pub(crate) fn set_record_only_session(
         &self,
-        session: crate::commands::record_only_session::RecordOnlySession,
+        session: crate::commands::record_only_session::ActiveRecordOnly,
     ) {
         if let Some(mut guard) = crate::util::lock_mutex(&self.record_only, "record_only") {
             *guard = Some(session);
@@ -202,7 +200,7 @@ impl PipelineState {
     /// Take the active record-only session (release / reset paths).
     pub(crate) fn take_record_only_session(
         &self,
-    ) -> Option<crate::commands::record_only_session::RecordOnlySession> {
+    ) -> Option<crate::commands::record_only_session::ActiveRecordOnly> {
         crate::util::lock_mutex(&self.record_only, "record_only").and_then(|mut g| g.take())
     }
 
@@ -428,6 +426,14 @@ impl PipelineState {
             *guard = None;
         }
     }
+
+    /// Test-only: dropped-block counter of the active record-only session.
+    pub(crate) fn test_record_only_dropped_counter(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicU64>> {
+        crate::util::lock_mutex(&self.record_only, "record_only")
+            .and_then(|g| g.as_ref().map(|s| s.dropped_counter()))
+    }
 }
 
 #[cfg(test)]
@@ -565,24 +571,20 @@ mod sm_verb_tests {
         );
         assert!(rec.is_ok());
         let Some(rec) = rec.ok() else { return };
-        let session = crate::commands::record_only_session::RecordOnlySession {
-            recorder: rec,
-            policy: crate::commands::record_only_session::RecordOnlyPolicy {
+        let session = crate::commands::record_only_session::ActiveRecordOnly::new_for_test(
+            rec,
+            crate::commands::record_only_session::RecordOnlyPolicy {
                 data_saving_path: dir.to_string_lossy().to_string(),
                 language: crate::config::Language::Zh,
                 whisper_model: crate::config::WhisperModel::default(),
             },
-        };
+        );
         ps.set_record_only_session(session);
         let taken = ps.take_record_only_session();
         assert!(taken.is_some());
         // Finalize so the writer thread exits cleanly.
         if let Some(s) = taken {
-            assert!(
-                s.recorder
-                    .stop_and_wait(std::time::Duration::from_secs(5))
-                    .is_ok()
-            );
+            assert!(s.stop_and_wait(std::time::Duration::from_secs(5)).is_ok());
         }
         // Slot is empty after take.
         assert!(ps.take_record_only_session().is_none());

@@ -86,8 +86,6 @@ struct PushCore {
 /// Cloneable handle to a running recorder's push side. Held by the cpal
 /// audio callback so the audio hot path never locks the session slot in
 /// `PipelineState` — only this recorder-internal core.
-// Dead in non-test builds until the cpal callback adopts it (next task).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone)]
 pub(crate) struct PushHandle(Arc<Mutex<PushCore>>);
 
@@ -95,7 +93,6 @@ impl PushHandle {
     /// Feed device-rate f32 samples (audio-callback context). Resamples to
     /// 16kHz, converts to i16, ships full blocks to the writer thread.
     /// Full channel → block dropped + counted. No-op after shutdown.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn push(&self, samples: &[f32]) {
         if let Some(mut core) = crate::util::lock_mutex(&self.0, "recorder_push") {
             push_into_core(&mut core, samples);
@@ -187,7 +184,6 @@ impl StreamingRecorder {
     }
 
     /// Cloneable push-side handle for the audio callback (see `PushHandle`).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn push_handle(&self) -> PushHandle {
         PushHandle(self.core.clone())
     }

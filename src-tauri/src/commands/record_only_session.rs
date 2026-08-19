@@ -14,11 +14,11 @@ use crate::error::AppError;
 use crate::hotkey::{HotkeyCallback, HotkeyEvent};
 use crate::state::StateTag;
 use crate::streaming_recorder::{
-    FinalizeInfo, STOP_TIMEOUT, StreamingRecorder, exceeds_drop_threshold,
+    FinalizeInfo, PushHandle, STOP_TIMEOUT, StreamingRecorder, exceeds_drop_threshold,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -34,11 +34,49 @@ pub(crate) struct RecordOnlyPolicy {
     pub(crate) whisper_model: WhisperModel,
 }
 
-/// Active record-only session held in `PipelineState.record_only` between
-/// press and release/reset.
-pub(crate) struct RecordOnlySession {
-    pub(crate) recorder: StreamingRecorder,
-    pub(crate) policy: RecordOnlyPolicy,
+/// Per-session push cell shared with the cpal callback. The callback is
+/// registered before the recorder exists (capture must start first to
+/// learn the device sample rate), so the callback receives the cell and the
+/// session installs the recorder's `PushHandle` right after construction.
+/// `recover` takes the handle back out so late callbacks no-op — the same
+/// semantics the former slot lock had.
+pub(crate) type PushCell = Arc<Mutex<Option<PushHandle>>>;
+
+/// Active record-only recording held in `PipelineState.record_only` between
+/// press and release/reset. Fields are private; lifecycle goes through the
+/// module's session functions.
+pub(crate) struct ActiveRecordOnly {
+    recorder: StreamingRecorder,
+    policy: RecordOnlyPolicy,
+    push_cell: PushCell,
+}
+
+impl ActiveRecordOnly {
+    /// Shared dropped-block counter (session-layer stop polling / tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn dropped_counter(&self) -> Arc<AtomicU64> {
+        self.recorder.dropped_counter()
+    }
+
+    /// Finalize the recording (bounded writer join). Consumes the session.
+    /// Test-only until a non-test consumer needs direct finalization.
+    #[cfg(test)]
+    pub(crate) fn stop_and_wait(
+        self,
+        timeout: Duration,
+    ) -> Result<crate::streaming_recorder::FinalizeInfo, AppError> {
+        self.recorder.stop_and_wait(timeout)
+    }
+
+    /// Test-only constructor (fields are private to this module).
+    #[cfg(test)]
+    pub(crate) fn new_for_test(recorder: StreamingRecorder, policy: RecordOnlyPolicy) -> Self {
+        Self {
+            recorder,
+            policy,
+            push_cell: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 /// Build the record-only hotkey callback (hold to record, release to save).
@@ -116,6 +154,11 @@ pub(crate) fn recover_session(ps: &PipelineState) {
         return;
     };
 
+    // Detach the callback's push handle so late callbacks no-op.
+    if let Some(mut cell) = crate::util::lock_mutex(&session.push_cell, "record_only_push") {
+        *cell = None;
+    }
+
     let stem = session.recorder.stem().to_string();
     let outcome = session.recorder.stop_and_wait(STOP_TIMEOUT);
     if let Err(e) = &outcome {
@@ -155,15 +198,17 @@ fn start_session(ps: &PipelineState, policy: &RecordOnlyPolicy) -> Result<(), Ap
         ));
     }
 
-    // The cpal callback pushes into the shared session slot. It only holds
-    // the slot lock for the duration of a push; finalize takes the session
-    // out of the slot first, so the callback never blocks on the writer join.
-    let slot = ps.record_only.clone();
+    // The cpal callback holds the per-session push cell (not the
+    // PipelineState slot). The recorder's push handle is installed into the
+    // cell right after construction; recover takes it out first, so late
+    // callbacks no-op instead of locking shared session state.
+    let push_cell: PushCell = Arc::new(Mutex::new(None));
+    let cell_for_cb = push_cell.clone();
     let on_data: AudioCallback = Box::new(move |data: &[f32]| {
-        if let Some(mut guard) = crate::util::lock_mutex(&slot, "record_only") {
-            if let Some(session) = guard.as_mut() {
-                session.recorder.push_samples(data);
-            }
+        let handle = crate::util::lock_mutex(&cell_for_cb, "record_only_push")
+            .and_then(|g| g.as_ref().cloned());
+        if let Some(handle) = handle {
+            handle.push(data);
         }
     });
 
@@ -179,11 +224,15 @@ fn start_session(ps: &PipelineState, policy: &RecordOnlyPolicy) -> Result<(), Ap
     };
 
     let recorder = StreamingRecorder::start(Path::new(&policy.data_saving_path), sample_rate)?;
+    if let Some(mut cell) = crate::util::lock_mutex(&push_cell, "record_only_push") {
+        *cell = Some(recorder.push_handle());
+    }
     let dropped = recorder.dropped_counter();
     let stem = recorder.stem().to_string();
-    ps.set_record_only_session(RecordOnlySession {
+    ps.set_record_only_session(ActiveRecordOnly {
         recorder,
         policy: policy.clone(),
+        push_cell,
     });
     spawn_backpressure_monitor(ps.clone(), dropped);
     ps.emitter
@@ -469,16 +518,13 @@ mod tests {
         on_press(&ps);
         assert_eq!(ps.sm_state(), Some(StateTag::RecordOnly));
 
-        // Push 1 second of real audio through the recorder (48kHz device
-        // rate → resampled to 16kHz by the recorder).
-        if let Some(mut g) = crate::util::lock_mutex(&ps.record_only, "record_only") {
-            if let Some(s) = g.as_mut() {
-                s.recorder.push_samples(&vec![0.3f32; 48000]);
-            }
+        // Push 1 second of real audio through the cpal callback path
+        // (MockAudioCapture delivers straight into the registered callback).
+        if let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
+            ac.deliver(&vec![0.3f32; 48_000]);
         }
         // Simulate 51 lost blocks (~3.2s of audio that never made it to disk).
-        let counter = crate::util::lock_mutex(&ps.record_only, "record_only")
-            .and_then(|g| g.as_ref().map(|s| s.recorder.dropped_counter()));
+        let counter = ps.test_record_only_dropped_counter();
         assert!(counter.is_some());
         let Some(counter) = counter else { return };
         counter.fetch_add(51, Ordering::Relaxed);
@@ -530,8 +576,7 @@ mod tests {
 
         // Drive the dropped-block counter past the threshold; the monitor
         // (spawned at press, 250ms poll) must stop the session on its own.
-        let counter = crate::util::lock_mutex(&ps.record_only, "record_only")
-            .and_then(|g| g.as_ref().map(|s| s.recorder.dropped_counter()));
+        let counter = ps.test_record_only_dropped_counter();
         assert!(counter.is_some());
         let Some(counter) = counter else { return };
         counter.fetch_add(51, Ordering::Relaxed);
