@@ -1,6 +1,7 @@
 use crate::audio::{TARGET_SAMPLE_RATE, resample};
 use crate::config::{AppConfig, Language, WhisperModel};
 use crate::error::AppError;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
@@ -31,6 +32,109 @@ impl SaveConfig {
             whisper_model: config.whisper_model.clone(),
         }
     }
+}
+
+/// Single source of truth for the recording JSON schema, shared by the
+/// classic pipeline, record-only mode, and the transcribe window. All
+/// fields deserialize leniently (missing → default) so JSONs written by
+/// older versions never fail a read; Option/empty fields are skipped on
+/// serialize so recordings keep a minimal on-disk shape (readers treat
+/// missing and null identically).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct RecordingMetadata {
+    pub(crate) timestamp: Option<String>,
+    pub(crate) language: Option<Language>,
+    pub(crate) whisper_model: Option<WhisperModel>,
+    pub(crate) sample_rate: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) original_sample_rate: Option<u32>,
+    pub(crate) duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) transcription: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) llm_corrected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) final_text: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) segments: Vec<crate::speech::Segment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) transcription_status: Option<String>,
+    /// "classic" | "record_only"; readers default missing → "classic".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<String>,
+    #[serde(default)]
+    pub(crate) dropped_blocks: u64,
+}
+
+/// Load a recording's metadata (lenient on missing fields, strict on
+/// corrupt JSON — callers decide per-file error handling). serde_json has
+/// a built-in 128-level recursion limit, so deeply nested malformed JSON
+/// returns Err rather than overflowing the stack.
+// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
+#[allow(dead_code)]
+pub(crate) fn load_metadata(path: &std::path::Path) -> Result<RecordingMetadata, AppError> {
+    let content = fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&content)?)
+}
+
+/// Write metadata atomically (temp file + rename). Windows rename 在目标被
+/// 短暂占用（如正被其他进程读取）时失败直接上抛 Err，不重试——沿用既有
+/// `atomic_write_json` 语义，由调用方呈现错误。
+// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
+#[allow(dead_code)]
+pub(crate) fn write_metadata_atomic(
+    path: &std::path::Path,
+    metadata: &RecordingMetadata,
+) -> Result<(), AppError> {
+    atomic_write_json(path, &serde_json::to_value(metadata)?)
+}
+
+/// Read-modify-write core shared by the semantic update entry points.
+// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
+#[allow(dead_code)]
+fn update_metadata_with(
+    path: &std::path::Path,
+    f: impl FnOnce(&mut RecordingMetadata),
+) -> Result<(), AppError> {
+    let mut metadata = load_metadata(path)?;
+    f(&mut metadata);
+    write_metadata_atomic(path, &metadata)
+}
+
+/// Backfill a recording's JSON with transcription text (atomic).
+/// Replaces the former non-atomic `update_json_with_text`.
+// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
+#[allow(dead_code)]
+pub(crate) fn set_transcription_result(
+    json_path: &std::path::Path,
+    transcription: &str,
+    llm_corrected: Option<&str>,
+    final_text: Option<&str>,
+) -> Result<(), AppError> {
+    update_metadata_with(json_path, |m| {
+        m.transcription = Some(transcription.to_string());
+        m.llm_corrected = llm_corrected.map(str::to_string);
+        m.final_text = final_text.map(str::to_string);
+    })
+}
+
+/// Backfill a record-only JSON with segment results, marking status "done"
+/// (atomic). Replaces `update_json_with_segments`.
+// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
+#[allow(dead_code)]
+pub(crate) fn set_segment_result(
+    json_path: &std::path::Path,
+    segments: &[crate::speech::Segment],
+    transcription: &str,
+    llm_corrected: Option<&str>,
+) -> Result<(), AppError> {
+    update_metadata_with(json_path, |m| {
+        m.segments = segments.to_vec();
+        m.transcription = Some(transcription.to_string());
+        m.llm_corrected = llm_corrected.map(str::to_string);
+        m.transcription_status = Some("done".to_string());
+    })
 }
 
 /// Save raw audio samples as a 16kHz mono WAV file with a companion JSON metadata file.
@@ -432,6 +536,110 @@ mod tests {
         assert_eq!(updated["llm_corrected"], serde_json::Value::Null);
         assert_eq!(updated["final_text"], serde_json::Value::Null);
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metadata_roundtrip() {
+        let dir = std::env::temp_dir().join("dl-vt-meta-roundtrip");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.json");
+        let m = RecordingMetadata {
+            timestamp: Some("2026-08-19T12:00:00+08:00".to_string()),
+            language: Some(Language::Zh),
+            duration_seconds: Some(12.5),
+            transcription_status: Some("pending".to_string()),
+            source: Some("record_only".to_string()),
+            dropped_blocks: 3,
+            ..Default::default()
+        };
+        write_metadata_atomic(&path, &m).unwrap();
+        let loaded = load_metadata(&path).unwrap();
+        assert_eq!(
+            loaded.timestamp.as_deref(),
+            Some("2026-08-19T12:00:00+08:00")
+        );
+        assert_eq!(loaded.duration_seconds, Some(12.5));
+        assert_eq!(loaded.transcription_status.as_deref(), Some("pending"));
+        assert_eq!(loaded.source.as_deref(), Some("record_only"));
+        assert_eq!(loaded.dropped_blocks, 3);
+        assert!(loaded.transcription.is_none());
+
+        // Update path preserves untouched fields.
+        set_transcription_result(&path, "你好", None, Some("最终")).unwrap();
+        let updated = load_metadata(&path).unwrap();
+        assert_eq!(updated.transcription.as_deref(), Some("你好"));
+        assert_eq!(updated.final_text.as_deref(), Some("最终"));
+        assert_eq!(updated.dropped_blocks, 3); // 未触碰字段保留
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metadata_lenient_missing_and_unknown_fields() {
+        let dir = std::env::temp_dir().join("dl-vt-meta-lenient");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.json");
+        fs::write(&path, r#"{"future_field": 1}"#).unwrap();
+        let m = load_metadata(&path).unwrap();
+        assert!(m.timestamp.is_none());
+        assert!(m.segments.is_empty());
+        assert_eq!(m.dropped_blocks, 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metadata_corrupt_json_errors() {
+        let dir = std::env::temp_dir().join("dl-vt-meta-corrupt");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.json");
+        fs::write(&path, "{not json").unwrap();
+        assert!(load_metadata(&path).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metadata_classic_shape_omits_empty_keys() {
+        let dir = std::env::temp_dir().join("dl-vt-meta-shape");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.json");
+        let m = RecordingMetadata {
+            timestamp: Some("t".to_string()),
+            ..Default::default()
+        };
+        write_metadata_atomic(&path, &m).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(!raw.contains("\"transcription\""));
+        assert!(!raw.contains("\"segments\""));
+        assert!(!raw.contains("\"transcription_status\""));
+        assert!(v["timestamp"].is_string());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metadata_legacy_explicit_nulls_equivalent() {
+        let dir = std::env::temp_dir().join("dl-vt-meta-legacy");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.json");
+        fs::write(
+            &path,
+            r#"{"timestamp":"t","transcription":null,"llm_corrected":null,"segments":[],"dropped_blocks":0}"#,
+        )
+        .unwrap();
+        let legacy = load_metadata(&path).unwrap();
+        let minimal = RecordingMetadata {
+            timestamp: Some("t".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(legacy.timestamp, minimal.timestamp);
+        assert_eq!(legacy.transcription, minimal.transcription);
+        assert_eq!(legacy.segments, minimal.segments);
+        assert_eq!(legacy.dropped_blocks, minimal.dropped_blocks);
         let _ = fs::remove_dir_all(&dir);
     }
 }
