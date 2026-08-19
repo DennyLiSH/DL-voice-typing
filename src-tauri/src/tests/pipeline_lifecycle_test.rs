@@ -39,135 +39,128 @@ fn build_ps() -> PipelineState {
 #[test]
 fn test_classic_direct_lifecycle() {
     let ps = build_ps();
-    let mut sm = ps.sm.lock().unwrap();
 
     // Idle → Recording
-    sm.start_recording().unwrap();
-    assert_eq!(sm.state(), StateTag::Recording);
+    assert!(ps.sm_start_recording());
+    assert_eq!(ps.sm_state(), Some(StateTag::Recording));
 
     // Recording → Transcribing
-    sm.stop_recording().unwrap();
-    assert_eq!(sm.state(), StateTag::Transcribing);
+    assert!(ps.sm_stop_recording());
+    assert_eq!(ps.sm_state(), Some(StateTag::Transcribing));
 
     // Transcribing → Injecting
-    sm.transcribing_to_injecting().unwrap();
-    assert_eq!(sm.state(), StateTag::Injecting);
+    assert!(ps.sm_transcribing_to_injecting());
+    assert_eq!(ps.sm_state(), Some(StateTag::Injecting));
 
     // Injecting → Idle
-    sm.finish_injecting().unwrap();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_finish_injecting());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
 
 #[test]
 fn test_classic_review_lifecycle() {
     let ps = build_ps();
-    let mut sm = ps.sm.lock().unwrap();
 
     // Idle → Recording → Transcribing
-    sm.start_recording().unwrap();
-    sm.stop_recording().unwrap();
+    assert!(ps.sm_start_recording());
+    assert!(ps.sm_stop_recording());
 
     // Transcribing → Reviewing
-    sm.transcribing_to_reviewing().unwrap();
-    assert_eq!(sm.state(), StateTag::Reviewing);
+    assert!(ps.sm_transcribing_to_reviewing());
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
 
     // Reviewing → Injecting
-    sm.reviewing_to_injecting().unwrap();
-    assert_eq!(sm.state(), StateTag::Injecting);
+    assert!(ps.sm_reviewing_to_injecting());
+    assert_eq!(ps.sm_state(), Some(StateTag::Injecting));
 
     // Injecting → Idle
-    sm.finish_injecting().unwrap();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_finish_injecting());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
 
 #[test]
 fn test_llm_lifecycle() {
     let ps = build_ps();
-    let mut sm = ps.sm.lock().unwrap();
 
     // Idle → Recording → Transcribing
-    sm.start_recording().unwrap();
-    sm.stop_recording().unwrap();
+    assert!(ps.sm_start_recording());
+    assert!(ps.sm_stop_recording());
 
     // Transcribing → LLMRefining
-    sm.start_llm_refining().unwrap();
-    assert_eq!(sm.state(), StateTag::LLMRefining);
+    assert!(ps.sm_start_llm_refining());
+    assert_eq!(ps.sm_state(), Some(StateTag::LLMRefining));
 
     // LLMRefining → Injecting
-    sm.llm_to_injecting().unwrap();
-    assert_eq!(sm.state(), StateTag::Injecting);
+    assert!(ps.sm_llm_to_injecting());
+    assert_eq!(ps.sm_state(), Some(StateTag::Injecting));
 
     // Injecting → Idle
-    sm.finish_injecting().unwrap();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_finish_injecting());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
 
 #[test]
 fn test_cancel_during_recording() {
     let ps = build_ps();
-    let mut sm = ps.sm.lock().unwrap();
 
-    sm.start_recording().unwrap();
-    assert_eq!(sm.state(), StateTag::Recording);
+    assert!(ps.sm_start_recording());
+    assert_eq!(ps.sm_state(), Some(StateTag::Recording));
 
     // Cancel: reset to Idle
-    sm.reset();
-    assert_eq!(sm.state(), StateTag::Idle);
+    ps.sm_reset();
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
 
 #[test]
 fn test_cancel_during_reviewing() {
     let ps = build_ps();
-    let mut sm = ps.sm.lock().unwrap();
 
-    sm.start_recording().unwrap();
-    sm.stop_recording().unwrap();
-    sm.transcribing_to_reviewing().unwrap();
+    assert!(ps.sm_start_recording());
+    assert!(ps.sm_stop_recording());
+    assert!(ps.sm_transcribing_to_reviewing());
 
     // Cancel from reviewing
-    sm.cancel_reviewing().unwrap();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_cancel_reviewing());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
 
 #[test]
 fn test_realtime_review_lifecycle() {
     let ps = build_ps();
-    let mut sm = ps.sm.lock().unwrap();
 
     // Idle → Recording (realtime starts)
-    sm.start_recording().unwrap();
+    assert!(ps.sm_start_recording());
 
     // Recording → Transcribing → Reviewing (realtime accumulated text)
-    sm.stop_recording().unwrap();
-    sm.transcribing_to_reviewing().unwrap();
-    assert_eq!(sm.state(), StateTag::Reviewing);
+    assert!(ps.sm_stop_recording());
+    assert!(ps.sm_transcribing_to_reviewing());
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
 
     // Confirm from reviewing
-    sm.reviewing_to_injecting().unwrap();
-    sm.finish_injecting().unwrap();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_reviewing_to_injecting());
+    assert!(ps.sm_finish_injecting());
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
 
 #[test]
 fn test_reset_from_any_state() {
     let ps = build_ps();
-    let mut sm = ps.sm.lock().unwrap();
 
     // Test reset from Recording
-    sm.start_recording().unwrap();
-    sm.reset();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_start_recording());
+    ps.sm_reset();
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 
     // Test reset from Transcribing
-    sm.start_recording().unwrap();
-    sm.stop_recording().unwrap();
-    sm.reset();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_start_recording());
+    assert!(ps.sm_stop_recording());
+    ps.sm_reset();
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 
     // Test reset from Injecting
-    sm.start_recording().unwrap();
-    sm.stop_recording().unwrap();
-    sm.transcribing_to_injecting().unwrap();
-    sm.reset();
-    assert_eq!(sm.state(), StateTag::Idle);
+    assert!(ps.sm_start_recording());
+    assert!(ps.sm_stop_recording());
+    assert!(ps.sm_transcribing_to_injecting());
+    ps.sm_reset();
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }

@@ -639,7 +639,7 @@ impl DeliveryController {
                     self.window_controller.hide_review();
                 }
                 self.window_controller.hide_floating();
-                ps.review.set_shown_on_press(false);
+                ps.review().set_shown_on_press(false);
                 match self.update_json_deliver(review_data.as_ref(), &final_text) {
                     Ok(()) => {}
                     Err(e) => {
@@ -656,7 +656,7 @@ impl DeliveryController {
                 }
                 self.window_controller.hide_floating();
                 self.window_controller.hide_review();
-                ps.review.set_shown_on_press(false);
+                ps.review().set_shown_on_press(false);
                 match self.update_json_cancel(review_data.as_ref()) {
                     Ok(()) => {}
                     Err(e) => {

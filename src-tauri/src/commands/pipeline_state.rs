@@ -4,6 +4,7 @@ use crate::commands::EventEmitter;
 use crate::commands::TauriEventEmitter;
 use crate::commands::delivery_controller::DeliveryController;
 use crate::commands::review_provider::{ReviewProvider, TauriReviewProvider};
+use crate::commands::window_controller::WindowController;
 use crate::commands::window_controller::window_controller_from_app;
 use crate::config::ConfigCache;
 use crate::llm::TextCorrector;
@@ -17,26 +18,46 @@ use tracing::{info, warn};
 
 /// Aggregated shared state for the hotkey pipeline.
 /// Eliminates the need to pass 8 individual `Arc` references to `make_hotkey_callback`.
-#[derive(Clone)]
-pub struct PipelineState {
+/// Test-only component snapshot for building variant PipelineStates.
+/// Note: delivery / record_only / audio_ring_buffer are NOT here — they are
+/// not `PipelineState::new` parameters; delivery is rebuilt by `new()`, the
+/// other two are fresh per-instance aggregates, so variant rebuilds simply
+/// get new ones (no test currently needs to swap them).
+#[cfg(test)]
+pub(crate) struct TestComponents {
     pub(crate) sm: Arc<Mutex<StateMachine>>,
-    #[cfg(test)]
-    forced_sm_state: Arc<Mutex<Option<StateTag>>>,
     pub(crate) ac: Arc<Mutex<dyn AudioCaptureProvider>>,
     pub(crate) engine: Arc<dyn SpeechEngine>,
     pub(crate) clipboard: Arc<dyn ClipboardProvider>,
-    pub(crate) perf_history: Arc<PerfHistory>,
     pub(crate) config_cache: ConfigCache,
+    pub(crate) perf_history: Arc<crate::perf::PerfHistory>,
     pub(crate) cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
     pub(crate) realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
-    pub(crate) window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
+    pub(crate) window_controller: Arc<dyn WindowController>,
     pub(crate) emitter: Arc<dyn EventEmitter>,
     pub(crate) review: Arc<dyn ReviewProvider>,
+}
+
+#[derive(Clone)]
+pub struct PipelineState {
+    sm: Arc<Mutex<StateMachine>>,
+    #[cfg(test)]
+    forced_sm_state: Arc<Mutex<Option<StateTag>>>,
+    ac: Arc<Mutex<dyn AudioCaptureProvider>>,
+    engine: Arc<dyn SpeechEngine>,
+    clipboard: Arc<dyn ClipboardProvider>,
+    perf_history: Arc<PerfHistory>,
+    config_cache: ConfigCache,
+    cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
+    realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
+    window_controller: Arc<dyn WindowController>,
+    emitter: Arc<dyn EventEmitter>,
+    review: Arc<dyn ReviewProvider>,
     /// Single authority for post-transcription delivery lifecycle.
-    pub(crate) delivery: Arc<DeliveryController>,
+    delivery: Arc<DeliveryController>,
     /// Decoupled audio buffer for lock-free realtime reads.
     /// Capacity: 60 seconds @ 48kHz = 2,880,000 samples.
-    pub(crate) audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
+    audio_ring_buffer: Arc<Mutex<AudioRingBuffer>>,
     /// Active record-only session (Some only while a record-only session is
     /// capturing). Private; access goes through set/take_record_only_session.
     record_only: Arc<Mutex<Option<crate::commands::record_only_session::ActiveRecordOnly>>>,
@@ -58,7 +79,7 @@ impl PipelineState {
         config_cache: ConfigCache,
         cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
         realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
-        window_controller: Arc<dyn crate::commands::window_controller::WindowController>,
+        window_controller: Arc<dyn WindowController>,
         emitter: Arc<dyn EventEmitter>,
         review: Arc<dyn ReviewProvider>,
     ) -> Self {
@@ -193,9 +214,7 @@ impl PipelineState {
         self.emitter.clone()
     }
 
-    pub(crate) fn window_controller(
-        &self,
-    ) -> Arc<dyn crate::commands::window_controller::WindowController> {
+    pub(crate) fn window_controller(&self) -> Arc<dyn WindowController> {
         self.window_controller.clone()
     }
 
@@ -478,6 +497,24 @@ impl PipelineState {
 
 #[cfg(test)]
 impl PipelineState {
+    /// Test-only: snapshot of all components for building variant
+    /// PipelineStates (swap one component, keep the rest).
+    pub(crate) fn test_components(&self) -> TestComponents {
+        TestComponents {
+            sm: self.sm.clone(),
+            ac: self.ac.clone(),
+            engine: self.engine.clone(),
+            clipboard: self.clipboard.clone(),
+            perf_history: self.perf_history.clone(),
+            config_cache: self.config_cache.clone(),
+            cached_llm: self.cached_llm.clone(),
+            realtime_transcriber: self.realtime_transcriber.clone(),
+            window_controller: self.window_controller.clone(),
+            emitter: self.emitter.clone(),
+            review: self.review.clone(),
+        }
+    }
+
     /// Test-only: force the real state-machine tag.
     pub(crate) fn force_state_tag(&self, tag: StateTag) {
         if let Some(mut guard) = crate::util::lock_mutex(&self.sm, "state_machine") {

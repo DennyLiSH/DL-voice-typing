@@ -87,7 +87,7 @@ async fn test_inject_direct_succeeds() {
     let mut perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
 
-    ps.delivery
+    ps.delivery()
         .inject_direct(
             &ps,
             "hello world".to_string(),
@@ -112,7 +112,7 @@ async fn test_show_review_enters_reviewing() {
     let perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
 
-    ps.delivery
+    ps.delivery()
         .show_review(
             &ps,
             "review me".to_string(),
@@ -140,21 +140,22 @@ async fn test_show_review_fallback_injects_when_window_missing() {
     let policy = build_policy();
 
     // Swap to a window controller that pretends the review window is missing.
+    let c = ps.test_components();
     let ps = PipelineState::new(
-        ps.sm.clone(),
-        ps.ac.clone(),
-        ps.engine.clone(),
-        ps.clipboard.clone(),
-        ps.perf_history.clone(),
-        ps.config_cache.clone(),
-        ps.cached_llm.clone(),
-        ps.realtime_transcriber.clone(),
+        c.sm,
+        c.ac,
+        c.engine,
+        c.clipboard,
+        c.perf_history,
+        c.config_cache,
+        c.cached_llm,
+        c.realtime_transcriber,
         Arc::new(HiddenReviewWindowController),
-        ps.emitter.clone(),
-        ps.review.clone(),
+        c.emitter,
+        c.review,
     );
 
-    ps.delivery
+    ps.delivery()
         .show_review(
             &ps,
             "fallback text".to_string(),
@@ -184,21 +185,22 @@ async fn show_review_fallback_clears_context() {
 
     // Swap to a window controller that pretends the review window is missing,
     // forcing show_review into the fallback direct-injection branch.
+    let c = ps.test_components();
     let ps = PipelineState::new(
-        ps.sm.clone(),
-        ps.ac.clone(),
-        ps.engine.clone(),
-        ps.clipboard.clone(),
-        ps.perf_history.clone(),
-        ps.config_cache.clone(),
-        ps.cached_llm.clone(),
-        ps.realtime_transcriber.clone(),
+        c.sm,
+        c.ac,
+        c.engine,
+        c.clipboard,
+        c.perf_history,
+        c.config_cache,
+        c.cached_llm,
+        c.realtime_transcriber,
         Arc::new(HiddenReviewWindowController),
-        ps.emitter.clone(),
-        ps.review.clone(),
+        c.emitter,
+        c.review,
     );
 
-    ps.delivery
+    ps.delivery()
         .show_review(
             &ps,
             "fallback text".to_string(),
@@ -217,7 +219,7 @@ async fn show_review_fallback_clears_context() {
     // fallback branch, so without the fix foreground_hwnd would leak a sentinel
     // value (MockReviewProvider uses 42) into the next review cycle. This
     // indirectly guarantees stale HWND cannot hijack the next inject_text path.
-    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after fallback (got {hwnd:?})"
@@ -235,7 +237,7 @@ async fn test_confirm_review_injects_and_returns_idle() {
     to_reviewing(&ps);
 
     let confirm_result = ps
-        .delivery
+        .delivery()
         .confirm_review(&ps, "confirmed text".to_string())
         .await;
     assert!(
@@ -252,7 +254,7 @@ async fn test_confirm_review_injects_and_returns_idle() {
 async fn test_confirm_review_from_idle_returns_error() {
     let (ps, _emitter) = build_ps();
 
-    let result = ps.delivery.confirm_review(&ps, "text".to_string()).await;
+    let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
@@ -262,7 +264,7 @@ async fn test_confirm_review_from_recording_returns_error_and_resets() {
     let (ps, _emitter) = build_ps();
     ps.sm_start_recording();
 
-    let result = ps.delivery.confirm_review(&ps, "text".to_string()).await;
+    let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
@@ -272,7 +274,7 @@ async fn test_cancel_review_returns_to_idle() {
     let (ps, _emitter) = build_ps();
     to_reviewing(&ps);
 
-    let cancel_result = ps.delivery.cancel_review(&ps).await;
+    let cancel_result = ps.delivery().cancel_review(&ps).await;
     assert!(
         cancel_result.is_ok(),
         "cancel from Reviewing should succeed"
@@ -286,7 +288,7 @@ async fn test_cancel_review_from_idle_returns_error() {
     let (ps, _emitter) = build_ps();
     // No state setup: starts in Idle.
 
-    let cancel_result = ps.delivery.cancel_review(&ps).await;
+    let cancel_result = ps.delivery().cancel_review(&ps).await;
     assert!(cancel_result.is_err());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 }
@@ -297,22 +299,23 @@ async fn test_cancel_review_clipboard_restore_failure_still_returns_idle() {
     to_reviewing(&ps);
 
     let failing_clipboard = Arc::new(MockClipboard::new().with_restore_error("restore failed"));
+    let c = ps.test_components();
     let ps_with_failing = PipelineState::new(
-        ps.sm.clone(),
-        ps.ac.clone(),
-        ps.engine.clone(),
+        c.sm,
+        c.ac,
+        c.engine,
         failing_clipboard,
-        ps.perf_history.clone(),
-        ps.config_cache.clone(),
-        ps.cached_llm.clone(),
-        ps.realtime_transcriber.clone(),
-        ps.window_controller.clone(),
-        ps.emitter.clone(),
-        ps.review.clone(),
+        c.perf_history,
+        c.config_cache,
+        c.cached_llm,
+        c.realtime_transcriber,
+        c.window_controller,
+        c.emitter,
+        c.review,
     );
 
     let cancel_result = ps_with_failing
-        .delivery
+        .delivery()
         .cancel_review(&ps_with_failing)
         .await;
     assert!(
@@ -330,24 +333,25 @@ async fn test_clipboard_restore_on_inject_failure() {
 
     let mock = Arc::new(MockClipboard::new().with_inject_error("inject failed"));
     let failing_clipboard = mock.clone();
+    let c = ps.test_components();
     let ps_with_failing = PipelineState::new(
-        ps.sm.clone(),
-        ps.ac.clone(),
-        ps.engine.clone(),
+        c.sm,
+        c.ac,
+        c.engine,
         failing_clipboard,
-        ps.perf_history.clone(),
-        ps.config_cache.clone(),
-        ps.cached_llm.clone(),
-        ps.realtime_transcriber.clone(),
-        ps.window_controller.clone(),
-        ps.emitter.clone(),
-        ps.review.clone(),
+        c.perf_history,
+        c.config_cache,
+        c.cached_llm,
+        c.realtime_transcriber,
+        c.window_controller,
+        c.emitter,
+        c.review,
     );
 
     let mut perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
     ps_with_failing
-        .delivery
+        .delivery()
         .inject_direct(
             &ps_with_failing,
             "hello".to_string(),
@@ -453,25 +457,26 @@ async fn confirm_review_error_branch_restores_focus() {
     let recording = Arc::new(RecordingWindowController::new());
 
     let (base_ps, _emitter) = build_ps();
+    let c = base_ps.test_components();
     let ps = PipelineState::new(
-        base_ps.sm.clone(),
-        base_ps.ac.clone(),
-        base_ps.engine.clone(),
+        c.sm,
+        c.ac,
+        c.engine,
         failing_clipboard,
-        base_ps.perf_history.clone(),
-        base_ps.config_cache.clone(),
-        base_ps.cached_llm.clone(),
-        base_ps.realtime_transcriber.clone(),
+        c.perf_history,
+        c.config_cache,
+        c.cached_llm,
+        c.realtime_transcriber,
         recording.clone(),
-        base_ps.emitter.clone(),
-        base_ps.review.clone(),
+        c.emitter,
+        c.review,
     );
 
     to_transcribing(&ps);
     let perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
 
-    ps.delivery
+    ps.delivery()
         .show_review(
             &ps,
             "review me".to_string(),
@@ -487,7 +492,7 @@ async fn confirm_review_error_branch_restores_focus() {
     assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
 
     let result = ps
-        .delivery
+        .delivery()
         .confirm_review(&ps, "confirmed text".to_string())
         .await;
     assert!(
@@ -525,7 +530,7 @@ async fn populate_context_via_show_review(ps: &PipelineState) {
     to_transcribing(ps);
     let perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
-    ps.delivery
+    ps.delivery()
         .show_review(
             ps,
             "review me".to_string(),
@@ -539,7 +544,7 @@ async fn populate_context_via_show_review(ps: &PipelineState) {
         .await;
     // Sanity: show_review entered Reviewing and populated context.
     assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
-    let (hwnd, _data, _perf, _t_press) = ps.delivery.take_context();
+    let (hwnd, _data, _perf, _t_press) = ps.delivery().take_context();
     assert_eq!(
         hwnd,
         Some(42),
@@ -548,7 +553,7 @@ async fn populate_context_via_show_review(ps: &PipelineState) {
     // Re-populate because the sanity check above just took it.
     to_transcribing(ps);
     let perf = crate::perf::PerfMetrics::new(0);
-    ps.delivery
+    ps.delivery()
         .show_review(
             ps,
             "review me".to_string(),
@@ -573,10 +578,10 @@ async fn confirm_review_recording_branch_clears_context() {
     ps.sm_start_recording();
     assert_eq!(ps.sm_state(), Some(StateTag::Recording));
 
-    let result = ps.delivery.confirm_review(&ps, "text".to_string()).await;
+    let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
 
-    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after Recording branch (got {hwnd:?})"
@@ -594,10 +599,10 @@ async fn confirm_review_catchall_branch_clears_context() {
     ps.sm_reset();
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 
-    let result = ps.delivery.confirm_review(&ps, "text".to_string()).await;
+    let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
 
-    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after catch-all branch (got {hwnd:?})"
@@ -618,14 +623,14 @@ async fn cancel_review_sm_cancel_failure_branch_clears_context() {
 
     assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
 
-    let result = ps.delivery.cancel_review(&ps).await;
+    let result = ps.delivery().cancel_review(&ps).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert_eq!(err.code, "STATE");
     assert_eq!(err.message, "cancel_reviewing failed");
 
     // The failure branch must clear the leaked DeliveryContext.
-    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after sm_cancel_reviewing failure (got {hwnd:?})"
@@ -653,10 +658,10 @@ async fn cancel_review_catchall_branch_clears_context() {
     ps.sm_reset();
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 
-    let result = ps.delivery.cancel_review(&ps).await;
+    let result = ps.delivery().cancel_review(&ps).await;
     assert!(result.is_err());
 
-    let (hwnd, data, _perf, t_press) = ps.delivery.take_context();
+    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after catch-all branch (got {hwnd:?})"
@@ -682,7 +687,7 @@ async fn inject_direct_aborts_when_entry_transition_fails() {
     let mut perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
 
-    ps.delivery
+    ps.delivery()
         .inject_direct(
             &ps,
             "hello".to_string(),
@@ -717,7 +722,7 @@ async fn show_review_aborts_when_entry_transition_fails() {
     let perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
 
-    ps.delivery
+    ps.delivery()
         .show_review(
             &ps,
             "hello".to_string(),
@@ -770,7 +775,7 @@ async fn realtime_review_handoff_saves_clipboard_and_advances_state() {
     ps.sm_start_recording();
 
     // Call realtime_review_handoff with some accumulated text:
-    ps.delivery
+    ps.delivery()
         .realtime_review_handoff(&ps, Some("accumulated".to_string()));
 
     // Assertions on current documented behavior:
@@ -785,7 +790,7 @@ async fn realtime_review_handoff_saves_clipboard_and_advances_state() {
     assert_eq!(review.get_text(), Some("accumulated".to_string()));
     // foreground was migrated from review_provider.take_foreground() to delivery context.
     // DeliveryContext.context is private — use pub(crate) take_context() to inspect.
-    let (foreground_hwnd, _data_saving, _perf, _t_press) = ps.delivery.take_context();
+    let (foreground_hwnd, _data_saving, _perf, _t_press) = ps.delivery().take_context();
     assert_eq!(
         foreground_hwnd,
         Some(42),
@@ -814,7 +819,7 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
         json_path: PathBuf::from("test.json"),
     });
 
-    ps.delivery
+    ps.delivery()
         .show_review(
             &ps,
             "final text".to_string(),
@@ -850,7 +855,7 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
     // `data_saving` (not `review_data`). Use take_context() to inspect.
     // show_review builds ReviewData from save_result via Option::map, so
     // with save_result=Some(...) the stored data_saving must be Some(...).
-    let (_foreground_hwnd, data_saving, _perf, _t_press) = ps.delivery.take_context();
+    let (_foreground_hwnd, data_saving, _perf, _t_press) = ps.delivery().take_context();
     assert!(
         data_saving.is_some(),
         "data_saving must be stored for later confirm"
@@ -883,7 +888,7 @@ async fn test_inject_to_hwnd_success() {
         focus: |_| true,
     };
 
-    let result = ps.delivery.inject_to_hwnd(7, "成功文本", &ops).await;
+    let result = ps.delivery().inject_to_hwnd(7, "成功文本", &ops).await;
 
     assert!(result.is_ok());
     assert!(clipboard.saved());
@@ -898,7 +903,7 @@ async fn test_inject_to_hwnd_window_gone_leaves_text() {
     let (ps, _emitter) = build_ps_with_clipboard(clipboard.clone());
 
     let result = ps
-        .delivery
+        .delivery()
         .inject_to_hwnd(0, "留底文本", &DEAD_WINDOW_OPS)
         .await;
 
@@ -919,7 +924,7 @@ async fn test_inject_to_hwnd_focus_failed_leaves_text_no_save() {
         focus: |_| false,
     };
 
-    let result = ps.delivery.inject_to_hwnd(1, "聚焦失败文本", &ops).await;
+    let result = ps.delivery().inject_to_hwnd(1, "聚焦失败文本", &ops).await;
 
     assert!(matches!(result, Err(InjectError::FocusFailed)));
     assert_eq!(clipboard.set_texts(), vec!["聚焦失败文本".to_string()]);
@@ -939,7 +944,7 @@ async fn test_inject_to_hwnd_inject_failed_restores_clipboard() {
         focus: |_| true,
     };
 
-    let result = ps.delivery.inject_to_hwnd(1, "注入失败文本", &ops).await;
+    let result = ps.delivery().inject_to_hwnd(1, "注入失败文本", &ops).await;
 
     assert!(matches!(result, Err(InjectError::Clipboard(_))));
     assert!(clipboard.saved());
@@ -957,7 +962,7 @@ async fn test_inject_to_hwnd_save_failure_no_restore() {
         focus: |_| true,
     };
 
-    let result = ps.delivery.inject_to_hwnd(1, "保存失败文本", &ops).await;
+    let result = ps.delivery().inject_to_hwnd(1, "保存失败文本", &ops).await;
 
     assert!(matches!(result, Err(InjectError::Clipboard(_))));
     // Save failed → nothing saved: no paste, no restore (was_saved()=false),
