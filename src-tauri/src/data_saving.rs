@@ -63,7 +63,6 @@ pub(crate) struct RecordingMetadata {
     /// "classic" | "record_only"; readers default missing → "classic".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) source: Option<String>,
-    #[serde(default)]
     pub(crate) dropped_blocks: u64,
 }
 
@@ -71,8 +70,6 @@ pub(crate) struct RecordingMetadata {
 /// corrupt JSON — callers decide per-file error handling). serde_json has
 /// a built-in 128-level recursion limit, so deeply nested malformed JSON
 /// returns Err rather than overflowing the stack.
-// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
-#[allow(dead_code)]
 pub(crate) fn load_metadata(path: &std::path::Path) -> Result<RecordingMetadata, AppError> {
     let content = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&content)?)
@@ -81,8 +78,6 @@ pub(crate) fn load_metadata(path: &std::path::Path) -> Result<RecordingMetadata,
 /// Write metadata atomically (temp file + rename). Windows rename 在目标被
 /// 短暂占用（如正被其他进程读取）时失败直接上抛 Err，不重试——沿用既有
 /// `atomic_write_json` 语义，由调用方呈现错误。
-// TODO(Task 5-7): remove once callers migrate from update_json_with_*.
-#[allow(dead_code)]
 pub(crate) fn write_metadata_atomic(
     path: &std::path::Path,
     metadata: &RecordingMetadata,
@@ -640,6 +635,47 @@ mod tests {
         assert_eq!(legacy.transcription, minimal.transcription);
         assert_eq!(legacy.segments, minimal.segments);
         assert_eq!(legacy.dropped_blocks, minimal.dropped_blocks);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_metadata_legacy_record_only_golden_read() {
+        let dir = std::env::temp_dir().join("dl-vt-meta-golden");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.json");
+        // Exact shape written by the pre-migration record-only writer.
+        fs::write(
+            &path,
+            r#"{
+  "timestamp": "2026-08-19T12:00:00+08:00",
+  "language": "zh",
+  "whisper_model": "tiny",
+  "sample_rate": 16000,
+  "duration_seconds": 62.5,
+  "transcription": null,
+  "llm_corrected": null,
+  "segments": [],
+  "transcription_status": "pending",
+  "source": "record_only",
+  "dropped_blocks": 2
+}"#,
+        )
+        .unwrap();
+        let m = load_metadata(&path).unwrap();
+        assert_eq!(m.timestamp.as_deref(), Some("2026-08-19T12:00:00+08:00"));
+        assert_eq!(m.language, Some(Language::Zh));
+        assert_eq!(m.whisper_model, Some(WhisperModel::Tiny));
+        assert_eq!(m.sample_rate, Some(16000));
+        assert_eq!(m.duration_seconds, Some(62.5));
+        assert!(m.transcription.is_none());
+        assert!(m.llm_corrected.is_none());
+        assert!(m.segments.is_empty());
+        assert_eq!(m.transcription_status.as_deref(), Some("pending"));
+        assert_eq!(m.source.as_deref(), Some("record_only"));
+        assert_eq!(m.dropped_blocks, 2);
+        assert!(m.final_text.is_none());
+        assert!(m.original_sample_rate.is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 }

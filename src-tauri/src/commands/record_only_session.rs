@@ -289,9 +289,9 @@ impl RecordOnlySession {
         }
     }
 
-    /// Write the session JSON metadata (atomic temp-file + rename).
-    /// `transcription_status` starts at "pending" (awaiting user-triggered
-    /// transcription) or "failed" when the audio is known to be incomplete.
+    /// Write the session JSON metadata (atomic). `transcription_status` starts
+    /// at "pending" (awaiting user-triggered transcription) or "failed" when
+    /// the audio is known to be incomplete.
     fn write_session_json(
         policy: &RecordOnlyPolicy,
         stem: &str,
@@ -313,20 +313,18 @@ impl RecordOnlySession {
             }
             Err(_) => ("failed", 0.0, 0),
         };
-        let metadata = serde_json::json!({
-            "timestamp": crate::data_saving::now_rfc3339(),
-            "language": policy.language,
-            "whisper_model": policy.whisper_model,
-            "sample_rate": TARGET_SAMPLE_RATE,
-            "duration_seconds": duration_seconds,
-            "transcription": serde_json::Value::Null,
-            "llm_corrected": serde_json::Value::Null,
-            "segments": [],
-            "transcription_status": status,
-            "source": "record_only",
-            "dropped_blocks": dropped,
-        });
-        crate::data_saving::atomic_write_json(&json_path, &metadata)
+        let metadata = crate::data_saving::RecordingMetadata {
+            timestamp: Some(crate::data_saving::now_rfc3339()),
+            language: Some(policy.language),
+            whisper_model: Some(policy.whisper_model.clone()),
+            sample_rate: Some(TARGET_SAMPLE_RATE),
+            duration_seconds: Some(duration_seconds),
+            transcription_status: Some(status.to_string()),
+            source: Some("record_only".to_string()),
+            dropped_blocks: dropped,
+            ..Default::default()
+        };
+        crate::data_saving::write_metadata_atomic(&json_path, &metadata)
     }
 }
 
@@ -468,7 +466,9 @@ mod tests {
         assert_eq!(parsed["source"], "record_only");
         assert_eq!(parsed["transcription_status"], "pending");
         assert_eq!(parsed["dropped_blocks"], 0);
-        assert!(parsed["segments"].is_array());
+        // Lenient shape: empty segments are omitted on serialize (readers
+        // treat missing and empty identically).
+        assert!(parsed["segments"].is_array() || parsed.get("segments").is_none());
         assert!(parsed["transcription"].is_null());
         assert!(emitted(&emitter, "record-only-finished"));
         let _ = fs::remove_dir_all(&dir);
@@ -624,5 +624,24 @@ mod tests {
         RecordOnlySession::on_release(&ps);
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_session_json_finalize_failure_records_failed() {
+        let dir = temp_dir("json-finalize-fail");
+        let policy = RecordOnlyPolicy {
+            data_saving_path: dir.to_string_lossy().to_string(),
+            language: crate::config::Language::Zh,
+            whisper_model: crate::config::WhisperModel::default(),
+        };
+        let outcome = Err(AppError::Audio("simulated finalize failure".to_string()));
+        RecordOnlySession::write_session_json(&policy, "2026-08-19_12-00-00", &outcome).unwrap();
+        let json_path = dir.join("2026-08-19_12-00-00.json");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+        assert_eq!(parsed["transcription_status"], "failed");
+        assert_eq!(parsed["duration_seconds"], 0.0);
+        assert_eq!(parsed["dropped_blocks"], 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
