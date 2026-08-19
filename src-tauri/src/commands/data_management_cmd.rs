@@ -74,13 +74,15 @@ pub struct FailedDelete {
 // Filename validation + path resolution
 // ---------------------------------------------------------------------------
 
-/// Validate that `filename` is a `YYYY-MM-DD_HH-MM-SS` stem and contains no
-/// path separators or other escape characters. Combined with canonicalize-based
-/// checks at resolve time, this is defense-in-depth against path traversal.
 /// Serialize a typed metadata enum field back to its on-disk string form
-/// (language / whisper_model are enums at rest as strings). Non-string
-/// shapes are logged (schema drift must be observable, not silent).
+/// (language / whisper_model are enums at rest as strings). The helper
+/// deliberately routes through `to_value` + `as_str` to lock the string
+/// shape contract, so a future change to the enum's `Serialize` form
+/// cannot silently alter the IPC payload. A missing field (`None`)
+/// short-circuits as legitimately absent; non-string shapes are logged
+/// (schema drift must be observable, not silent).
 fn enum_field<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
+    let v = v.as_ref()?;
     let value = serde_json::to_value(v).ok()?;
     match value.as_str() {
         Some(s) => Some(s.to_string()),
@@ -91,6 +93,9 @@ fn enum_field<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
     }
 }
 
+/// Validate that `filename` is a `YYYY-MM-DD_HH-MM-SS` stem and contains no
+/// path separators or other escape characters. Combined with canonicalize-based
+/// checks at resolve time, this is defense-in-depth against path traversal.
 pub(crate) fn is_valid_stem(filename: &str) -> bool {
     if filename.len() != FILENAME_LEN {
         return false;
