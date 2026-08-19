@@ -21,6 +21,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::commands::delivery_controller::{FocusOps, InjectError};
+
 fn build_ps() -> (PipelineState, Arc<MockEmitter>) {
     build_ps_with_clipboard(Arc::new(MockClipboard::new()))
 }
@@ -863,4 +865,105 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
         rd.llm_text.is_none(),
         "llm_text must be None when llm_enabled is false"
     );
+}
+
+// --- inject_to_hwnd (transcribe window detached delivery, ADR-0014) ---
+
+const DEAD_WINDOW_OPS: FocusOps = FocusOps {
+    is_valid: |_| false,
+    focus: |_| false,
+};
+
+#[tokio::test]
+async fn test_inject_to_hwnd_success() {
+    let clipboard = Arc::new(MockClipboard::new());
+    let (ps, _emitter) = build_ps_with_clipboard(clipboard.clone());
+    let ops = FocusOps {
+        is_valid: |_| true,
+        focus: |_| true,
+    };
+
+    let result = ps.delivery.inject_to_hwnd(7, "成功文本", &ops).await;
+
+    assert!(result.is_ok());
+    assert!(clipboard.saved());
+    assert_eq!(clipboard.injected(), vec!["成功文本".to_string()]);
+    // Success goes through the atomic save_and_inject only — no fallback set_text.
+    assert!(clipboard.set_texts().is_empty());
+}
+
+#[tokio::test]
+async fn test_inject_to_hwnd_window_gone_leaves_text() {
+    let clipboard = Arc::new(MockClipboard::new());
+    let (ps, _emitter) = build_ps_with_clipboard(clipboard.clone());
+
+    let result = ps
+        .delivery
+        .inject_to_hwnd(0, "留底文本", &DEAD_WINDOW_OPS)
+        .await;
+
+    assert!(matches!(result, Err(InjectError::WindowGone)));
+    // Fallback: text left in the clipboard for manual paste, no paste simulated.
+    assert_eq!(clipboard.set_texts(), vec!["留底文本".to_string()]);
+    assert!(clipboard.injected().is_empty());
+    // New order: window validity is checked before any clipboard op.
+    assert!(!clipboard.saved());
+}
+
+#[tokio::test]
+async fn test_inject_to_hwnd_focus_failed_leaves_text_no_save() {
+    let clipboard = Arc::new(MockClipboard::new());
+    let (ps, _emitter) = build_ps_with_clipboard(clipboard.clone());
+    let ops = FocusOps {
+        is_valid: |_| true,
+        focus: |_| false,
+    };
+
+    let result = ps.delivery.inject_to_hwnd(1, "聚焦失败文本", &ops).await;
+
+    assert!(matches!(result, Err(InjectError::FocusFailed)));
+    assert_eq!(clipboard.set_texts(), vec!["聚焦失败文本".to_string()]);
+    assert!(clipboard.injected().is_empty());
+    // Behavior change vs old do_inject: focus runs before save, so the failed
+    // path no longer performs a wasted clipboard save (ADR-0014).
+    assert!(!clipboard.saved());
+    assert!(!clipboard.restored());
+}
+
+#[tokio::test]
+async fn test_inject_to_hwnd_inject_failed_restores_clipboard() {
+    let clipboard = Arc::new(MockClipboard::new().with_inject_error("paste failed"));
+    let (ps, _emitter) = build_ps_with_clipboard(clipboard.clone());
+    let ops = FocusOps {
+        is_valid: |_| true,
+        focus: |_| true,
+    };
+
+    let result = ps.delivery.inject_to_hwnd(1, "注入失败文本", &ops).await;
+
+    assert!(matches!(result, Err(InjectError::Clipboard(_))));
+    assert!(clipboard.saved());
+    assert!(clipboard.injected().is_empty());
+    // Paste attempted and failed → saved clipboard content is restored.
+    assert!(clipboard.restored());
+}
+
+#[tokio::test]
+async fn test_inject_to_hwnd_save_failure_no_restore() {
+    let clipboard = Arc::new(MockClipboard::new().with_save_error("clipboard busy"));
+    let (ps, _emitter) = build_ps_with_clipboard(clipboard.clone());
+    let ops = FocusOps {
+        is_valid: |_| true,
+        focus: |_| true,
+    };
+
+    let result = ps.delivery.inject_to_hwnd(1, "保存失败文本", &ops).await;
+
+    assert!(matches!(result, Err(InjectError::Clipboard(_))));
+    // Save failed → nothing saved: no paste, no restore (was_saved()=false),
+    // and no fallback set_text (the paste was never the issue).
+    assert!(!clipboard.saved());
+    assert!(clipboard.injected().is_empty());
+    assert!(!clipboard.restored());
+    assert!(clipboard.set_texts().is_empty());
 }

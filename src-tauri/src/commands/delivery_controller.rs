@@ -4,7 +4,7 @@ use crate::commands::pipeline_state::PipelineState;
 use crate::commands::review::ReviewData;
 use crate::commands::window_controller::WindowController;
 use crate::data_saving::SaveResult;
-use crate::error::CommandError;
+use crate::error::{AppError, CommandError};
 use crate::perf::PerfMetrics;
 use crate::state::StateTag;
 use std::sync::{Arc, Mutex};
@@ -63,6 +63,38 @@ pub(crate) struct DeliveryController {
     review: Arc<dyn crate::commands::review_provider::ReviewProvider>,
     perf_history: Arc<crate::perf::PerfHistory>,
     context: Mutex<DeliveryContext>,
+}
+
+/// Focus-settle delay after SetForegroundWindow before SendInput (Ctrl+V).
+// 临时过渡（Task 2 切换调用点后移除）：见 inject_to_hwnd 注释。
+#[cfg_attr(not(test), allow(dead_code))]
+const FOCUS_SETTLE_MS: Duration = Duration::from_millis(100);
+
+/// Win32 focus operations for detached delivery, injectable for tests
+/// (production: `WIN32_FOCUS_OPS`; tests pass plain fn pointers).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct FocusOps {
+    pub(crate) is_valid: fn(isize) -> bool,
+    pub(crate) focus: fn(isize) -> bool,
+}
+
+// 临时过渡（Task 2 切换调用点后移除）：测试 target 下也无引用，需无条件豁免。
+#[allow(dead_code)]
+pub(crate) const WIN32_FOCUS_OPS: FocusOps = FocusOps {
+    is_valid: crate::win32::is_window_valid,
+    focus: crate::win32::restore_foreground_hwnd_checked,
+};
+
+/// Failure modes of `inject_to_hwnd`. `WindowGone` / `FocusFailed` mean the
+/// paste was never attempted — the text stays in the clipboard as 留底.
+/// `Clipboard` means the paste was attempted and failed — the saved clipboard
+/// content has been restored.
+// 临时过渡（Task 2 切换调用点后移除）：Clipboard 变体字段暂无读取方。
+#[allow(dead_code)]
+pub(crate) enum InjectError {
+    WindowGone,
+    FocusFailed,
+    Clipboard(AppError),
 }
 
 // -------------------------------------------------------------------------
@@ -727,6 +759,69 @@ impl DeliveryController {
                 Err(msg)
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Detached delivery (transcribe window) — ADR-0014
+    // -------------------------------------------------------------------------
+
+    /// Deliver `text` to `hwnd` outside a hotkey session (transcribe window).
+    ///
+    /// Sequence: IsWindow precheck → checked focus → settle wait → atomic
+    /// `save_and_inject` (op-lock spans save+inject, with self-restore on the
+    /// success path inside the unit, closing the Tray-Reset interleaving
+    /// window per ADR-0010; the failure-path restore below runs outside the
+    /// lock — same benign was_saved check-act race ADR-0010 documents for
+    /// recover()). Three-tier failure contract: window gone / focus failed →
+    /// text left in the clipboard as 留底 (manual paste fallback); inject
+    /// failed → saved content restored.
+    // 临时过渡（Task 2 切换调用点后移除）：lib target 下暂无生产调用方。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn inject_to_hwnd(
+        &self,
+        hwnd: isize,
+        text: &str,
+        ops: &FocusOps,
+    ) -> Result<(), InjectError> {
+        if !(ops.is_valid)(hwnd) {
+            let _ = self.clipboard.set_text(text);
+            return Err(InjectError::WindowGone);
+        }
+        if !(ops.focus)(hwnd) {
+            // Do NOT restore: the transcript stays in the clipboard as 留底.
+            let _ = self.clipboard.set_text(text);
+            return Err(InjectError::FocusFailed);
+        }
+        // Let the OS process the focus change before simulating keystrokes —
+        // same rationale as confirm_from_reviewing: without the wait Ctrl+V
+        // may still be dispatched to the previously focused (transcribe) window.
+        std::thread::sleep(FOCUS_SETTLE_MS);
+        let cb = self.clipboard.clone();
+        let text_owned = text.to_string();
+        let inject_result =
+            tokio::task::spawn_blocking(move || cb.save_and_inject(&text_owned)).await;
+        let outcome = match inject_result {
+            Ok(r) => r,
+            Err(e) => Err(AppError::Clipboard(format!("inject task panicked: {e}"))),
+        };
+        if let Err(e) = outcome {
+            warn!(target: "delivery", "inject_to_hwnd: inject failed: {e}");
+            // inject_inner does not self-restore on failure — restore the
+            // saved content explicitly. Unified exit covers both paste
+            // failure and panic-after-save (no-op when nothing was saved).
+            if self.clipboard.was_saved() {
+                if let Err(re) = self.clipboard.restore() {
+                    warn!(target: "delivery", "inject_to_hwnd: clipboard restore failed: {re}");
+                }
+            }
+            return Err(InjectError::Clipboard(e));
+        }
+        info!(
+            target: "delivery",
+            "inject_to_hwnd: injected {} chars",
+            text.chars().count()
+        );
+        Ok(())
     }
 
     fn restore_clipboard(&self) -> Result<(), String> {
