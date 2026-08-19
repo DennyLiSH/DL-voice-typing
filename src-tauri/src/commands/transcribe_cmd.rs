@@ -473,6 +473,7 @@ mod tests {
     use super::*;
     use crate::audio::MockAudioCapture;
     use crate::clipboard::MockClipboard;
+    use crate::commands::record_only_session::RecordOnlySession;
     use crate::commands::review_provider::MockReviewProvider;
     use crate::commands::window_controller::NoopWindowController;
     use crate::commands::{EventEmitter, MockEmitter};
@@ -974,13 +975,13 @@ mod tests {
 
         // 1. Record: press → 1s of audio → cleanup DAG (release path).
         // MockAudioCapture runs at 48kHz; the recorder resamples to 16kHz.
-        crate::commands::record_only_session::on_press(&ps);
+        RecordOnlySession::on_press(&ps);
         assert_eq!(ps.sm_state(), Some(crate::state::StateTag::RecordOnly));
         // Deliver 1s of audio through the real cpal callback path.
         if let Some(mut ac) = crate::util::lock_mutex(&ps.ac, "audio_capture") {
             ac.deliver(&vec![0.4f32; 48_000]);
         }
-        crate::commands::record_only_session::recover_session(&ps);
+        RecordOnlySession::recover(&ps);
         assert_eq!(ps.sm_state(), Some(crate::state::StateTag::Idle));
 
         let stem = emitter
