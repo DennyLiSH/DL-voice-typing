@@ -108,3 +108,43 @@ export function shouldAutoScroll(activeElement) {
     if (typeof activeElement.closest !== 'function') return true;
     return activeElement.closest('.segment-text') === null;
 }
+
+/**
+ * In-flight operation phases of the transcribe window (Axis A — mutually
+ * exclusive). Recording status (pending/done/failed) and edit presence are
+ * orthogonal axes consumed directly by uiFlags.
+ */
+export const PHASE = {
+    IDLE: 'idle',
+    LOADING: 'loading',
+    TRANSCRIBING: 'transcribing',
+    INJECTING: 'injecting',
+};
+
+/**
+ * Table-driven UI sync: state snapshot → all UI flags (single authority).
+ * Pure — DOM application lives in ui/transcribe.js syncUI().
+ *
+ * @param {{phase: string, selected: string|null, status: string|null, mergedEmpty: boolean}} s
+ * @returns {{
+ *   transcribeDisabled: boolean,   // phase!==IDLE || !selected
+ *   transcribeLabel: string,       // status==='done' ? '重新转录' : '转录'
+ *   cancelVisible: boolean,        // phase===TRANSCRIBING
+ *   progressVisible: boolean,      // phase===TRANSCRIBING
+ *   injectDisabled: boolean,       // phase!==IDLE || mergedEmpty
+ *   injectSpinnerVisible: boolean, // phase===INJECTING
+ *   listLocked: boolean,           // phase!==IDLE (visual symmetry with entry guards)
+ * }}
+ */
+export function uiFlags({ phase, selected, status, mergedEmpty }) {
+    const busy = phase !== PHASE.IDLE;
+    return {
+        transcribeDisabled: busy || !selected,
+        transcribeLabel: status === 'done' ? '重新转录' : '转录',
+        cancelVisible: phase === PHASE.TRANSCRIBING,
+        progressVisible: phase === PHASE.TRANSCRIBING,
+        injectDisabled: busy || mergedEmpty,
+        injectSpinnerVisible: phase === PHASE.INJECTING,
+        listLocked: busy,
+    };
+}

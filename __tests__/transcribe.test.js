@@ -5,8 +5,10 @@ import {
     findActiveSegmentIndex,
     formatTimestamp,
     mergeSegmentTexts,
+    PHASE,
     shouldAutoScroll,
     statusBadge,
+    uiFlags,
 } from '../ui/lib/transcribe.js';
 
 // ---------------------------------------------------------------------------
@@ -157,6 +159,85 @@ describe('shouldAutoScroll', () => {
 });
 
 // ---------------------------------------------------------------------------
+// uiFlags (C5 phase state machine — pure mapping, all 7 output fields)
+// ---------------------------------------------------------------------------
+
+describe('uiFlags', () => {
+    const base = {
+        phase: PHASE.IDLE,
+        selected: '2026-08-18_10-00-00',
+        status: 'pending',
+        mergedEmpty: false,
+    };
+
+    it('idle with selection: everything actionable, nothing visible', () => {
+        expect(uiFlags(base)).toEqual({
+            transcribeDisabled: false,
+            transcribeLabel: '转录',
+            cancelVisible: false,
+            progressVisible: false,
+            injectDisabled: false,
+            injectSpinnerVisible: false,
+            listLocked: false,
+        });
+    });
+
+    it('transcribeLabel flips to 重新转录 only when status is done', () => {
+        expect(uiFlags({ ...base, status: 'done' }).transcribeLabel).toBe(
+            '重新转录',
+        );
+        expect(uiFlags({ ...base, status: 'failed' }).transcribeLabel).toBe(
+            '转录',
+        );
+        expect(uiFlags({ ...base, status: null }).transcribeLabel).toBe('转录');
+    });
+
+    it('idle without selection disables transcribe', () => {
+        const flags = uiFlags({ ...base, selected: null });
+        expect(flags.transcribeDisabled).toBe(true);
+        // Inject is independently gated by merged emptiness.
+        expect(flags.injectDisabled).toBe(false);
+    });
+
+    it('idle with empty merged text disables inject', () => {
+        expect(uiFlags({ ...base, mergedEmpty: true }).injectDisabled).toBe(
+            true,
+        );
+    });
+
+    it('transcribing: cancel+progress visible, entries blocked, list locked', () => {
+        expect(uiFlags({ ...base, phase: PHASE.TRANSCRIBING })).toEqual({
+            transcribeDisabled: true,
+            transcribeLabel: '转录',
+            cancelVisible: true,
+            progressVisible: true,
+            injectDisabled: true,
+            injectSpinnerVisible: false,
+            listLocked: true,
+        });
+    });
+
+    it('loading: entries blocked and list locked (BC(C5)#1 unified guard)', () => {
+        const flags = uiFlags({ ...base, phase: PHASE.LOADING });
+        expect(flags.transcribeDisabled).toBe(true);
+        expect(flags.injectDisabled).toBe(true);
+        expect(flags.listLocked).toBe(true);
+        expect(flags.cancelVisible).toBe(false);
+        expect(flags.progressVisible).toBe(false);
+        expect(flags.injectSpinnerVisible).toBe(false);
+    });
+
+    it('injecting: spinner visible, entries blocked, list locked', () => {
+        const flags = uiFlags({ ...base, phase: PHASE.INJECTING });
+        expect(flags.injectSpinnerVisible).toBe(true);
+        expect(flags.transcribeDisabled).toBe(true);
+        expect(flags.injectDisabled).toBe(true);
+        expect(flags.listLocked).toBe(true);
+        expect(flags.cancelVisible).toBe(false);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Window orchestration (listeners + DOM interactions)
 // ---------------------------------------------------------------------------
 
@@ -295,14 +376,92 @@ describe('list loading', () => {
 });
 
 describe('transcription-error event', () => {
-    it('renders the payload message in the toast', async () => {
+    // C5 fix: events are app-global; without a local in-flight stem the
+    // window ignores them (e.g. window re-created mid-transcription).
+    it('is ignored when no transcription is in flight (stem guard)', async () => {
         await loadFresh(defaultInvoke);
+        listeners['transcription-error']({
+            payload: { message: '转录失败，请查看日志' },
+        });
+        expect(get('toast').hidden).toBe(true);
+    });
+
+    it('renders the payload message in the toast while in flight', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        get('btn-transcribe').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        await flush();
         listeners['transcription-error']({
             payload: { message: '转录失败，请查看日志' },
         });
         expect(get('toast').hidden).toBe(false);
         expect(get('toast').textContent).toBe('转录失败，请查看日志');
         expect(get('toast').classList.contains('error')).toBe(true);
+        // Phase reset: buttons actionable again.
+        expect(get('btn-transcribe').disabled).toBe(false);
+        expect(get('btn-cancel').hidden).toBe(true);
+    });
+});
+
+describe('stale/foreign transcription events (C5 stem guard)', () => {
+    it('ignores all 4 transcription-* events when stem is null', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        const fillBefore = get('progress-fill').style.width;
+        listeners['transcription-progress']({
+            payload: { percent: 42, stage: 'whisper' },
+        });
+        listeners['transcription-done']({
+            payload: { filename: ITEM.filename },
+        });
+        listeners['transcription-cancelled']({
+            payload: { filename: ITEM.filename },
+        });
+        listeners['transcription-error']({ payload: { message: 'x' } });
+        expect(get('progress-fill').style.width).toBe(fillBefore);
+        expect(get('toast').hidden).toBe(true);
+        expect(get('progress-wrap').hidden).toBe(true);
+    });
+
+    it('ignores done/cancelled for a different filename while in flight', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        get('btn-transcribe').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        await flush();
+        listeners['transcription-done']({ payload: { filename: 'other' } });
+        listeners['transcription-cancelled']({
+            payload: { filename: 'other' },
+        });
+        // Still transcribing: no toast, cancel visible, button disabled.
+        expect(get('toast').hidden).toBe(true);
+        expect(get('btn-cancel').hidden).toBe(false);
+        expect(get('btn-transcribe').disabled).toBe(true);
+    });
+
+    it('done with the matching stem finishes and reloads the detail', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        invokeMock.mockClear();
+        get('btn-transcribe').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        await flush();
+        listeners['transcription-done']({
+            payload: { filename: ITEM.filename },
+        });
+        await flush();
+        expect(get('toast').textContent).toBe('转录完成');
+        expect(get('btn-cancel').hidden).toBe(true);
+        // Rule 8: stored segments re-read after completion.
+        expect(
+            invokeMock.mock.calls.some(
+                ([cmd]) => cmd === 'get_recording_segments',
+            ),
+        ).toBe(true);
     });
 });
 
@@ -469,5 +628,241 @@ describe('transcription lifecycle UI', () => {
         expect(get('btn-transcribe').disabled).toBe(false);
         expect(get('btn-cancel').hidden).toBe(true);
         expect(get('progress-wrap').hidden).toBe(true);
+    });
+
+    it('startup failure resets phase and clears the stem', async () => {
+        await loadFresh((cmd) => {
+            if (cmd === 'transcribe_recording') {
+                return Promise.reject(new Error('启动失败'));
+            }
+            return defaultInvoke(cmd);
+        });
+        await selectFirstRecording();
+        get('btn-transcribe').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        await flush();
+        await flush();
+        expect(get('toast').textContent).toBe('启动失败');
+        expect(get('btn-transcribe').disabled).toBe(false);
+        // Stem cleared: a late done event for the same file is ignored.
+        listeners['transcription-done']({
+            payload: { filename: ITEM.filename },
+        });
+        expect(get('toast').textContent).toBe('启动失败');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Phase guards (BC(C5)#1: unified phase!==IDLE entry guard + visual lock)
+// ---------------------------------------------------------------------------
+
+const ITEM2 = {
+    ...ITEM,
+    filename: '2026-08-18_11-00-00',
+    transcription_status: 'pending',
+};
+
+function twoItemInvoke(cmd) {
+    if (cmd === 'list_saved_recordings') {
+        return Promise.resolve({
+            items: [ITEM, ITEM2],
+            total: 2,
+            total_bytes: 300,
+            offset: 0,
+            limit: 200,
+        });
+    }
+    return defaultInvoke(cmd);
+}
+
+function clickRow(filename) {
+    document
+        .querySelector(`.rec-row[data-filename="${filename}"]`)
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
+describe('phase entry guards', () => {
+    it('loading blocks list switching and startTranscription, rows grayed', async () => {
+        let resolveSegs;
+        await loadFresh((cmd) => {
+            if (cmd === 'get_recording_segments') {
+                return new Promise((r) => {
+                    resolveSegs = r;
+                });
+            }
+            if (cmd === 'read_recording_audio') return Promise.resolve([0]);
+            return twoItemInvoke(cmd);
+        });
+        await flush();
+
+        clickRow(ITEM.filename); // starts LOADING (segments deferred)
+        await flush();
+        expect(document.querySelectorAll('.rec-row.disabled').length).toBe(2);
+
+        clickRow(ITEM2.filename); // blocked by the phase guard
+        get('btn-transcribe').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        ); // also blocked
+        await flush();
+        const segCalls = () =>
+            invokeMock.mock.calls.filter(
+                ([cmd]) => cmd === 'get_recording_segments',
+            );
+        expect(segCalls().length).toBe(1);
+        expect(
+            invokeMock.mock.calls.some(
+                ([cmd]) => cmd === 'transcribe_recording',
+            ),
+        ).toBe(false);
+
+        resolveSegs(SEGS); // finish loading → phase back to IDLE
+        await flush();
+        await flush();
+        expect(document.querySelectorAll('.rec-row.disabled').length).toBe(0);
+
+        clickRow(ITEM2.filename); // now allowed
+        await flush();
+        await flush();
+        expect(segCalls().length).toBe(2);
+    });
+
+    it('injecting blocks list switching and grays rows', async () => {
+        let resolveInject;
+        await loadFresh((cmd) => {
+            if (cmd === 'inject_transcript_text') {
+                return new Promise((r) => {
+                    resolveInject = r;
+                });
+            }
+            return twoItemInvoke(cmd);
+        });
+        await flush();
+        clickRow(ITEM.filename);
+        await flush();
+        await flush();
+
+        get('btn-inject').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        await flush();
+        expect(get('inject-spinner').hidden).toBe(false);
+        expect(document.querySelectorAll('.rec-row.disabled').length).toBe(2);
+
+        clickRow(ITEM2.filename); // blocked while injecting
+        await flush();
+        expect(
+            invokeMock.mock.calls.filter(
+                ([cmd, args]) =>
+                    cmd === 'get_recording_segments' &&
+                    args.filename === ITEM2.filename,
+            ).length,
+        ).toBe(0);
+
+        resolveInject(null);
+        await flush();
+        await flush();
+        expect(get('inject-spinner').hidden).toBe(true);
+        expect(document.querySelectorAll('.rec-row.disabled').length).toBe(0);
+    });
+
+    it('catch exit resets the phase (failed load does not lock the list)', async () => {
+        await loadFresh((cmd) => {
+            if (cmd === 'read_recording_audio') {
+                return Promise.reject(new Error('读取失败'));
+            }
+            return twoItemInvoke(cmd);
+        });
+        await flush();
+
+        clickRow(ITEM.filename); // load fails → catch → toast
+        await flush();
+        await flush();
+        expect(get('toast').textContent).toBe('读取失败');
+
+        clickRow(ITEM2.filename); // phase must be IDLE again
+        await flush();
+        await flush();
+        expect(
+            invokeMock.mock.calls.some(
+                ([cmd, args]) =>
+                    cmd === 'get_recording_segments' &&
+                    args.filename === ITEM2.filename,
+            ),
+        ).toBe(true);
+    });
+
+    it('catch-stale exit resets the phase (selection cleared mid-load)', async () => {
+        let listItems = [ITEM];
+        let resolveSegs;
+        await loadFresh((cmd) => {
+            if (cmd === 'list_saved_recordings') {
+                return Promise.resolve({
+                    items: listItems,
+                    total: listItems.length,
+                    total_bytes: 0,
+                    offset: 0,
+                    limit: 200,
+                });
+            }
+            if (cmd === 'get_recording_segments') {
+                return new Promise((r) => {
+                    resolveSegs = r;
+                });
+            }
+            if (cmd === 'read_recording_audio') return Promise.resolve([0]);
+            return Promise.resolve(null);
+        });
+        await flush();
+
+        clickRow(ITEM.filename); // LOADING, segments deferred
+        await flush();
+
+        // Recording deleted elsewhere: focus refresh clears the selection.
+        listItems = [];
+        window.dispatchEvent(new Event('focus'));
+        await flush();
+        await flush();
+
+        resolveSegs(SEGS); // stale path in try → finally must still reset
+        await flush();
+        await flush();
+
+        // Re-list the recording and select it again — only possible from IDLE.
+        listItems = [ITEM];
+        window.dispatchEvent(new Event('focus'));
+        await flush();
+        await flush();
+        expect(
+            document.querySelector('.rec-row').classList.contains('disabled'),
+        ).toBe(false);
+        clickRow(ITEM.filename);
+        await flush();
+        await flush();
+        expect(
+            invokeMock.mock.calls.filter(
+                ([cmd]) => cmd === 'get_recording_segments',
+            ).length,
+        ).toBe(2);
+    });
+});
+
+describe('live inject-button refresh (BC(C5)#2)', () => {
+    it('clearing all segment text disables inject; restoring re-enables', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        const btn = get('btn-inject');
+        expect(btn.disabled).toBe(false);
+
+        const inputs = document.querySelectorAll('.segment-text');
+        for (const input of inputs) {
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        expect(btn.disabled).toBe(true);
+
+        inputs[0].value = '恢复文本';
+        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+        expect(btn.disabled).toBe(false);
     });
 });

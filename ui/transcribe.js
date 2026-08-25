@@ -7,8 +7,9 @@
 // State cross-check rules (design review §E):
 //   1. Switching recordings stops playback and clears segments/edits/inject
 //      state; a deleted selection is cleared.
-//   2. While transcribing, list switching and the transcribe button are
-//      disabled (in-flight conflict guard).
+//   2. While any operation is in flight (loading/transcribing/injecting),
+//      list switching and the transcribe/inject buttons are disabled
+//      (unified phase guard; transcribing-only before 2026-08).
 //   3. Only the timestamp badge seeks; clicking the text area just focuses.
 //   4. Highlight auto-scroll is suppressed while a segment input is focused.
 //   5. Segment edits never write back into segments; they only feed the
@@ -26,8 +27,10 @@ import {
     findActiveSegmentIndex,
     formatTimestamp,
     mergeSegmentTexts,
+    PHASE,
     shouldAutoScroll,
     statusBadge,
+    uiFlags,
 } from './lib/transcribe.js';
 
 const { listen } = window.__TAURI__.event;
@@ -38,8 +41,14 @@ const state = {
     segments: [],
     edits: new Map(),
     activeSegment: -1,
-    transcribing: false,
-    injecting: false,
+    // In-flight operation phase (Axis A, mutually exclusive). Recording
+    // status and edits stay orthogonal axes rendered via uiFlags.
+    phase: PHASE.IDLE,
+    // Ownership token for transcription-* events: set when WE start a
+    // transcription, cleared when it ends. Events arriving with no local
+    // in-flight stem (e.g. window re-created mid-transcription) are ignored
+    // so stale events never reset buttons or pop misleading toasts.
+    transcribingStem: null,
     durationMs: 0,
     status: null,
     droppedBlocks: 0,
@@ -114,8 +123,9 @@ function buildListRow(item) {
     row.className = 'rec-row';
     row.dataset.filename = item.filename;
     if (item.filename === state.selected) row.classList.add('selected');
-    // Rule 2: in-flight transcription locks list switching.
-    if (state.transcribing) row.classList.add('disabled');
+    // Rule 2 + BC(C5)#1: any in-flight phase locks list switching (visual
+    // symmetry with the selectRecording entry guard).
+    if (state.phase !== PHASE.IDLE) row.classList.add('disabled');
 
     const ts = document.createElement('span');
     ts.className = 'rec-row-ts';
@@ -164,8 +174,8 @@ function clearDetail() {
 }
 
 async function selectRecording(filename) {
-    // Rule 2: no switching while a transcription is in flight.
-    if (state.transcribing) return;
+    // Unified entry guard (BC(C5)#1): no switching while any op is in flight.
+    if (state.phase !== PHASE.IDLE) return;
     if (state.selected === filename) return;
     // Rule 1: full state reset on switch.
     clearDetail();
@@ -180,12 +190,13 @@ async function selectRecording(filename) {
     const title = $('detail-title');
     if (title) title.textContent = formatStem(filename);
 
+    setPhase(PHASE.LOADING);
     try {
         const [segs, bytes] = await Promise.all([
             call('get_recording_segments', { filename }),
             call('read_recording_audio', { filename }),
         ]);
-        // Stale guard: user switched again while loading.
+        // Stale guard: selection cleared/changed while loading.
         if (state.selected !== filename) return;
         state.segments = Array.isArray(segs.segments) ? segs.segments : [];
         state.durationMs = segs.duration_ms || 0;
@@ -195,10 +206,11 @@ async function selectRecording(filename) {
         renderDetail();
     } catch (e) {
         if (state.selected !== filename) return;
-        showToast(
-            typeof e === 'string' ? e : e?.message || '加载录音失败',
-            true,
-        );
+        showToast(e?.message || '加载录音失败', true);
+    } finally {
+        // DR-1.2: phase reset covers every exit (success / stale ×2 / toast)
+        // — a leftover LOADING phase would lock list switching forever.
+        setPhase(PHASE.IDLE);
     }
 }
 
@@ -206,7 +218,7 @@ function renderDetail() {
     renderBadges();
     renderSegments();
     updateMerged();
-    updateActionButtons();
+    syncUI();
 }
 
 function renderBadges() {
@@ -287,40 +299,53 @@ function seekTo(startMs) {
 function updateMerged() {
     const merged = $('merged');
     if (merged) merged.value = mergeSegmentTexts(state.segments, state.edits);
+    // BC(C5)#2: inject disabled refreshes live while editing (e.g. clearing
+    // all text grays the button immediately).
+    syncUI();
+}
+
+// --- Phase / UI sync -------------------------------------------------------
+
+// Table-driven UI sync — uiFlags() is the single authority for what each
+// phase means visually. Cheap; safe to call on every keystroke.
+function syncUI() {
+    const flags = uiFlags({
+        phase: state.phase,
+        selected: state.selected,
+        status: state.status,
+        mergedEmpty:
+            mergeSegmentTexts(state.segments, state.edits).trim() === '',
+    });
+    const btnT = $('btn-transcribe');
+    if (btnT) {
+        btnT.disabled = flags.transcribeDisabled;
+        btnT.textContent = flags.transcribeLabel;
+    }
+    const btnCancel = $('btn-cancel');
+    if (btnCancel) btnCancel.hidden = !flags.cancelVisible;
+    const progress = $('progress-wrap');
+    if (progress) progress.hidden = !flags.progressVisible;
+    const btnInject = $('btn-inject');
+    if (btnInject) btnInject.disabled = flags.injectDisabled;
+    const spinner = $('inject-spinner');
+    if (spinner) spinner.hidden = !flags.injectSpinnerVisible;
+}
+
+// Single transition point for the phase state machine. Phase changes are
+// rare events, so re-rendering the list (row .disabled ↔ listLocked) here
+// is acceptable and keeps the two in sync by construction.
+function setPhase(phase) {
+    state.phase = phase;
+    syncUI();
+    renderList();
 }
 
 // --- Transcription ---------------------------------------------------------
 
-function updateActionButtons() {
-    const btnT = $('btn-transcribe');
-    if (btnT) {
-        btnT.disabled = state.transcribing || !state.selected;
-        btnT.textContent = state.status === 'done' ? '重新转录' : '转录';
-    }
-    const btnCancel = $('btn-cancel');
-    if (btnCancel) btnCancel.hidden = !state.transcribing;
-    const progress = $('progress-wrap');
-    if (progress) progress.hidden = !state.transcribing;
-    updateInjectButton();
-}
-
-function updateInjectButton() {
-    const btn = $('btn-inject');
-    if (btn) {
-        btn.disabled =
-            state.injecting ||
-            state.transcribing ||
-            mergeSegmentTexts(state.segments, state.edits).trim() === '';
-    }
-    const spinner = $('inject-spinner');
-    if (spinner) spinner.hidden = !state.injecting;
-}
-
 async function startTranscription() {
-    if (state.transcribing || !state.selected) return;
-    state.transcribing = true;
-    updateActionButtons();
-    renderList(); // lock list rows (rule 2)
+    if (state.phase !== PHASE.IDLE || !state.selected) return;
+    state.transcribingStem = state.selected;
+    setPhase(PHASE.TRANSCRIBING);
     setProgress(0, 'whisper');
     try {
         await call('transcribe_recording', {
@@ -329,13 +354,10 @@ async function startTranscription() {
         });
         // Outcome arrives via transcription-* events.
     } catch (e) {
-        state.transcribing = false;
-        updateActionButtons();
-        renderList();
-        showToast(
-            typeof e === 'string' ? e : e?.message || '转录启动失败',
-            true,
-        );
+        // Stem cleared at the same site as the phase reset (DR-1.2).
+        state.transcribingStem = null;
+        setPhase(PHASE.IDLE);
+        showToast(e?.message || '转录启动失败', true);
     }
 }
 
@@ -358,9 +380,9 @@ function setProgress(percent, stage) {
 }
 
 function finishTranscriptionUI() {
-    state.transcribing = false;
-    updateActionButtons();
-    renderList();
+    // Stem cleared at the same site as the phase reset (DR-1.2).
+    state.transcribingStem = null;
+    setPhase(PHASE.IDLE);
 }
 
 // Rule 8: after done, re-read stored segments (single source of truth).
@@ -384,11 +406,10 @@ async function reloadSelectedDetail() {
 // --- Injection -------------------------------------------------------------
 
 async function injectText() {
-    if (state.injecting || state.transcribing || !state.selected) return;
+    if (state.phase !== PHASE.IDLE || !state.selected) return;
     const text = mergeSegmentTexts(state.segments, state.edits);
     if (text.trim() === '') return;
-    state.injecting = true;
-    updateInjectButton();
+    setPhase(PHASE.INJECTING);
     try {
         await call('inject_transcript_text', {
             filename: state.selected,
@@ -397,10 +418,9 @@ async function injectText() {
         showToast('注入成功');
     } catch (e) {
         // Backend messages include the clipboard-fallback guidance.
-        showToast(typeof e === 'string' ? e : e?.message || '注入失败', true);
+        showToast(e?.message || '注入失败', true);
     } finally {
-        state.injecting = false;
-        updateInjectButton();
+        setPhase(PHASE.IDLE);
     }
 }
 
@@ -473,13 +493,23 @@ wireEvents();
 loadList();
 
 // --- Backend events --------------------------------------------------------
+//
+// Ownership guard: transcription-* events are app-global. If this window did
+// not start the in-flight transcription (transcribingStem === null — e.g. the
+// window was re-created while a previous session's task is still running),
+// every handler ignores the event instead of resetting UI it never set up or
+// popping a misleading toast. error/progress payloads carry no filename
+// (transcribe_cmd.rs), so the stem's presence is the ownership proof there.
 
 listen('transcription-progress', (event) => {
+    if (state.transcribingStem === null) return;
     const { percent, stage } = event.payload || {};
-    if (state.transcribing) setProgress(percent ?? 0, stage ?? 'whisper');
+    setProgress(percent ?? 0, stage ?? 'whisper');
 });
 
 listen('transcription-done', (event) => {
+    if (state.transcribingStem === null) return;
+    if (event.payload?.filename !== state.transcribingStem) return;
     finishTranscriptionUI();
     showToast('转录完成');
     if (event.payload?.filename === state.selected) {
@@ -487,12 +517,15 @@ listen('transcription-done', (event) => {
     }
 });
 
-listen('transcription-cancelled', () => {
+listen('transcription-cancelled', (event) => {
+    if (state.transcribingStem === null) return;
+    if (event.payload?.filename !== state.transcribingStem) return;
     finishTranscriptionUI();
     showToast('转录已取消');
 });
 
 listen('transcription-error', (event) => {
+    if (state.transcribingStem === null) return;
     finishTranscriptionUI();
     const msg = event.payload?.message;
     showToast(typeof msg === 'string' && msg ? msg : '转录失败', true);
