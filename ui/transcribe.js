@@ -20,6 +20,7 @@
 //      segments without re-transcribing.
 
 import { call, reportError } from './lib/api.js';
+import { attachAudio, loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
     filterRecordOnly,
     findActiveSegmentIndex,
@@ -68,28 +69,12 @@ function audioEl() {
     return $('audio');
 }
 
-function releaseAudio() {
-    const audio = audioEl();
-    if (audio) {
-        try {
-            audio.pause();
-        } catch (_e) {
-            /* jsdom / detached element */
-        }
-        if (audio.dataset.blobUrl) {
-            URL.revokeObjectURL(audio.dataset.blobUrl);
-            delete audio.dataset.blobUrl;
-        }
-        audio.removeAttribute('src');
-    }
-}
-
 // --- List ------------------------------------------------------------------
 
 async function loadList() {
     const errBar = $('list-error');
     try {
-        const resp = await call('list_saved_recordings', {
+        const resp = await loadRecordings({
             offset: 0,
             limit: 200,
             query: null,
@@ -107,8 +92,7 @@ async function loadList() {
         renderList();
     } catch (e) {
         if (errBar) {
-            errBar.textContent =
-                typeof e === 'string' ? e : e?.message || '加载失败';
+            errBar.textContent = e?.message || '加载失败';
             errBar.hidden = false;
         }
     }
@@ -166,7 +150,7 @@ function formatStem(stem) {
 // --- Detail ----------------------------------------------------------------
 
 function clearDetail() {
-    releaseAudio();
+    releaseAudio(audioEl());
     state.segments = [];
     state.edits.clear();
     state.activeSegment = -1;
@@ -207,7 +191,7 @@ async function selectRecording(filename) {
         state.durationMs = segs.duration_ms || 0;
         state.status = segs.transcription_status || 'pending';
         state.droppedBlocks = segs.dropped_blocks || 0;
-        attachAudio(bytes);
+        attachAudio(audioEl(), bytes);
         renderDetail();
     } catch (e) {
         if (state.selected !== filename) return;
@@ -216,16 +200,6 @@ async function selectRecording(filename) {
             true,
         );
     }
-}
-
-function attachAudio(bytes) {
-    const audio = audioEl();
-    if (!audio) return;
-    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const blob = new Blob([u8], { type: 'audio/wav' });
-    const url = URL.createObjectURL(blob);
-    audio.dataset.blobUrl = url;
-    audio.src = url;
 }
 
 function renderDetail() {

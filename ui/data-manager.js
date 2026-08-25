@@ -7,6 +7,11 @@ import {
     formatBytes,
     getPageRange,
 } from './lib/data-management.js';
+import {
+    attachAudio,
+    loadRecordings,
+    releaseAudio as releaseAudioElement,
+} from './lib/recordings.js';
 
 // ============================================================
 // Data management — saved recordings list
@@ -35,28 +40,15 @@ function $data(id) {
 }
 
 /**
- * Release the current audio player: pause, revoke blob URL, clear state.
+ * Release the current audio player: element-level cleanup (pause, revoke
+ * blob URL, clear src) plus player state reset.
  *
  * Centralizes the cleanup that was previously duplicated at 5 sites
  * (toggle collapse, toggle switch, onAudioError, single-delete, batch-delete).
- * Slightly unifies behavior: all 5 sites now delete dataset.blobUrl after
- * revoke (previously only onAudioError did). The element is about to be
- * replaced or nulled, so the delete is purely defensive — no observable
- * difference.
  */
 function releaseAudio() {
-    if (dataState.audioElement) {
-        try {
-            dataState.audioElement.pause();
-        } catch (_e) {
-            /* ignore */
-        }
-        if (dataState.audioElement.dataset.blobUrl) {
-            URL.revokeObjectURL(dataState.audioElement.dataset.blobUrl);
-            delete dataState.audioElement.dataset.blobUrl;
-        }
-        dataState.audioElement = null;
-    }
+    releaseAudioElement(dataState.audioElement);
+    dataState.audioElement = null;
     dataState.audioPlayerRowId = null;
 }
 
@@ -67,15 +59,8 @@ export function onDataPageEnter() {
 }
 
 export function onDataPageLeave() {
-    // Pause audio + clear audio state (constraint #2).
-    if (dataState.audioElement) {
-        try {
-            dataState.audioElement.pause();
-        } catch (_e) {
-            /* ignore */
-        }
-    }
-    dataState.audioPlayerRowId = null;
+    // Full release: pause + revoke blob URL + clear state (constraint #2).
+    releaseAudio();
 }
 
 function resetDataListState() {
@@ -85,15 +70,7 @@ function resetDataListState() {
     dataState.items = [];
     dataState.selectedFiles.clear();
     dataState.expandedRowId = null;
-    if (dataState.audioElement) {
-        try {
-            dataState.audioElement.pause();
-        } catch (_e) {
-            /* ignore */
-        }
-        dataState.audioElement = null;
-    }
-    dataState.audioPlayerRowId = null;
+    releaseAudio();
     dataState.isLoading = false;
     dataState.lastReqId = 0;
 
@@ -113,7 +90,7 @@ async function loadRecordingsPage(offset) {
         refreshBtn.classList.add('loading');
     }
     try {
-        const resp = await call('list_saved_recordings', {
+        const resp = await loadRecordings({
             offset,
             limit: dataState.limit,
             query: dataState.query || null,
@@ -130,7 +107,7 @@ async function loadRecordingsPage(offset) {
         hideDataError();
     } catch (e) {
         if (reqId !== dataState.lastReqId) return;
-        showDataError(typeof e === 'string' ? e : e?.message || '加载失败');
+        showDataError(e?.message || '加载失败');
         // Keep previous list contents intact (constraint F2).
     } finally {
         if (reqId === dataState.lastReqId) {
@@ -146,6 +123,11 @@ async function loadRecordingsPage(offset) {
 function renderDataList() {
     const list = $data('data-list');
     if (!list) return;
+    // Release the old player element before it is discarded, so its blob URL
+    // is revoked rather than leaked (element-level only — an active player
+    // row is re-assembled below and reassigns dataState.audioElement).
+    releaseAudioElement(dataState.audioElement);
+    dataState.audioElement = null;
     list.innerHTML = '';
     for (const entry of dataState.items) {
         const isSelected = dataState.selectedFiles.has(entry.filename);
@@ -184,12 +166,11 @@ function renderDataList() {
 async function attachAudioSrc(audioEl, filename) {
     try {
         const bytes = await call('read_recording_audio', { filename });
-        // Tauri returns ArrayLike<number>; convert to Uint8Array for Blob.
-        const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-        const blob = new Blob([u8], { type: 'audio/wav' });
-        const url = URL.createObjectURL(blob);
-        audioEl.dataset.blobUrl = url;
-        audioEl.src = url;
+        // Identity guard: the row may have been re-rendered (element replaced
+        // or detached) while the fetch was in flight. Attaching a blob URL to
+        // an orphan element would leak it — nobody can reach it for revoke.
+        if (dataState.audioElement !== audioEl || !audioEl.isConnected) return;
+        attachAudio(audioEl, bytes);
     } catch (_e) {
         // Mark this row's audio as failed.
         onAudioError(filename);
