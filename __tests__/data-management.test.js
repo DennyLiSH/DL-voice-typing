@@ -216,13 +216,12 @@ describe('buildRecordingRow', () => {
         expect(row.classList.contains('data-row')).toBe(true);
     });
 
-    it('includes checkbox, timestamp, language, duration, preview, play, delete', () => {
+    it('includes checkbox, timestamp, duration, preview, play, delete', () => {
         const row = buildRecordingRow(baseEntry);
         expect(row.querySelector('.data-row-cb')).not.toBeNull();
         expect(row.querySelector('.data-row-ts').textContent).toBe(
             '2026-06-24 14:30:25',
         );
-        expect(row.querySelector('.data-row-lang').textContent).toBe('zh');
         expect(row.querySelector('.data-row-dur').textContent).toBe('3.2s');
         expect(row.querySelector('.data-row-preview').textContent).toBe(
             '今天去开会',
@@ -282,7 +281,7 @@ describe('buildRecordingRow', () => {
     it('shows classic source badge and no status badge for classic entries', () => {
         const row = buildRecordingRow({ ...baseEntry, source: 'classic' });
         expect(row.querySelector('.badge-source-classic').textContent).toBe(
-            '经典',
+            '语音输入',
         );
         expect(row.querySelector('.badge-done')).toBeNull();
         expect(row.querySelector('.badge-warning')).toBeNull();
@@ -324,7 +323,7 @@ describe('buildRecordingRow', () => {
         const row = buildRecordingRow(entry);
         expect(row.querySelector('.badge-failed').textContent).toBe('转录失败');
         expect(row.querySelector('.badge-warning').textContent).toBe(
-            '录音有洞',
+            '音频不完整',
         );
     });
 });
@@ -334,52 +333,78 @@ describe('buildExpandedMetadata', () => {
         document.body.innerHTML = '';
     });
 
-    it('renders three labelled lines', () => {
+    it('renders four labelled lines (language first)', () => {
         const entry = {
+            language: 'zh',
             transcription: '原文',
             llm_corrected: '改写',
             final_text: '最终',
         };
         const el = buildExpandedMetadata(entry);
         const lines = el.querySelectorAll('.data-row-meta-line');
-        expect(lines.length).toBe(3);
+        expect(lines.length).toBe(4);
         expect(lines[0].querySelector('.data-row-meta-label').textContent).toBe(
-            '转录：',
+            '语言：',
         );
         expect(lines[0].querySelector('.data-row-meta-value').textContent).toBe(
-            '原文',
+            'zh',
         );
         expect(lines[1].querySelector('.data-row-meta-label').textContent).toBe(
-            'LLM：',
+            '转录：',
+        );
+        expect(lines[1].querySelector('.data-row-meta-value').textContent).toBe(
+            '原文',
         );
         expect(lines[2].querySelector('.data-row-meta-label').textContent).toBe(
+            'LLM：',
+        );
+        expect(lines[3].querySelector('.data-row-meta-label').textContent).toBe(
             '最终：',
         );
     });
 
     it('shows （无） for missing fields', () => {
         const entry = {
+            language: null,
             transcription: 'x',
             llm_corrected: null,
             final_text: null,
         };
         const el = buildExpandedMetadata(entry);
         const values = el.querySelectorAll('.data-row-meta-value');
-        expect(values[0].textContent).toBe('x');
-        expect(values[1].textContent).toBe('（无）');
-        expect(values[2].textContent).toBe('（无）');
+        expect(values[0].textContent).toBe('（无）'); // 语言
+        expect(values[1].textContent).toBe('x'); // 转录
+        expect(values[2].textContent).toBe('（无）'); // LLM
+        expect(values[3].textContent).toBe('（无）'); // 最终
     });
 
     it('escapes HTML safely', () => {
         const entry = {
+            language: 'zh',
             transcription: '<b>not bold</b>',
             llm_corrected: null,
             final_text: null,
         };
         const el = buildExpandedMetadata(entry);
         expect(el.querySelector('b')).toBeNull();
-        expect(el.querySelector('.data-row-meta-value').textContent).toBe(
+        expect(el.querySelectorAll('.data-row-meta-value')[1].textContent).toBe(
             '<b>not bold</b>',
+        );
+    });
+
+    it('moves language into expanded metadata instead of the row', () => {
+        const row = buildRecordingRow({
+            filename: '2026-06-24_14-30-25.wav',
+            language: 'zh',
+        });
+        expect(row.querySelector('.data-row-lang')).toBeNull();
+        const expanded = buildExpandedMetadata({
+            language: 'zh',
+            transcription: 't',
+        });
+        const lines = [...expanded.querySelectorAll('.data-row-meta-line')];
+        expect(lines.some((l) => l.textContent.startsWith('语言：'))).toBe(
+            true,
         );
     });
 });

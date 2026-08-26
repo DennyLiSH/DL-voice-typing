@@ -69,7 +69,6 @@ export function truncateText(text, maxLen = 30) {
  * list container. The row contains:
  *   - checkbox (always focusable, tabindex=0)
  *   - timestamp span
- *   - language badge
  *   - duration span
  *   - transcription preview (truncated)
  *   - play button (hidden if wav_size === 0, replaced with "音频缺失" badge)
@@ -96,7 +95,10 @@ export function buildRecordingRow(entry, opts = {}) {
     cb.type = 'checkbox';
     cb.className = 'data-row-cb';
     cb.checked = Boolean(opts.selected);
-    cb.setAttribute('aria-label', `选择 ${entry.filename}`);
+    cb.setAttribute(
+        'aria-label',
+        `选择录音 ${formatStemForDisplay(entry.filename)}`,
+    );
     row.appendChild(cb);
 
     // Timestamp (formatted for display: 2026-06-24 14:30:25)
@@ -105,12 +107,6 @@ export function buildRecordingRow(entry, opts = {}) {
     tsSpan.textContent = formatStemForDisplay(entry.filename);
     row.appendChild(tsSpan);
 
-    // Language badge
-    const langSpan = document.createElement('span');
-    langSpan.className = 'data-row-lang';
-    langSpan.textContent = entry.language || '—';
-    row.appendChild(langSpan);
-
     // Source badge (classic pipeline vs record-only mode)
     const srcSpan = document.createElement('span');
     if (entry.source === 'record_only') {
@@ -118,7 +114,7 @@ export function buildRecordingRow(entry, opts = {}) {
         srcSpan.textContent = '录音';
     } else {
         srcSpan.className = 'badge badge-source-classic';
-        srcSpan.textContent = '经典';
+        srcSpan.textContent = '语音输入';
     }
     row.appendChild(srcSpan);
 
@@ -133,7 +129,7 @@ export function buildRecordingRow(entry, opts = {}) {
         if (entry.dropped_blocks > 0) {
             const warnSpan = document.createElement('span');
             warnSpan.className = 'badge badge-warning';
-            warnSpan.textContent = '录音有洞';
+            warnSpan.textContent = '音频不完整';
             row.appendChild(warnSpan);
         }
     }
@@ -162,7 +158,10 @@ export function buildRecordingRow(entry, opts = {}) {
         playBtn.type = 'button';
         playBtn.className = 'btn-icon btn-play';
         playBtn.textContent = '▶';
-        playBtn.setAttribute('aria-label', `播放 ${entry.filename}`);
+        playBtn.setAttribute(
+            'aria-label',
+            `播放录音 ${formatStemForDisplay(entry.filename)}`,
+        );
         row.appendChild(playBtn);
     } else {
         const badge = document.createElement('span');
@@ -176,14 +175,17 @@ export function buildRecordingRow(entry, opts = {}) {
     delBtn.type = 'button';
     delBtn.className = 'btn-icon btn-delete';
     delBtn.textContent = '🗑';
-    delBtn.setAttribute('aria-label', `删除 ${entry.filename}`);
+    delBtn.setAttribute(
+        'aria-label',
+        `删除录音 ${formatStemForDisplay(entry.filename)}`,
+    );
     row.appendChild(delBtn);
 
     return row;
 }
 
 /**
- * Build the expanded metadata section (transcription / LLM / final text).
+ * Build the expanded metadata section (language / transcription / LLM / final text).
  *
  * @param {Object} entry
  * @returns {HTMLElement}
@@ -193,6 +195,7 @@ export function buildExpandedMetadata(entry) {
     container.className = 'data-row-expanded';
 
     const fields = [
+        ['语言', entry.language],
         ['转录', entry.transcription],
         ['LLM', entry.llm_corrected],
         ['最终', entry.final_text],

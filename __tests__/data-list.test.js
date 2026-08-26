@@ -179,11 +179,11 @@ describe('Data list — render contract', () => {
         expect(row.getAttribute('tabindex')).toBeNull();
     });
 
-    it('expanded row appends metadata with three lines', () => {
+    it('expanded row appends metadata with four lines', () => {
         const list = document.getElementById('data-list');
         list.appendChild(buildRecordingRow(sampleEntries[0]));
         list.appendChild(buildExpandedMetadata(sampleEntries[0]));
-        expect(list.querySelectorAll('.data-row-meta-line').length).toBe(3);
+        expect(list.querySelectorAll('.data-row-meta-line').length).toBe(4);
     });
 });
 

@@ -63,6 +63,11 @@
                     <div class="toggle-switch" id="realtime-transcription-toggle" role="switch" aria-checked="false" aria-label="实时语音转写" tabindex="0"></div>
                 </div>
                 <div class="hint">按住快捷键时实时显示转写文字（预览效果，最终文本仍以释放后为准）</div>
+                <div class="toggle-row">
+                    <span class="toggle-label">粘贴前确认</span>
+                    <div class="toggle-switch" id="review-toggle" role="switch" aria-checked="false" aria-label="粘贴前确认" tabindex="0"></div>
+                </div>
+                <div class="hint">转写完成后弹出编辑窗口，确认后再粘贴</div>
                 <div class="version-info" id="version-info"></div>
             </div>
 
@@ -209,11 +214,6 @@
                         <div class="hint">录音结束后将保存音频(WAV)和转写文本(JSON)到该目录</div>
                     </div>
                 </div>
-                <div class="toggle-row" style="margin-top: 16px;">
-                    <span class="toggle-label">粘贴前确认</span>
-                    <div class="toggle-switch" id="review-toggle" role="switch" aria-checked="false" aria-label="粘贴前确认" tabindex="0"></div>
-                </div>
-                <div class="hint" style="margin-top: -8px;">转写完成后弹出编辑窗口，确认后再粘贴</div>
 
                 <!-- Saved recordings management -->
                 <div class="data-list-section" id="data-list-section">

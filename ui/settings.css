@@ -845,17 +845,6 @@ button:disabled {
     min-width: 130px;
 }
 
-.data-row-lang {
-    flex-shrink: 0;
-    font-size: 10px;
-    background: rgba(var(--accent-rgb), 0.15);
-    color: var(--accent);
-    padding: 1px 6px;
-    border-radius: 4px;
-    min-width: 28px;
-    text-align: center;
-}
-
 .data-row-dur {
     flex-shrink: 0;
     font-size: var(--font-hint);
@@ -867,7 +856,7 @@ button:disabled {
 
 .data-row-preview {
     flex: 1;
-    min-width: 0;
+    min-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
