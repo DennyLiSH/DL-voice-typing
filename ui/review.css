@@ -92,27 +92,6 @@ textarea::placeholder {
 }
 
 /* --------------------------------------------------------------------------
-   Live preview area
-   -------------------------------------------------------------------------- */
-.preview {
-  display: block;
-  opacity: 0;
-  color: var(--review-text-secondary);
-  font-size: var(--font-label);
-  line-height: 1.4;
-  padding: 0 2px;
-  margin-bottom: 6px;
-  max-height: 60px;
-  overflow-y: auto;
-  word-break: break-all;
-  transition: opacity var(--duration-short) ease;
-}
-
-.preview.visible {
-  opacity: 1;
-}
-
-/* --------------------------------------------------------------------------
    Button row
    -------------------------------------------------------------------------- */
 .button-row {

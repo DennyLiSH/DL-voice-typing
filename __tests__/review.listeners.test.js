@@ -27,7 +27,6 @@ async function loadFresh() {
     document.body.innerHTML = `
     <div id="container"></div>
     <textarea id="review-text"></textarea>
-    <div id="preview"></div>
     <button id="btn-confirm"></button>
     <button id="btn-cancel"></button>
     <div id="error-msg"></div>

@@ -100,6 +100,12 @@ async function loadList() {
             state.selected = null;
         }
         if (errBar) errBar.hidden = true;
+        // Cap hint is based on the PRE-filter length: the 200 limit is applied
+        // server-side across all recordings (classic + record_only), so a full
+        // page means record-only items may have been cut even if the filtered
+        // list below shows fewer than 200.
+        const cap = $('list-cap');
+        if (cap) cap.hidden = resp.items.length < 200;
         renderList();
     } catch (e) {
         if (errBar) {

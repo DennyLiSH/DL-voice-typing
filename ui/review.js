@@ -4,7 +4,6 @@ import { formatInjectionError } from './review-utils.js';
 const { listen } = window.__TAURI__.event;
 
 const textarea = document.getElementById('review-text');
-const preview = document.getElementById('preview');
 const btnConfirm = document.getElementById('btn-confirm');
 const btnCancel = document.getElementById('btn-cancel');
 const errorMsg = document.getElementById('error-msg');
@@ -32,8 +31,6 @@ textarea.addEventListener('input', () => {
 listen('review-show', async () => {
     userEdited = false;
     textarea.value = '';
-    preview.textContent = '';
-    preview.classList.remove('visible');
     errorMsg.textContent = '';
     isClosing = false;
     updateButtons();
@@ -117,7 +114,7 @@ btnCancel.addEventListener('click', () => {
 
 // Keyboard shortcuts.
 textarea.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         doConfirm();
     } else if (e.key === 'Escape') {

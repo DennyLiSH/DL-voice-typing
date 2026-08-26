@@ -10,6 +10,12 @@
 
 import { statusBadge } from './transcribe.js';
 
+// Icon constants (static SVG markup, no untrusted data is ever interpolated).
+const PLAY_SVG =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+const TRASH_SVG =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
+
 /**
  * Format a byte count as a compact human-readable string.
  * Uses binary units (KB = 1024) and 1 decimal place above 1024.
@@ -157,7 +163,7 @@ export function buildRecordingRow(entry, opts = {}) {
         const playBtn = document.createElement('button');
         playBtn.type = 'button';
         playBtn.className = 'btn-icon btn-play';
-        playBtn.textContent = '▶';
+        playBtn.innerHTML = PLAY_SVG;
         playBtn.setAttribute(
             'aria-label',
             `播放录音 ${formatStemForDisplay(entry.filename)}`,
@@ -174,7 +180,7 @@ export function buildRecordingRow(entry, opts = {}) {
     const delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.className = 'btn-icon btn-delete';
-    delBtn.textContent = '🗑';
+    delBtn.innerHTML = TRASH_SVG;
     delBtn.setAttribute(
         'aria-label',
         `删除录音 ${formatStemForDisplay(entry.filename)}`,

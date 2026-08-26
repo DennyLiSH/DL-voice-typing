@@ -127,8 +127,6 @@ export async function init() {
         // Display version
         try {
             const version = await window.__TAURI__.app.getVersion();
-            document.getElementById('version-info').textContent =
-                `语文兔 v${version}`;
             document.getElementById('version-display').textContent =
                 `v${version}`;
         } catch (_e) {

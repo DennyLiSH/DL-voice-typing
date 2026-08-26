@@ -65,7 +65,6 @@ const MINIMAL_DOM = `
   <div id="record-only-toggle"></div>
   <div id="record-only-hotkey-group"></div>
   <select id="record-only-hotkey"></select>
-  <div id="version-info"></div>
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
   <div id="data-error-bar"></div>
