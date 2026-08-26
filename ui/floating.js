@@ -1,4 +1,9 @@
-import { getColor, getShadow, remapRms } from './floating-utils.js';
+import {
+    errorDisplayText,
+    getColor,
+    getShadow,
+    remapRms,
+} from './floating-utils.js';
 
 const { listen } = window.__TAURI__.event;
 
@@ -114,6 +119,7 @@ function show() {
         hideTimeout = null;
     }
     indicator.classList.remove('exit', 'error', 'processing');
+    transcriptText.classList.remove('error');
     indicator.classList.add('visible');
 }
 
@@ -127,19 +133,28 @@ function hide(delay = 0) {
     indicator.classList.remove('visible', 'processing');
     indicator.classList.add('exit');
     transcriptText.textContent = '';
-    transcriptText.classList.remove('visible');
+    transcriptText.classList.remove('visible', 'error');
     isSpringActive = false;
     if (rafId) cancelAnimationFrame(rafId);
 }
 
-function showError() {
+const ERROR_DEFAULTS = {
+    'speech-error': '语音识别失败',
+    'llm-error': 'LLM 纠错失败，已使用原文本',
+    'injection-error': '粘贴失败，文本可能已保留在剪贴板',
+};
+
+function showError(eventName, payload) {
     indicator.style.background = '';
     indicator.style.boxShadow = '';
     indicator.classList.remove('processing');
     indicator.classList.add('error', 'visible');
-    transcriptText.textContent = '';
-    transcriptText.classList.remove('visible');
-    hide(2000);
+    transcriptText.textContent = errorDisplayText(
+        payload,
+        ERROR_DEFAULTS[eventName] || '出错了',
+    );
+    transcriptText.classList.add('visible', 'error');
+    hide(4500);
 }
 
 function showRecording() {
@@ -208,14 +223,14 @@ listen('injection-complete', () => {
     hide();
 });
 
-listen('injection-error', () => {
-    showError();
+listen('injection-error', (event) => {
+    showError('injection-error', event.payload);
 });
 
-listen('speech-error', () => {
-    showError();
+listen('speech-error', (event) => {
+    showError('speech-error', event.payload);
 });
 
-listen('llm-error', () => {
-    showError();
+listen('llm-error', (event) => {
+    showError('llm-error', event.payload);
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     COLOR_STOPS,
+    errorDisplayText,
     getColor,
     getShadow,
     lerpColor,
@@ -209,5 +210,29 @@ describe('getShadow', () => {
             return m ? Number.parseInt(m[1], 10) : -1;
         };
         expect(glowBlurOf(hi)).toBeGreaterThan(glowBlurOf(lo));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// errorDisplayText
+// ---------------------------------------------------------------------------
+describe('errorDisplayText', () => {
+    it('returns the payload string when non-empty', () => {
+        expect(errorDisplayText('模型加载中，请稍候...', '默认')).toBe(
+            '模型加载中，请稍候...',
+        );
+    });
+    it('returns the fallback for non-string payloads (serialized AppError object)', () => {
+        expect(errorDisplayText({ code: 'X', message: 'y' }, '默认')).toBe(
+            '默认',
+        );
+    });
+    it('returns the fallback for empty or whitespace strings', () => {
+        expect(errorDisplayText('', '默认')).toBe('默认');
+        expect(errorDisplayText('   ', '默认')).toBe('默认');
+    });
+    it('returns the fallback for null/undefined', () => {
+        expect(errorDisplayText(null, '默认')).toBe('默认');
+        expect(errorDisplayText(undefined, '默认')).toBe('默认');
     });
 });

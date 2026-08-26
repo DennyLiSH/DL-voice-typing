@@ -1,6 +1,5 @@
 // Pure functions extracted from floating.js for testability.
-// These are copied verbatim from the original file — floating.js retains its own
-// inline copies since the Tauri WebView has no module bundler.
+// floating.js imports these directly (the Tauri WebView supports native ES modules).
 
 /**
  * Color stops: [r, g, b, a] at visual RMS thresholds (after sqrt remap)
@@ -79,4 +78,18 @@ export function getShadow(visualRms) {
         shadow += `, 0 0 ${Math.round(22 + visualRms * 15)}px rgba(58,186,180,${glowAlpha})`;
     }
     return shadow;
+}
+
+/**
+ * Error text to display in the floating window: the event payload when it
+ * is a non-empty string, otherwise the per-event-type fallback. Payloads may
+ * be objects (serialized AppError) — those are not user-readable, fall back.
+ *
+ * @param {unknown} payload
+ * @param {string} fallback
+ * @returns {string}
+ */
+export function errorDisplayText(payload, fallback) {
+    if (typeof payload === 'string' && payload.trim() !== '') return payload;
+    return fallback;
 }
