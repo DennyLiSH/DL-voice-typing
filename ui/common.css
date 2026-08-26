@@ -10,7 +10,9 @@
   --accent-hover: #2DA8A3;
   --accent-light: rgba(58, 186, 180, 0.12);
 
-  /* Accessible text colors (WCAG AA computed, see plan table) */
+  /* Accessible text colors (WCAG AA computed, see plan table).
+     Text on colored surfaces must use the -text family; raw --success/
+     --warning/--error are for backgrounds/borders/decoration only. */
   --accent-contrast: #10201F;
 
   /* Semantic */

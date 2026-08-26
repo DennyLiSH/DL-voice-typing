@@ -409,7 +409,7 @@ describe('stale/foreign transcription events (C5 stem guard)', () => {
     it('ignores all 4 transcription-* events when stem is null', async () => {
         await loadFresh(defaultInvoke);
         await selectFirstRecording();
-        const fillBefore = get('progress-fill').style.width;
+        const fillBefore = get('progress-fill').style.transform;
         listeners['transcription-progress']({
             payload: { percent: 42, stage: 'whisper' },
         });
@@ -420,7 +420,7 @@ describe('stale/foreign transcription events (C5 stem guard)', () => {
             payload: { filename: ITEM.filename },
         });
         listeners['transcription-error']({ payload: { message: 'x' } });
-        expect(get('progress-fill').style.width).toBe(fillBefore);
+        expect(get('progress-fill').style.transform).toBe(fillBefore);
         expect(get('toast').hidden).toBe(true);
         expect(get('progress-wrap').hidden).toBe(true);
     });
@@ -607,7 +607,7 @@ describe('transcription lifecycle UI', () => {
         listeners['transcription-progress']({
             payload: { percent: 42, stage: 'whisper' },
         });
-        expect(get('progress-fill').style.width).toBe('42%');
+        expect(get('progress-fill').style.transform).toBe('scaleX(0.42)');
         expect(get('progress-label').textContent).toBe('转录中 42%');
         listeners['transcription-progress']({
             payload: { percent: 100, stage: 'llm' },

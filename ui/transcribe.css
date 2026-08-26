@@ -40,7 +40,7 @@ body {
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
     background: rgba(var(--error-rgb), 0.12);
-    color: var(--error);
+    color: var(--error-text);
     font-size: var(--font-label);
     animation: banner-slide var(--duration-short) ease;
 }
@@ -139,7 +139,7 @@ body {
 }
 
 .audio-error-badge {
-    color: var(--error);
+    color: var(--error-text);
     font-size: var(--font-label);
 }
 
@@ -176,10 +176,12 @@ body {
 
 .progress-fill {
     height: 100%;
-    width: 0%;
+    width: 100%;
     border-radius: 3px;
     background: var(--accent);
-    transition: width var(--duration-short) ease;
+    transform-origin: left;
+    transform: scaleX(0);
+    transition: transform var(--duration-short) ease;
 }
 
 .progress-label {
@@ -223,7 +225,7 @@ body {
     border: none;
     border-radius: var(--radius-sm);
     background: var(--btn-secondary-bg);
-    color: var(--accent);
+    color: var(--accent-text);
     font-size: var(--font-hint);
     font-family: inherit;
     cursor: pointer;
@@ -311,5 +313,5 @@ body {
 }
 
 .toast.error {
-    color: var(--error);
+    color: var(--error-text);
 }

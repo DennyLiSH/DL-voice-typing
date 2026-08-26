@@ -371,7 +371,8 @@ async function cancelTranscription() {
 
 function setProgress(percent, stage) {
     const fill = $('progress-fill');
-    if (fill) fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+    if (fill)
+        fill.style.transform = `scaleX(${Math.min(100, Math.max(0, percent)) / 100})`;
     const label = $('progress-label');
     if (label) {
         label.textContent =

@@ -170,7 +170,7 @@ btnCancelDownload.addEventListener('click', () => {
 
 async function startDownload(size) {
     activeDownload = size;
-    progressFill.style.width = '0%';
+    progressFill.style.transform = 'scaleX(0)';
     progressPercent.textContent = '0%';
     updateModelAction();
 
@@ -208,7 +208,7 @@ listen('download-progress', (event) => {
     const { size, percent } = event.payload;
     if (size !== activeDownload) return;
 
-    progressFill.style.width = `${percent}%`;
+    progressFill.style.transform = `scaleX(${percent / 100})`;
     progressPercent.textContent = `${percent}%`;
 });
 

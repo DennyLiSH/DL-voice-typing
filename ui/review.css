@@ -124,7 +124,7 @@ textarea::placeholder {
 
 .btn-confirm {
   background: rgba(var(--accent-rgb), 0.85);
-  color: #fff;
+  color: var(--accent-contrast);
   padding: 6px 20px;
   font-weight: 500;
   transition:
@@ -144,6 +144,7 @@ textarea::placeholder {
 
 .btn-confirm:disabled {
   background: rgba(var(--accent-rgb), 0.25);
+  color: var(--review-text-tertiary);
   cursor: not-allowed;
 }
 
@@ -180,7 +181,7 @@ textarea::placeholder {
    Error message
    -------------------------------------------------------------------------- */
 .error-msg {
-  color: rgba(var(--error-rgb), 0.9);
+  color: rgba(248, 113, 113, 0.95);
   font-size: var(--font-hint);
   margin-top: var(--space-1);
   min-height: 0;
