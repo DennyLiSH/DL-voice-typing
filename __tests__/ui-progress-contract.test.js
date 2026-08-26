@@ -16,6 +16,7 @@ describe('progress bar scaleX contract', () => {
         const block = blockOf(css, '.progress-bar-fill');
         expect(block).toContain('width: 100%');
         expect(block).toContain('transform: scaleX(0)');
+        expect(block).toContain('transform-origin: left');
         expect(block).not.toContain('transition: width');
     });
     it('settings.html progress element carries no inline width', () => {
@@ -28,6 +29,7 @@ describe('progress bar scaleX contract', () => {
         const block = blockOf(css, '.progress-fill');
         expect(block).toContain('width: 100%');
         expect(block).toContain('transform: scaleX(0)');
+        expect(block).toContain('transform-origin: left');
         expect(block).not.toContain('transition: width');
     });
 });
