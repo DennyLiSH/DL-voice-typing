@@ -409,6 +409,7 @@ button:disabled {
 .status {
   font-size: var(--font-label);
   min-height: 20px;
+  overflow-wrap: anywhere;
   transition:
     opacity var(--duration-short) ease,
     transform var(--duration-short) ease;
@@ -433,6 +434,7 @@ button:disabled {
   margin-bottom: var(--space-4);
   color: var(--error-text);
   font-size: var(--font-label);
+  overflow-wrap: anywhere;
   display: none;
   border: 1px solid rgba(var(--error-rgb), 0.15);
   background: rgba(var(--error-rgb), 0.08);
