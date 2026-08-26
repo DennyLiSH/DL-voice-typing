@@ -373,52 +373,6 @@ select:disabled, input:disabled {
   gap: var(--space-3);
 }
 
-/* --------------------------------------------------------------------------
-   Buttons
-   -------------------------------------------------------------------------- */
-.btn-secondary {
-  background: var(--btn-secondary-bg);
-  color: var(--btn-secondary-text);
-  font-weight: 500;
-  transition:
-    background var(--duration-micro) ease,
-    color var(--duration-micro) ease,
-    transform var(--duration-micro) ease;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--surface-hover);
-  color: var(--text-secondary);
-}
-
-.btn-secondary:active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-.btn-primary {
-  background: var(--accent);
-  color: #ffffff;
-  font-weight: 500;
-  transition:
-    background var(--duration-micro) ease,
-    transform var(--duration-micro) ease,
-    box-shadow var(--duration-micro) ease;
-}
-
-.btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.3);
-}
-
-.btn-primary:active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-.btn-primary:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 /* Saving spinner state */
 .btn-primary.saving {
   position: relative;
@@ -951,45 +905,6 @@ button:disabled {
     padding: 2px 6px;
     border-radius: 4px;
     cursor: not-allowed;
-}
-
-/* Recording source / status badges (data page rows) */
-.badge {
-    flex-shrink: 0;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 500;
-}
-
-.badge-source-classic {
-    background: var(--btn-secondary-bg);
-    color: var(--text-secondary);
-}
-
-.badge-source-record {
-    background: var(--accent-light);
-    color: var(--accent);
-}
-
-.badge-pending {
-    background: rgba(217, 119, 6, 0.15);
-    color: var(--warning);
-}
-
-.badge-done {
-    background: rgba(22, 163, 74, 0.15);
-    color: var(--success);
-}
-
-.badge-failed {
-    background: rgba(var(--error-rgb), 0.15);
-    color: var(--error);
-}
-
-.badge-warning {
-    background: rgba(217, 119, 6, 0.15);
-    color: var(--warning);
 }
 
 .audio-error-badge {

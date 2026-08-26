@@ -10,6 +10,9 @@
   --accent-hover: #2DA8A3;
   --accent-light: rgba(58, 186, 180, 0.12);
 
+  /* Accessible text colors (WCAG AA computed, see plan table) */
+  --accent-contrast: #10201F;
+
   /* Semantic */
   --success: #16A34A;
   --warning: #D97706;
@@ -77,6 +80,10 @@
     --sidebar-bg: #141517;
     --sidebar-icon: #777777;
     --sidebar-active-bg: rgba(58, 186, 180, 0.12);
+    --success-text: #4ADE80;
+    --warning-text: #F59E0B;
+    --error-text: #F87171;
+    --accent-text: #3ABAB4;
   }
 }
 
@@ -101,6 +108,10 @@
     --sidebar-bg: #F0EFED;
     --sidebar-icon: #888888;
     --sidebar-active-bg: rgba(58, 186, 180, 0.08);
+    --success-text: #166534;
+    --warning-text: #92400E;
+    --error-text: #B91C1C;
+    --accent-text: #11605C;
   }
 }
 
@@ -175,6 +186,91 @@ button:active:not(:disabled) {
 @keyframes banner-slide {
   0% { opacity: 0; transform: translateY(-8px); }
   100% { opacity: 1; transform: translateY(0); }
+}
+
+/* --------------------------------------------------------------------------
+   Shared buttons (settings + transcribe windows)
+   -------------------------------------------------------------------------- */
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 500;
+  transition:
+    background var(--duration-micro) ease,
+    transform var(--duration-micro) ease,
+    box-shadow var(--duration-micro) ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.3);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  background: var(--disabled-bg);
+  color: var(--disabled-text);
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: var(--btn-secondary-bg);
+  color: var(--text-primary);
+  font-weight: 500;
+  transition:
+    background var(--duration-micro) ease,
+    color var(--duration-micro) ease,
+    transform var(--duration-micro) ease;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.btn-secondary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* --------------------------------------------------------------------------
+   Shared badges (settings data page + transcribe window)
+   -------------------------------------------------------------------------- */
+.badge {
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-hint);
+  font-weight: 500;
+}
+
+.badge-pending,
+.badge-warning {
+  background: rgba(217, 119, 6, 0.15);
+  color: var(--warning-text);
+}
+
+.badge-done {
+  background: rgba(22, 163, 74, 0.15);
+  color: var(--success-text);
+}
+
+.badge-failed {
+  background: rgba(var(--error-rgb), 0.15);
+  color: var(--error-text);
+}
+
+.badge-source-record {
+  background: var(--accent-light);
+  color: var(--accent-text);
+}
+
+.badge-source-classic {
+  background: var(--btn-secondary-bg);
+  color: var(--text-secondary);
 }
 
 /* --------------------------------------------------------------------------
