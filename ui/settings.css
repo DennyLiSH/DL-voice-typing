@@ -856,7 +856,11 @@ button:disabled {
 
 .data-row-preview {
     flex: 1;
-    min-width: 120px;
+    /* Floor, not target: actual width = leftover after fixed siblings.
+     * 560px window - 48px sidebar - paddings ≈ 442px row budget; classic
+     * rows' fixed siblings total ≈ 433px, so the floor must stay ≤ 72px
+     * to avoid horizontal overflow. */
+    min-width: 72px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
