@@ -27,6 +27,7 @@ import {
     findActiveSegmentIndex,
     formatTimestamp,
     injectTargetLabel,
+    llmConfigured,
     mergeSegmentTexts,
     PHASE,
     shouldAutoScroll,
@@ -476,6 +477,25 @@ async function refreshInjectTarget() {
     renderInjectTarget(typeof title === 'string' ? title : null);
 }
 
+// --- LLM checkbox availability (D3-b/D3-c) ----------------------------------
+
+async function refreshLlmAvailability() {
+    const chk = $('chk-llm');
+    if (!chk) return;
+    let configured = false;
+    try {
+        configured = llmConfigured(await call('get_config'));
+    } catch (_e) {
+        // Keep the previous state; call() already reported the error.
+        return;
+    }
+    if (!configured) {
+        chk.checked = false;
+    }
+    chk.disabled = !configured;
+    chk.title = configured ? '' : '未配置 LLM（设置 → LLM 纠错）';
+}
+
 function wireEvents() {
     $('btn-refresh')?.addEventListener('click', loadList);
     $('btn-transcribe')?.addEventListener('click', startTranscription);
@@ -514,15 +534,19 @@ function wireEvents() {
 
     // Rule 8 + D2-a: window re-shown refreshes the list and inject target
     // (the target HWND is a snapshot; a hide/show cycle may have re-captured it).
+    // D3-c: LLM availability too (the user may have just configured LLM in
+    // the settings window and come back).
     window.addEventListener('focus', () => {
         loadList();
         refreshInjectTarget();
+        refreshLlmAvailability();
     });
 }
 
 wireEvents();
 loadList();
 refreshInjectTarget();
+refreshLlmAvailability();
 
 // --- Backend events --------------------------------------------------------
 //

@@ -5,6 +5,7 @@ import {
     findActiveSegmentIndex,
     formatTimestamp,
     injectTargetLabel,
+    llmConfigured,
     mergeSegmentTexts,
     PHASE,
     shouldAutoScroll,
@@ -884,5 +885,39 @@ describe('injectTargetLabel', () => {
             text: '重新打开窗口以选择注入目标',
             muted: true,
         });
+    });
+});
+
+describe('llmConfigured', () => {
+    it('is true only when all LLM fields are set and enabled', () => {
+        expect(
+            llmConfigured({
+                llm_enabled: true,
+                llm_api_url: 'http://x',
+                llm_api_key: '__MASKED__',
+                llm_model: 'm',
+            }),
+        ).toBe(true);
+    });
+    it('is false when disabled', () => {
+        expect(
+            llmConfigured({
+                llm_enabled: false,
+                llm_api_url: 'http://x',
+                llm_api_key: 'k',
+                llm_model: 'm',
+            }),
+        ).toBe(false);
+    });
+    it('is false when any field is empty', () => {
+        expect(
+            llmConfigured({
+                llm_enabled: true,
+                llm_api_url: '',
+                llm_api_key: 'k',
+                llm_model: 'm',
+            }),
+        ).toBe(false);
+        expect(llmConfigured(null)).toBe(false);
     });
 });

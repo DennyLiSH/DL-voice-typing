@@ -164,3 +164,17 @@ export function injectTargetLabel(title) {
     }
     return { text: '重新打开窗口以选择注入目标', muted: true };
 }
+
+/**
+ * Whether LLM correction is usable for the transcribe window checkbox.
+ * Mirrors the backend readiness check in transcribe_cmd.rs run_llm_correction
+ * (llm_enabled + url + key + model all set). The masked key marker is truthy.
+ *
+ * @param {Object|null} cfg - AppConfig from get_config
+ * @returns {boolean}
+ */
+export function llmConfigured(cfg) {
+    return Boolean(
+        cfg?.llm_enabled && cfg.llm_api_url && cfg.llm_api_key && cfg.llm_model,
+    );
+}
