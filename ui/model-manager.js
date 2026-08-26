@@ -156,8 +156,8 @@ btnDownloadModel.addEventListener('click', async () => {
             populateModelSelect();
             updateModelAction();
             notifyFormChange();
-        } catch (_e) {
-            showError('删除失败，请重试');
+        } catch (e) {
+            showError(e?.message || '删除失败，请重试');
         }
     } else {
         startDownload(selectedModel);
@@ -189,7 +189,7 @@ async function startDownload(size) {
             updateModelAction();
         } else {
             reportError(e, 'download_whisper_model');
-            showError('下载失败，请重试');
+            showError(e?.message || '下载失败，请重试');
             updateModelAction();
         }
     }

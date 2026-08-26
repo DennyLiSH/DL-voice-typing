@@ -70,7 +70,7 @@ const FIELDS = [
         key: 'hotkey',
         get: () => hotkeySelect.value,
         set: (v) => {
-            hotkeySelect.value = v || 'RightAlt';
+            hotkeySelect.value = v || 'RightCtrl';
         },
     },
     { key: 'whisper_model', get: getSelectedModel, set: setSelectedModel },
@@ -198,7 +198,6 @@ export function populateFields(config) {
             if (!autostartAvailable) {
                 autostartToggle.classList.add('disabled');
                 autostartToggle.setAttribute('aria-disabled', 'true');
-                autostartToggle.parentElement.classList.add('disabled');
             }
         } catch (_e) {
             // Non-critical: just skip gray-out (error already reported via call)
@@ -335,8 +334,8 @@ testBtn.addEventListener('click', async () => {
     try {
         await call('test_llm_connection', { apiUrl, apiKey, model });
         setTestStatus('✓ 连接成功', 'success');
-    } catch (_e) {
-        setTestStatus('✗ 连接失败，请检查配置', 'error');
+    } catch (e) {
+        setTestStatus(`✗ ${e?.message || '连接失败，请检查配置'}`, 'error');
     } finally {
         testBtn.disabled = false;
         testBtn.textContent = '测试连接';

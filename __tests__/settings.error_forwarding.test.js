@@ -211,7 +211,9 @@ describe('settings.js error forwarding to log_frontend_error', () => {
             await new Promise((r) => setTimeout(r, 10));
 
             const status = document.getElementById('test-status');
-            expect(status.textContent).toContain('连接失败');
+            // Error detail passthrough: the backend message ('net') is
+            // surfaced instead of a fixed '连接失败' string.
+            expect(status.textContent).toContain('✗ net');
             expect(status.className).toContain('error');
         });
     });

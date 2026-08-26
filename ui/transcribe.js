@@ -146,7 +146,7 @@ function buildListRow(item) {
     if (item.dropped_blocks > 0) {
         const warn = document.createElement('span');
         warn.className = 'badge badge-warning';
-        warn.textContent = '录音有洞';
+        warn.textContent = '音频不完整';
         meta.appendChild(warn);
     }
 
@@ -235,7 +235,7 @@ function renderBadges() {
     if (state.droppedBlocks > 0) {
         const warn = document.createElement('span');
         warn.className = 'badge badge-warning';
-        warn.textContent = '录音有洞';
+        warn.textContent = '音频不完整';
         wrap.appendChild(warn);
     }
 }
