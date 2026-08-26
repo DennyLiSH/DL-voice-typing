@@ -42,6 +42,11 @@ const recordOnlyHotkeyGroup = document.getElementById(
 );
 const recordOnlyHotkeySelect = document.getElementById('record-only-hotkey');
 
+// Initial icon for the API key toggle: input starts as type="password",
+// which maps to the EYE (reveal) affordance — replaces the emoji placeholder
+// in the HTML so first paint matches the click-handler semantics.
+toggleKeyBtn.innerHTML = EYE_SVG;
+
 // State
 let loadedConfig = null;
 let isDirty = false;
