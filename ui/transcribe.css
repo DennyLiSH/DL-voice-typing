@@ -287,6 +287,18 @@ body {
     gap: var(--space-3);
 }
 
+.inject-target {
+    font-size: var(--font-hint);
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inject-target.muted {
+    color: var(--text-tertiary);
+}
+
 .spinner {
     width: 16px;
     height: 16px;

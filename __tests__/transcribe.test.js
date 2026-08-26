@@ -4,6 +4,7 @@ import {
     filterRecordOnly,
     findActiveSegmentIndex,
     formatTimestamp,
+    injectTargetLabel,
     mergeSegmentTexts,
     PHASE,
     shouldAutoScroll,
@@ -864,5 +865,24 @@ describe('live inject-button refresh (BC(C5)#2)', () => {
         inputs[0].value = '恢复文本';
         inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
         expect(btn.disabled).toBe(false);
+    });
+});
+
+describe('injectTargetLabel', () => {
+    it('shows the target window title when present', () => {
+        expect(injectTargetLabel('WeChat')).toEqual({
+            text: '将注入到：WeChat',
+            muted: false,
+        });
+    });
+    it('falls back to the reopen hint for null/empty titles', () => {
+        expect(injectTargetLabel(null)).toEqual({
+            text: '重新打开窗口以选择注入目标',
+            muted: true,
+        });
+        expect(injectTargetLabel('   ')).toEqual({
+            text: '重新打开窗口以选择注入目标',
+            muted: true,
+        });
     });
 });

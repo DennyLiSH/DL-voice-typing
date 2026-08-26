@@ -111,6 +111,7 @@ pub fn run() {
             commands::transcribe_cmd::transcribe_recording,
             commands::transcribe_cmd::cancel_transcription,
             commands::transcribe_cmd::get_recording_segments,
+            commands::transcribe_cmd::get_inject_target,
             commands::transcribe_cmd::inject_transcript_text,
         ])
         .on_window_event(|window, event| {

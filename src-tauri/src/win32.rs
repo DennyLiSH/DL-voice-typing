@@ -146,6 +146,29 @@ pub fn is_window_valid(hwnd_val: isize) -> bool {
     unsafe { IsWindow(hwnd).as_bool() }
 }
 
+/// Read the title of a window handle. Returns None when the handle is
+/// invalid or the title is empty.
+pub fn get_window_title(hwnd_val: isize) -> Option<String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+    // SAFETY: GetWindowTextLengthW/GetWindowTextW have no preconditions;
+    // an invalid HWND simply returns 0. windows 0.58 takes the buffer as a
+    // &mut [u16] slice — the slice length IS nMaxCount (NUL room included).
+    unsafe {
+        let hwnd = HWND(hwnd_val as *mut _);
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let copied = GetWindowTextW(hwnd, &mut buf);
+        if copied <= 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..copied as usize]))
+    }
+}
+
 /// Restore focus to a saved window handle, reporting whether
 /// `SetForegroundWindow` actually succeeded.
 ///

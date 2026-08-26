@@ -148,3 +148,19 @@ export function uiFlags({ phase, selected, status, mergedEmpty }) {
         listLocked: busy,
     };
 }
+
+/**
+ * Presentation for the inject-target indicator (D2-b three states).
+ * `title` is read live at each refresh point (init/focus/post-inject);
+ * null means never captured / consumed by a previous inject / window gone
+ * at the moment of reading.
+ *
+ * @param {string|null} title
+ * @returns {{text: string, muted: boolean}}
+ */
+export function injectTargetLabel(title) {
+    if (typeof title === 'string' && title.trim() !== '') {
+        return { text: `将注入到：${title}`, muted: false };
+    }
+    return { text: '重新打开窗口以选择注入目标', muted: true };
+}

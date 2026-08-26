@@ -26,6 +26,7 @@ import {
     filterRecordOnly,
     findActiveSegmentIndex,
     formatTimestamp,
+    injectTargetLabel,
     mergeSegmentTexts,
     PHASE,
     shouldAutoScroll,
@@ -422,6 +423,7 @@ async function injectText() {
         showToast(e?.message || '注入失败', true);
     } finally {
         setPhase(PHASE.IDLE);
+        refreshInjectTarget();
     }
 }
 
@@ -449,6 +451,30 @@ function onTimeUpdate() {
 }
 
 // --- Event wiring ----------------------------------------------------------
+
+// --- Inject target indicator (D2-a/D2-b) -----------------------------------
+
+function renderInjectTarget(title) {
+    const el = $('inject-target');
+    if (!el) return;
+    const { text, muted } = injectTargetLabel(title);
+    el.textContent = text;
+    el.classList.toggle('muted', muted);
+    el.hidden = false;
+}
+
+async function refreshInjectTarget() {
+    let title = null;
+    try {
+        title = await call('get_inject_target');
+    } catch (_e) {
+        // Command failed (transient) — keep the previously rendered state
+        // instead of falsely showing the "no target" hint (reportError
+        // already ran inside call()).
+        return;
+    }
+    renderInjectTarget(typeof title === 'string' ? title : null);
+}
 
 function wireEvents() {
     $('btn-refresh')?.addEventListener('click', loadList);
@@ -486,12 +512,17 @@ function wireEvents() {
         });
     }
 
-    // Rule 8: window re-shown (hidden → focused) refreshes the list.
-    window.addEventListener('focus', loadList);
+    // Rule 8 + D2-a: window re-shown refreshes the list and inject target
+    // (the target HWND is a snapshot; a hide/show cycle may have re-captured it).
+    window.addEventListener('focus', () => {
+        loadList();
+        refreshInjectTarget();
+    });
 }
 
 wireEvents();
 loadList();
+refreshInjectTarget();
 
 // --- Backend events --------------------------------------------------------
 //

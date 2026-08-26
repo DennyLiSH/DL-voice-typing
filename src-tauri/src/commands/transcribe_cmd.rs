@@ -132,6 +132,26 @@ pub fn get_recording_segments(
     Ok(segments_from_metadata(&metadata))
 }
 
+/// Return the window title of the inject target. The HWND is captured at
+/// window open (take-once); the title and window validity are read live on
+/// each call (read-only peek — never consumes the HWND). `None` when the
+/// target was never captured, was already consumed by an inject, or the
+/// window no longer exists.
+#[tauri::command]
+pub fn get_inject_target(
+    pt: tauri::State<'_, PendingTranscribe>,
+) -> Result<Option<String>, CommandError> {
+    Ok(peek_inject_target(&pt))
+}
+
+fn peek_inject_target(pt: &PendingTranscribe) -> Option<String> {
+    let guard = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd")?;
+    match guard.as_ref() {
+        Some(h) if crate::win32::is_window_valid(*h) => crate::win32::get_window_title(*h),
+        _ => None,
+    }
+}
+
 /// Inject text into the window that was foreground when the transcribe
 /// window opened. Fallback: leave the text in the clipboard with a warning
 /// when the target window is gone or cannot be focused. After the delivery
@@ -1035,5 +1055,23 @@ mod tests {
         assert!(write_final_text(&json_path, "测试转录文本").is_ok());
         assert_eq!(read_json(&json_path)["final_text"], "测试转录文本");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- get_inject_target (read-only peek, never takes the HWND) ---
+
+    #[test]
+    fn test_peek_inject_target_none_when_unset() {
+        let pt = PendingTranscribe::new();
+        assert_eq!(peek_inject_target(&pt), None);
+    }
+
+    #[test]
+    fn test_peek_inject_target_none_for_invalid_hwnd() {
+        let pt = PendingTranscribe::new();
+        if let Some(mut g) = crate::util::lock_mutex(&pt.hwnd, "t") {
+            *g = Some(0);
+        }
+        // HWND 0 is never a valid window.
+        assert_eq!(peek_inject_target(&pt), None);
     }
 }
