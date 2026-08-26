@@ -124,6 +124,10 @@ function show() {
 }
 
 function hide(delay = 0) {
+    if (hideTimeout) {
+        clearTimeout(hideTimeout);
+        hideTimeout = null;
+    }
     if (delay > 0) {
         hideTimeout = setTimeout(() => hide(), delay);
         return;
