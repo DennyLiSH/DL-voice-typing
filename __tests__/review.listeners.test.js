@@ -133,10 +133,14 @@ describe('speech-error listener', () => {
 });
 
 describe('injection-error listener', () => {
-    it('renders payload with formatted prefix', () => {
-        listeners['injection-error']({ payload: '剪贴板被占用' });
+    it('renders payload as-is (backend sends a complete user-facing sentence)', () => {
+        listeners['injection-error']({
+            payload: '文本粘贴失败，原剪贴板内容已尝试恢复',
+        });
 
-        expect(get('error-msg').textContent).toBe('粘贴失败：剪贴板被占用');
+        expect(get('error-msg').textContent).toBe(
+            '文本粘贴失败，原剪贴板内容已尝试恢复',
+        );
     });
 
     it('renders default fallback when payload is empty', () => {
@@ -154,7 +158,7 @@ describe('injection-error listener', () => {
         });
 
         expect(get('error-msg').textContent).toBe(
-            '粘贴失败：<img src=x onerror=alert(1)>',
+            '<img src=x onerror=alert(1)>',
         );
     });
 });

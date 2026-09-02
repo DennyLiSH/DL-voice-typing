@@ -144,8 +144,8 @@ function hide(delay = 0) {
 
 const ERROR_DEFAULTS = {
     'speech-error': '语音识别失败',
-    'llm-error': 'LLM 纠错失败，已使用原文本',
-    'injection-error': '粘贴失败，文本可能已保留在剪贴板',
+    'llm-error': 'LLM 纠错失败，已保留原始转录',
+    'injection-error': '文本粘贴失败，原剪贴板内容已尝试恢复',
 };
 
 function showError(eventName, payload) {

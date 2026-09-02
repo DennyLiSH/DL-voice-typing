@@ -84,12 +84,19 @@ export function getShadow(visualRms) {
  * Error text to display in the floating window: the event payload when it
  * is a non-empty string, otherwise the per-event-type fallback. Payloads may
  * be objects (serialized AppError) — those are not user-readable, fall back.
+ * The payload (never the fallback) is capped at maxLen chars — the text area
+ * is ~160x60px (~3 lines), so an over-long technical string would overflow.
  *
  * @param {unknown} payload
  * @param {string} fallback
+ * @param {number} [maxLen=40]
  * @returns {string}
  */
-export function errorDisplayText(payload, fallback) {
-    if (typeof payload === 'string' && payload.trim() !== '') return payload;
+export function errorDisplayText(payload, fallback, maxLen = 40) {
+    if (typeof payload === 'string' && payload.trim() !== '') {
+        return payload.length > maxLen
+            ? `${payload.slice(0, maxLen)}…`
+            : payload;
+    }
     return fallback;
 }

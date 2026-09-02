@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { formatInjectionError } from '../ui/review-utils.js';
 
 describe('formatInjectionError', () => {
-    it('renders payload with prefix when non-empty string', () => {
-        expect(formatInjectionError('剪贴板被占用')).toBe(
-            '粘贴失败：剪贴板被占用',
-        );
+    it('renders non-empty payload as-is (backend sends a complete user-facing sentence)', () => {
+        expect(
+            formatInjectionError('文本粘贴失败，原剪贴板内容已尝试恢复'),
+        ).toBe('文本粘贴失败，原剪贴板内容已尝试恢复');
     });
 
     it('renders default fallback when payload is empty string', () => {
@@ -24,13 +24,13 @@ describe('formatInjectionError', () => {
     it('truncates payload longer than 500 chars', () => {
         const long = 'x'.repeat(600);
         const result = formatInjectionError(long);
-        expect(result.length).toBe('粘贴失败：'.length + 500);
-        expect(result.startsWith('粘贴失败：')).toBe(true);
+        expect(result.length).toBe(500);
+        expect(result.startsWith('x'.repeat(10))).toBe(true);
     });
 
     it('does not parse HTML in payload (textContent contract)', () => {
         const html = '<img src=x onerror=alert(1)>';
         const result = formatInjectionError(html);
-        expect(result).toBe('粘贴失败：<img src=x onerror=alert(1)>');
+        expect(result).toBe('<img src=x onerror=alert(1)>');
     });
 });

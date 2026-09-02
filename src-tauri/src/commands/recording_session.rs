@@ -24,6 +24,14 @@ use tracing::{debug, info, warn};
 
 use super::pipeline_state::PipelineState;
 
+/// User-facing payload for the `llm-error` event. The floating window is
+/// 160x60px of text space — it gets this fixed Chinese summary while the
+/// redacted English detail goes to the tracing log (see `resolve_llm_text`).
+/// Wording matches transcribe_cmd's `transcription-error` message; payload
+/// shape differs (bare string vs `{"message": …}`) because the consumers
+/// differ (floating window vs transcribe window).
+pub(crate) const LLM_ERROR_USER_MSG: &str = "LLM 纠错失败，已保留原始转录";
+
 /// Snapshot of config consumed by a single recording session.
 ///
 /// Built once at hotkey press/release entry to prevent mid-session config
@@ -748,9 +756,14 @@ async fn resolve_llm_text(
             Ok(corrected)
         }
         Err(e) => {
+            warn!(
+                target: "llm",
+                "LLM correction failed, using raw transcription: {}",
+                crate::llm::redact_error_detail(&e.to_string(), &live_api_key)
+            );
             ps.emitter().emit(
                 "llm-error",
-                serde_json::to_value(e.to_string()).unwrap_or_default(),
+                serde_json::to_value(LLM_ERROR_USER_MSG).unwrap_or_default(),
             );
             Ok(transcription.to_string())
         }

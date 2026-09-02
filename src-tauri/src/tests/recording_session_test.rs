@@ -40,6 +40,12 @@ fn config(realtime: bool, review: bool, llm: bool) -> AppConfig {
 }
 
 fn build_rig(cfg: AppConfig, engine_text: &str) -> Rig {
+    build_rig_with_corrector(cfg, engine_text, MockCorrector::new("corrected"))
+}
+
+/// `build_rig` with an injectable corrector — the default wrapper keeps the
+/// existing 9 call sites unchanged; LLM-failure tests pass `MockCorrector::failing()`.
+fn build_rig_with_corrector(cfg: AppConfig, engine_text: &str, corrector: MockCorrector) -> Rig {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
     let engine = Arc::new(MockEngine::new(engine_text));
@@ -52,7 +58,7 @@ fn build_rig(cfg: AppConfig, engine_text: &str) -> Rig {
         clipboard.clone(),
         Arc::new(crate::perf::PerfHistory::new()),
         crate::config::ConfigCache::new(cfg),
-        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
+        Arc::new(Mutex::new(Some(Box::new(corrector)))),
         Arc::new(Mutex::new(None)),
         Arc::new(NoopWindowController),
         emitter.clone(),
@@ -270,6 +276,57 @@ async fn run_pipeline_llm_corrects_then_injects() {
     assert!(names.contains(&"llm-refining".to_string()));
     assert!(names.contains(&"llm-complete".to_string()));
     assert!(names.contains(&"injection-complete".to_string()));
+}
+
+#[tokio::test]
+async fn run_pipeline_llm_failure_falls_back_to_raw_and_emits_summary() {
+    let rig = build_rig_with_corrector(
+        config(false, false, true),
+        "raw transcription",
+        MockCorrector::failing(),
+    );
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, false, true));
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            false,
+            perf,
+            Instant::now(),
+            policy,
+        )
+        .await;
+
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+    let events = rig.emitter.take_events();
+    let names: Vec<String> = events.iter().map(|(n, _)| n.clone()).collect();
+    assert!(names.contains(&"llm-refining".to_string()));
+    assert!(
+        !names.contains(&"llm-complete".to_string()),
+        "failed correction must not emit llm-complete"
+    );
+    // Payload is the fixed Chinese summary as a bare JSON string — not the
+    // English technical detail, not an object.
+    let llm_error = events
+        .iter()
+        .find(|(n, _)| n == "llm-error")
+        .map(|(_, v)| v.clone())
+        .expect("llm-error must be emitted on failure");
+    assert_eq!(
+        llm_error,
+        serde_json::Value::String(
+            crate::commands::recording_session::LLM_ERROR_USER_MSG.to_string()
+        )
+    );
+    // Fallback path: raw transcription is still injected.
+    assert!(names.contains(&"injection-complete".to_string()));
+    assert_eq!(
+        rig.clipboard.injected(),
+        vec!["raw transcription".to_string()]
+    );
 }
 
 // ---------------------------------------------------------------------------

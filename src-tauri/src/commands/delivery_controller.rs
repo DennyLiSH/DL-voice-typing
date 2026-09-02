@@ -13,6 +13,11 @@ use tracing::{debug, error, info, warn};
 
 use super::recording_session::SessionPolicy;
 
+/// User-facing payload for the `injection-error` event: the floating/review
+/// windows have no room for the raw clipboard error string, so they show this
+/// fixed Chinese summary while the English detail stays in the `warn!` log.
+pub(crate) const INJECTION_ERROR_USER_MSG: &str = "文本粘贴失败，原剪贴板内容已尝试恢复";
+
 /// Mutable delivery context held for the duration of a review cycle.
 ///
 /// `foreground_hwnd`, `data_saving`, and `perf` are accumulated while the
@@ -498,7 +503,7 @@ impl DeliveryController {
             // happens inline.
             self.emitter.emit(
                 "injection-error",
-                serde_json::to_value(e).unwrap_or_default(),
+                serde_json::to_value(INJECTION_ERROR_USER_MSG).unwrap_or_default(),
             );
             // Best-effort cleanup: restore clipboard, restore focus, hide windows, reset state.
             let _ = self.restore_clipboard();
@@ -567,7 +572,7 @@ impl DeliveryController {
             // best-effort cleanup + reset happens inline.
             self.emitter.emit(
                 "injection-error",
-                serde_json::to_value(e).unwrap_or_default(),
+                serde_json::to_value(INJECTION_ERROR_USER_MSG).unwrap_or_default(),
             );
             let _ = self.restore_clipboard();
             if review_ui_active {

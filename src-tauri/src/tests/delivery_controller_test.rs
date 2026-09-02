@@ -327,7 +327,7 @@ async fn test_cancel_review_clipboard_restore_failure_still_returns_idle() {
 
 #[tokio::test]
 async fn test_clipboard_restore_on_inject_failure() {
-    let (ps, _emitter) = build_ps();
+    let (ps, emitter) = build_ps();
     // inject_direct's entry transition expects Transcribing, not Injecting.
     to_transcribing(&ps);
 
@@ -368,6 +368,18 @@ async fn test_clipboard_restore_on_inject_failure() {
     assert!(
         mock.restored(),
         "clipboard should be restored on inject failure"
+    );
+    let events = emitter.take_events();
+    let injection_error = events
+        .iter()
+        .find(|(n, _)| n == "injection-error")
+        .map(|(_, v)| v.clone())
+        .expect("injection-error must be emitted on inject failure");
+    assert_eq!(
+        injection_error,
+        serde_json::Value::String(
+            crate::commands::delivery_controller::INJECTION_ERROR_USER_MSG.to_string()
+        )
     );
 }
 
@@ -513,7 +525,7 @@ async fn confirm_review_error_branch_restores_focus() {
 
     let recording = Arc::new(RecordingWindowController::new());
 
-    let (base_ps, _emitter) = build_ps();
+    let (base_ps, emitter) = build_ps();
     let c = base_ps.test_components();
     let ps = PipelineState::new(
         c.sm,
@@ -572,6 +584,19 @@ async fn confirm_review_error_branch_restores_focus() {
     assert_eq!(restore_calls[1].1, Some(42));
 
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+    let events = emitter.take_events();
+    let injection_error = events
+        .iter()
+        .find(|(n, _)| n == "injection-error")
+        .map(|(_, v)| v.clone())
+        .expect("injection-error must be emitted on confirm inject failure");
+    assert_eq!(
+        injection_error,
+        serde_json::Value::String(
+            crate::commands::delivery_controller::INJECTION_ERROR_USER_MSG.to_string()
+        )
+    );
 }
 
 // -----------------------------------------------------------------------------

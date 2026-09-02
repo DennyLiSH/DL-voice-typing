@@ -235,4 +235,18 @@ describe('errorDisplayText', () => {
         expect(errorDisplayText(null, '默认')).toBe('默认');
         expect(errorDisplayText(undefined, '默认')).toBe('默认');
     });
+    it('truncates payloads longer than 40 chars (default maxLen) with …', () => {
+        const long = 'x'.repeat(60);
+        const out = errorDisplayText(long, '默认');
+        expect(out.length).toBe(41);
+        expect(out.endsWith('…')).toBe(true);
+        expect(out.startsWith('x'.repeat(40))).toBe(true);
+    });
+    it('keeps a 40-char payload untruncated', () => {
+        expect(errorDisplayText('y'.repeat(40), '默认')).toBe('y'.repeat(40));
+    });
+    it('never truncates the fallback (capping applies to the payload only)', () => {
+        const longFallback = '兜'.repeat(60);
+        expect(errorDisplayText('', longFallback)).toBe(longFallback);
+    });
 });

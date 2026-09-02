@@ -321,7 +321,18 @@ fn run_transcription(
         match run_llm_correction(ps, &transcription) {
             Some(Ok(corrected)) => Some(corrected),
             Some(Err(e)) => {
-                warn!("transcribe: LLM correction failed for {filename}: {e}");
+                let api_key = ps.config_cache().read_cached().llm_api_key.clone();
+                if api_key.is_empty() {
+                    // Unreachable in practice (run_llm_correction gates on a
+                    // non-empty key) — warn, because the api_key replace layer
+                    // of the redaction is skipped and that should be visible
+                    // in the info-level production log, not just debug.
+                    warn!("transcribe: LLM redaction missing api_key context");
+                }
+                warn!(
+                    "transcribe: LLM correction failed for {filename}: {}",
+                    crate::llm::redact_error_detail(&e.to_string(), &api_key)
+                );
                 ps.emitter().emit(
                     "transcription-error",
                     serde_json::json!({"message": "LLM 纠错失败，已保留原始转录"}),
