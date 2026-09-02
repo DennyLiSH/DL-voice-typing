@@ -11,6 +11,7 @@ import {
     formatDuration,
     formatStemForDisplay,
     getPageRange,
+    previewText,
     truncateText,
 } from '../ui/lib/data-management.js';
 
@@ -287,7 +288,7 @@ describe('buildRecordingRow', () => {
         expect(row.querySelector('.badge-warning')).toBeNull();
     });
 
-    it('shows record source + status badges for record_only entries', () => {
+    it('keeps source badge on collapsed record_only rows but no status/warning badges', () => {
         const entry = {
             ...baseEntry,
             source: 'record_only',
@@ -298,22 +299,12 @@ describe('buildRecordingRow', () => {
         expect(row.querySelector('.badge-source-record').textContent).toBe(
             '录音',
         );
-        expect(row.querySelector('.badge-done').textContent).toBe('已转录');
-        expect(row.querySelector('.badge-warning')).toBeNull();
+        expect(row.querySelector('.badge-done')).toBeNull();
+        expect(row.querySelector('.badge-pending')).toBeNull();
+        expect(row.querySelector('.badge-failed')).toBeNull();
     });
 
-    it('shows pending status badge for untranscribed record_only entries', () => {
-        const entry = {
-            ...baseEntry,
-            source: 'record_only',
-            transcription_status: 'pending',
-            dropped_blocks: 0,
-        };
-        const row = buildRecordingRow(entry);
-        expect(row.querySelector('.badge-pending').textContent).toBe('待转录');
-    });
-
-    it('shows dropped-blocks warning badge when dropped_blocks > 0', () => {
+    it('collapsed record_only rows with dropped_blocks have no warning badge', () => {
         const entry = {
             ...baseEntry,
             source: 'record_only',
@@ -321,10 +312,82 @@ describe('buildRecordingRow', () => {
             dropped_blocks: 12,
         };
         const row = buildRecordingRow(entry);
-        expect(row.querySelector('.badge-failed').textContent).toBe('转录失败');
-        expect(row.querySelector('.badge-warning').textContent).toBe(
-            '音频不完整',
-        );
+        expect(row.querySelector('.badge-warning')).toBeNull();
+    });
+});
+
+describe('previewText', () => {
+    const emptyEntry = (source, transcription_status) => ({
+        source,
+        transcription_status,
+        transcription: null,
+        final_text: null,
+        llm_corrected: null,
+    });
+
+    it('returns placeholder 转录失败 for failed record-only rows', () => {
+        expect(previewText(emptyEntry('record_only', 'failed'))).toEqual({
+            text: '转录失败',
+            placeholder: true,
+        });
+    });
+
+    it('returns placeholder 未转录 for pending record-only rows', () => {
+        expect(previewText(emptyEntry('record_only', 'pending'))).toEqual({
+            text: '未转录',
+            placeholder: true,
+        });
+    });
+
+    it('truncates transcription text without placeholder', () => {
+        const result = previewText({
+            transcription: 'a'.repeat(50),
+            final_text: null,
+            llm_corrected: null,
+        });
+        expect(result.text.length).toBeLessThan(50);
+        expect(result.text.endsWith('…')).toBe(true);
+        expect(result.placeholder).toBe(false);
+    });
+
+    it('returns empty text for classic rows with no transcription', () => {
+        expect(previewText(emptyEntry('classic', undefined))).toEqual({
+            text: '',
+            placeholder: false,
+        });
+    });
+
+    it('returns empty text for done record-only rows with all fields empty (no misleading hint)', () => {
+        expect(previewText(emptyEntry('record_only', 'done'))).toEqual({
+            text: '',
+            placeholder: false,
+        });
+    });
+
+    it('buildRecordingRow adds placeholder class for pending record-only rows', () => {
+        const row = buildRecordingRow({
+            filename: '2026-06-24_14-30-25',
+            source: 'record_only',
+            transcription_status: 'pending',
+            transcription: null,
+            final_text: null,
+            llm_corrected: null,
+            wav_size: 1024,
+        });
+        const preview = row.querySelector('.data-row-preview');
+        expect(preview.classList.contains('placeholder')).toBe(true);
+        expect(preview.textContent).toBe('未转录');
+    });
+
+    it('buildRecordingRow does not add placeholder class when transcription exists', () => {
+        const row = buildRecordingRow({
+            filename: '2026-06-24_14-30-25',
+            transcription: '今天去开会',
+            wav_size: 1024,
+        });
+        const preview = row.querySelector('.data-row-preview');
+        expect(preview.classList.contains('placeholder')).toBe(false);
+        expect(preview.textContent).toBe('今天去开会');
     });
 });
 
@@ -333,7 +396,7 @@ describe('buildExpandedMetadata', () => {
         document.body.innerHTML = '';
     });
 
-    it('renders four labelled lines (language first)', () => {
+    it('renders four labelled lines for classic entries (language first)', () => {
         const entry = {
             language: 'zh',
             transcription: '原文',
@@ -360,6 +423,47 @@ describe('buildExpandedMetadata', () => {
         );
         expect(lines[3].querySelector('.data-row-meta-label').textContent).toBe(
             '最终：',
+        );
+    });
+
+    it('renders status line first (five lines) for record_only entries', () => {
+        const entry = {
+            source: 'record_only',
+            transcription_status: 'pending',
+            dropped_blocks: 0,
+            language: 'zh',
+            transcription: '原文',
+            llm_corrected: null,
+            final_text: null,
+        };
+        const el = buildExpandedMetadata(entry);
+        const lines = el.querySelectorAll('.data-row-meta-line');
+        expect(lines.length).toBe(5);
+        expect(lines[0].querySelector('.data-row-meta-label').textContent).toBe(
+            '状态：',
+        );
+        expect(lines[0].querySelector('.badge-pending').textContent).toBe(
+            '待转录',
+        );
+        expect(lines[1].querySelector('.data-row-meta-label').textContent).toBe(
+            '语言：',
+        );
+    });
+
+    it('includes dropped-blocks warning badge in status line when dropped_blocks > 0', () => {
+        const entry = {
+            source: 'record_only',
+            transcription_status: 'failed',
+            dropped_blocks: 12,
+            language: 'zh',
+            transcription: null,
+            llm_corrected: null,
+            final_text: null,
+        };
+        const el = buildExpandedMetadata(entry);
+        expect(el.querySelector('.badge-failed').textContent).toBe('转录失败');
+        expect(el.querySelector('.badge-warning').textContent).toBe(
+            '音频不完整',
         );
     });
 

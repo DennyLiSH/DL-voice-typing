@@ -69,6 +69,34 @@ export function truncateText(text, maxLen = 30) {
 }
 
 /**
+ * Preview text for a collapsed recording row.
+ *
+ * Returns `{ text, placeholder }`: `placeholder` marks the text as a status
+ * hint ("未转录" / "转录失败") that should render in tertiary color — used
+ * when the row has no transcription text to show. Status badges moved to the
+ * expanded section (560px row budget), so this is the only collapsed-state
+ * status cue for record-only rows.
+ *
+ * done + all-empty is deliberately NOT a placeholder (rare edge, no hint is
+ * less misleading than a wrong one); classic rows have no status concept.
+ *
+ * @param {Object} entry - recording entry from list_saved_recordings
+ * @returns {{text: string, placeholder: boolean}}
+ */
+export function previewText(entry) {
+    const text =
+        entry.transcription || entry.final_text || entry.llm_corrected || '';
+    if (text) return { text: truncateText(text, 30), placeholder: false };
+    if (entry.source === 'record_only') {
+        if (entry.transcription_status === 'failed')
+            return { text: '转录失败', placeholder: true };
+        if (entry.transcription_status === 'pending')
+            return { text: '未转录', placeholder: true };
+    }
+    return { text: '', placeholder: false };
+}
+
+/**
  * Build a DOM element for one recording row.
  *
  * Returns the populated `.data-row` element. The caller attaches it to the
@@ -124,22 +152,6 @@ export function buildRecordingRow(entry, opts = {}) {
     }
     row.appendChild(srcSpan);
 
-    // Transcription status + dropped-blocks badges (record-only only)
-    if (entry.source === 'record_only') {
-        const st = statusBadge(entry.transcription_status);
-        const stSpan = document.createElement('span');
-        stSpan.className = st.className;
-        stSpan.textContent = st.text;
-        row.appendChild(stSpan);
-
-        if (entry.dropped_blocks > 0) {
-            const warnSpan = document.createElement('span');
-            warnSpan.className = 'badge badge-warning';
-            warnSpan.textContent = '音频不完整';
-            row.appendChild(warnSpan);
-        }
-    }
-
     // Duration
     const durSpan = document.createElement('span');
     durSpan.className = 'data-row-dur';
@@ -149,13 +161,13 @@ export function buildRecordingRow(entry, opts = {}) {
             : '—';
     row.appendChild(durSpan);
 
-    // Transcription preview
+    // Transcription preview (placeholder text when record-only rows have no
+    // transcription yet — the status badge lives in the expanded section)
     const previewSpan = document.createElement('span');
     previewSpan.className = 'data-row-preview';
-    previewSpan.textContent = truncateText(
-        entry.transcription || entry.final_text || entry.llm_corrected || '',
-        30,
-    );
+    const { text: preview, placeholder } = previewText(entry);
+    previewSpan.textContent = preview;
+    if (placeholder) previewSpan.classList.add('placeholder');
     row.appendChild(previewSpan);
 
     // Play button OR "音频缺失" badge
@@ -199,6 +211,30 @@ export function buildRecordingRow(entry, opts = {}) {
 export function buildExpandedMetadata(entry) {
     const container = document.createElement('div');
     container.className = 'data-row-expanded';
+
+    if (entry.source === 'record_only') {
+        const statusLine = document.createElement('div');
+        statusLine.className = 'data-row-meta-line';
+        const lbl = document.createElement('span');
+        lbl.className = 'data-row-meta-label';
+        lbl.textContent = '状态：';
+        const val = document.createElement('span');
+        val.className = 'data-row-meta-value';
+        const st = statusBadge(entry.transcription_status);
+        const stSpan = document.createElement('span');
+        stSpan.className = st.className;
+        stSpan.textContent = st.text;
+        val.appendChild(stSpan);
+        if (entry.dropped_blocks > 0) {
+            const warnSpan = document.createElement('span');
+            warnSpan.className = 'badge badge-warning';
+            warnSpan.textContent = '音频不完整';
+            val.appendChild(warnSpan);
+        }
+        statusLine.appendChild(lbl);
+        statusLine.appendChild(val);
+        container.appendChild(statusLine);
+    }
 
     const fields = [
         ['语言', entry.language],

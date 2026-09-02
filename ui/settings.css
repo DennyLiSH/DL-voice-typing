@@ -849,8 +849,10 @@ button:disabled {
 .data-row-preview {
     flex: 1;
     /* Floor, not target: actual width = leftover after fixed siblings.
-     * 560px window - 48px sidebar - paddings ≈ 442px row budget; classic
-     * rows' fixed siblings total ≈ 433px, so the floor must stay ≤ 72px
+     * 560px window - 48px sidebar - paddings ≈ 442px row budget; fixed
+     * siblings (checkbox/ts/source badge/duration/play/delete, 6 gaps)
+     * ≈ 432px for both classic and record-only rows — status/warning
+     * badges moved to the expanded section, so the floor must stay ≤ 72px
      * to avoid horizontal overflow. */
     min-width: 72px;
     overflow: hidden;
@@ -858,6 +860,10 @@ button:disabled {
     white-space: nowrap;
     color: var(--text-primary);
     font-size: var(--font-label);
+}
+
+.data-row-preview.placeholder {
+    color: var(--text-tertiary);
 }
 
 .btn-icon {

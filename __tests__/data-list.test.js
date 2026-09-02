@@ -185,6 +185,21 @@ describe('Data list — render contract', () => {
         list.appendChild(buildExpandedMetadata(sampleEntries[0]));
         expect(list.querySelectorAll('.data-row-meta-line').length).toBe(4);
     });
+
+    it('expanded record-only row appends metadata with five lines (status first)', () => {
+        const list = document.getElementById('data-list');
+        const entry = {
+            ...sampleEntries[0],
+            source: 'record_only',
+            transcription_status: 'pending',
+            dropped_blocks: 0,
+        };
+        list.appendChild(buildRecordingRow(entry));
+        list.appendChild(buildExpandedMetadata(entry));
+        const lines = list.querySelectorAll('.data-row-meta-line');
+        expect(lines.length).toBe(5);
+        expect(lines[0].textContent.startsWith('状态：')).toBe(true);
+    });
 });
 
 describe('Data list — state machine (constraint coverage)', () => {
