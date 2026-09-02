@@ -280,7 +280,7 @@ button:active:not(:disabled) {
    -------------------------------------------------------------------------- */
 .btn-delete-model {
   background: var(--error);
-  color: white;
+  color: #fff;
 }
 
 .btn-delete-model:hover:not(:disabled) {

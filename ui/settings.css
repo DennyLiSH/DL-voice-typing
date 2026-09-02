@@ -91,7 +91,7 @@ body {
 }
 
 .sidebar-item.active span {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -224,7 +224,7 @@ select:disabled, input:disabled {
 .btn-cancel-download {
   background: none;
   border: none;
-  color: var(--error);
+  color: var(--error-text);
   font-size: var(--font-label);
   cursor: pointer;
   flex-shrink: 0;
@@ -479,17 +479,17 @@ button:disabled {
 
 .mode-badge.gpu {
   background: rgba(22, 163, 74, 0.1);
-  color: var(--success);
+  color: var(--success-text);
 }
 
 .mode-badge.cpu {
   background: rgba(234, 179, 8, 0.15);
-  color: #ca8a04;
+  color: var(--warning-text);
 }
 
 .mode-badge.unloaded {
   background: rgba(var(--error-rgb), 0.1);
-  color: var(--error);
+  color: var(--error-text);
 }
 
 /* --------------------------------------------------------------------------
@@ -890,7 +890,7 @@ button:disabled {
 .btn-delete:hover {
     background: rgba(var(--error-rgb), 0.15);
     border-color: var(--error);
-    color: var(--error);
+    color: var(--error-text);
 }
 
 .audio-missing-badge {
