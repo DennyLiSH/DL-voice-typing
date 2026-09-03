@@ -131,6 +131,23 @@ enum FinishOutcome {
     EarlyStateMismatch,
 }
 
+/// Arguments for `inject_via_finish` (the shared tail of the two
+/// direct-injection sites). Struct form since 2026-09 (was 9 positional
+/// params + too_many_arguments allow).
+struct DirectInject<'a> {
+    ps: &'a PipelineState,
+    text: String,
+    transcription: String,
+    save_result: Option<SaveResult>,
+    policy: &'a SessionPolicy,
+    perf: &'a mut PerfMetrics,
+    t_press_for_e2e: Instant,
+    /// Controls both the finish hide_review flag and the error-path review
+    /// window hide (the two sites differ in exactly this).
+    review_ui_active: bool,
+    site_label: &'static str,
+}
+
 impl DeliveryController {
     pub(crate) fn new(
         emitter: Arc<dyn EventEmitter>,
@@ -193,7 +210,7 @@ impl DeliveryController {
             return;
         }
 
-        self.inject_via_finish(
+        self.inject_via_finish(DirectInject {
             ps,
             text,
             transcription,
@@ -201,9 +218,9 @@ impl DeliveryController {
             policy,
             perf,
             t_press_for_e2e,
-            false,
-            "inject_direct",
-        )
+            review_ui_active: false,
+            site_label: "inject_direct",
+        })
         .await;
     }
 
@@ -355,17 +372,17 @@ impl DeliveryController {
             let _ = self.take_context();
             // Reviewing -> Injecting, then inject.
             ps.sm_reviewing_to_injecting();
-            self.inject_via_finish(
+            self.inject_via_finish(DirectInject {
                 ps,
-                final_text,
+                text: final_text,
                 transcription,
                 save_result,
                 policy,
-                &mut perf,
+                perf: &mut perf,
                 t_press_for_e2e,
-                true,
-                "show_review_fallback",
-            )
+                review_ui_active: true,
+                site_label: "show_review_fallback",
+            })
             .await;
         }
     }
@@ -592,19 +609,18 @@ impl DeliveryController {
     /// and context preparation stay at the callers. `review_ui_active`
     /// controls both the finish hide_review flag and the error-path review
     /// window hide (the two sites differ in exactly this).
-    #[allow(clippy::too_many_arguments)]
-    async fn inject_via_finish(
-        &self,
-        ps: &PipelineState,
-        text: String,
-        transcription: String,
-        save_result: Option<SaveResult>,
-        policy: &SessionPolicy,
-        perf: &mut PerfMetrics,
-        t_press_for_e2e: Instant,
-        review_ui_active: bool,
-        site_label: &'static str,
-    ) {
+    async fn inject_via_finish(&self, args: DirectInject<'_>) {
+        let DirectInject {
+            ps,
+            text,
+            transcription,
+            save_result,
+            policy,
+            perf,
+            t_press_for_e2e,
+            review_ui_active,
+            site_label,
+        } = args;
         let t_inject = Instant::now();
         let inject_result = self.save_and_inject(&text).await;
 
