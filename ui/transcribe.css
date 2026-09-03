@@ -166,6 +166,12 @@ body {
     margin-bottom: var(--space-3);
 }
 
+/* Same hidden-override hazard as .segments-loading below; fixes a latent
+   always-visible empty track (masked by the near-transparent --progress-bg). */
+.progress-wrap[hidden] {
+    display: none;
+}
+
 .progress-track {
     flex: 1;
     height: 6px;
@@ -189,6 +195,72 @@ body {
     color: var(--text-secondary);
     min-width: 90px;
     text-align: right;
+}
+
+/* --- Loading skeleton (LOADING phase) --- */
+/* Node lives OUTSIDE #segments on purpose: renderSegments() does
+   wrap.textContent='' which would destroy static children inside. */
+.segments-loading {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+
+/* Required: author display:flex above would otherwise override the UA
+   [hidden] rule (settings.css uses the same per-selector pattern). */
+.segments-loading[hidden] {
+    display: none;
+}
+
+.skel-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+}
+
+.skel {
+    height: 14px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(
+        90deg,
+        var(--surface) 25%,
+        var(--accent-light) 50%,
+        var(--surface) 75%
+    );
+    background-size: 200% 100%;
+    /* 1.2s literal (not --duration-*): skeleton shimmer convention sits at
+       1-1.5s — below flicker-perception threshold, intentionally slower
+       than UI transitions (100/200/350ms are for state feedback, not
+       continuous occupancy indication). */
+    animation: skel-shimmer 1.2s ease-in-out infinite;
+}
+
+.skel-ts {
+    width: 64px;
+    flex-shrink: 0;
+}
+
+.skel-text {
+    flex: 1;
+}
+
+@keyframes skel-shimmer {
+    from {
+        background-position: 200% 0;
+    }
+    to {
+        background-position: -200% 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .skel {
+        animation: none;
+        background: var(--accent-light);
+    }
 }
 
 /* --- Segments --- */

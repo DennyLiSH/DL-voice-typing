@@ -131,6 +131,7 @@ export const PHASE = {
  *   transcribeLabel: string,       // status==='done' ? '重新转录' : '转录'
  *   cancelVisible: boolean,        // phase===TRANSCRIBING
  *   progressVisible: boolean,      // phase===TRANSCRIBING
+ *   segmentsLoading: boolean,      // phase===LOADING (skeleton rows in detail pane)
  *   injectDisabled: boolean,       // phase!==IDLE || mergedEmpty
  *   injectSpinnerVisible: boolean, // phase===INJECTING
  *   listLocked: boolean,           // phase!==IDLE (visual symmetry with entry guards)
@@ -143,6 +144,7 @@ export function uiFlags({ phase, selected, status, mergedEmpty }) {
         transcribeLabel: status === 'done' ? '重新转录' : '转录',
         cancelVisible: phase === PHASE.TRANSCRIBING,
         progressVisible: phase === PHASE.TRANSCRIBING,
+        segmentsLoading: phase === PHASE.LOADING,
         injectDisabled: busy || mergedEmpty,
         injectSpinnerVisible: phase === PHASE.INJECTING,
         listLocked: busy,

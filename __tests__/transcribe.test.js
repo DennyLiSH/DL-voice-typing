@@ -178,6 +178,7 @@ describe('uiFlags', () => {
             transcribeLabel: '转录',
             cancelVisible: false,
             progressVisible: false,
+            segmentsLoading: false,
             injectDisabled: false,
             injectSpinnerVisible: false,
             listLocked: false,
@@ -213,6 +214,7 @@ describe('uiFlags', () => {
             transcribeLabel: '转录',
             cancelVisible: true,
             progressVisible: true,
+            segmentsLoading: false,
             injectDisabled: true,
             injectSpinnerVisible: false,
             listLocked: true,
@@ -226,6 +228,7 @@ describe('uiFlags', () => {
         expect(flags.listLocked).toBe(true);
         expect(flags.cancelVisible).toBe(false);
         expect(flags.progressVisible).toBe(false);
+        expect(flags.segmentsLoading).toBe(true);
         expect(flags.injectSpinnerVisible).toBe(false);
     });
 
@@ -236,6 +239,7 @@ describe('uiFlags', () => {
         expect(flags.injectDisabled).toBe(true);
         expect(flags.listLocked).toBe(true);
         expect(flags.cancelVisible).toBe(false);
+        expect(flags.segmentsLoading).toBe(false);
     });
 });
 
@@ -282,6 +286,9 @@ const BODY_HTML = `
             <span id="progress-label"></span>
         </div>
         <div id="segments"></div>
+        <div id="segments-loading" hidden>
+            <div class="skel-row"></div>
+        </div>
         <div id="segments-empty" hidden></div>
         <textarea id="merged"></textarea>
         <button id="btn-inject"></button>
@@ -846,6 +853,49 @@ describe('phase entry guards', () => {
                 ([cmd]) => cmd === 'get_recording_segments',
             ).length,
         ).toBe(2);
+    });
+});
+
+describe('segments loading skeleton (LOADING phase)', () => {
+    it('clears stale segments and shows skeleton while loading', async () => {
+        let resolveSecond;
+        let segCalls = 0;
+        await loadFresh((cmd) => {
+            if (cmd === 'get_recording_segments') {
+                segCalls += 1;
+                // First recording resolves immediately (establishes stale
+                // content); second stays deferred (holds LOADING in flight).
+                if (segCalls === 1) return Promise.resolve(SEGS);
+                return new Promise((r) => {
+                    resolveSecond = r;
+                });
+            }
+            if (cmd === 'read_recording_audio') return Promise.resolve([0]);
+            return twoItemInvoke(cmd);
+        });
+        await flush();
+
+        // First recording loads fully — stale content in #segments.
+        clickRow(ITEM.filename);
+        await flush();
+        await flush();
+        expect(get('segments').children.length).toBe(2);
+
+        // Switch to the second recording — LOADING in flight.
+        clickRow(ITEM2.filename);
+        await flush();
+        expect(get('segments-loading').hidden).toBe(false);
+        // BehaviorChange lock: clearDetail wiped the stale segment rows and
+        // hid the empty-state badge.
+        expect(get('segments').children.length).toBe(0);
+        expect(get('segments-empty').hidden).toBe(true);
+
+        resolveSecond(SEGS);
+        await flush();
+        await flush();
+        // Loaded: skeleton hidden again, real segments rendered.
+        expect(get('segments-loading').hidden).toBe(true);
+        expect(get('segments').children.length).toBe(2);
     });
 });
 

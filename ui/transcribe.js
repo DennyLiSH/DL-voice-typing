@@ -169,6 +169,13 @@ function formatStem(stem) {
 
 function clearDetail() {
     releaseAudio(audioEl());
+    // BehaviorChange: wipe stale DOM too — without this, the previous
+    // recording's segment rows (and its empty-state badge) stayed visible
+    // during the next recording's LOADING phase.
+    const segs = $('segments');
+    if (segs) segs.textContent = '';
+    const empty = $('segments-empty');
+    if (empty) empty.hidden = true;
     state.segments = [];
     state.edits.clear();
     state.activeSegment = -1;
@@ -333,6 +340,8 @@ function syncUI() {
     if (btnCancel) btnCancel.hidden = !flags.cancelVisible;
     const progress = $('progress-wrap');
     if (progress) progress.hidden = !flags.progressVisible;
+    const skeleton = $('segments-loading');
+    if (skeleton) skeleton.hidden = !flags.segmentsLoading;
     const btnInject = $('btn-inject');
     if (btnInject) btnInject.disabled = flags.injectDisabled;
     const spinner = $('inject-spinner');
