@@ -248,6 +248,9 @@ impl RecordingSession {
                             self.ps.engine(),
                             self.ps.emitter(),
                             sr,
+                            crate::realtime::RealtimePolicy {
+                                language: policy.language,
+                            },
                         );
                         if let Some(mut rt_guard) = crate::util::lock_mutex(
                             &self.ps.realtime_transcriber(),

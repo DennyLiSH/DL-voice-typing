@@ -124,6 +124,17 @@ impl RealtimeLoopConfig {
     };
 }
 
+/// Session-scoped config snapshot for the realtime transcription thread.
+///
+/// Seeded from `SessionPolicy` at `RealtimeTranscriber::start` — the thread
+/// must NEVER read `ConfigCache` directly (same rationale as SessionPolicy:
+/// an in-flight session must not observe mid-recording config mutations).
+/// Currently consumed only by the startup trace log; extend this struct
+/// (not the call sites) when the loop needs more config.
+pub struct RealtimePolicy {
+    pub(crate) language: crate::config::Language,
+}
+
 /// Check whether the audio contains sustained speech energy.
 /// Splits the audio into 100ms frames and requires at least `ENERGY_MIN_FRAMES` frames
 /// to exceed `ENERGY_FRAME_THRESHOLD` RMS. This distinguishes real speech (clear energy
@@ -479,6 +490,7 @@ impl RealtimeTranscriber {
         engine: Arc<dyn SpeechEngine>,
         emitter: Arc<dyn crate::commands::EventEmitter + Send + Sync>,
         sample_rate: u32,
+        policy: RealtimePolicy,
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
@@ -487,6 +499,10 @@ impl RealtimeTranscriber {
 
         let handle = thread::spawn(move || {
             let _span = tracing::info_span!("realtime_transcriber").entered();
+            tracing::info!(
+                "realtime transcriber started (language={}, sample_rate={sample_rate})",
+                policy.language.code()
+            );
             let mut resampler = Resampler::new(sample_rate, TARGET_SAMPLE_RATE);
             let config = RealtimeLoopConfig::DEFAULT;
 
@@ -836,7 +852,15 @@ mod tests {
         let engine = Arc::new(MockEngine::new("Hello world"));
         let emitter = Arc::new(MockEventEmitter::new());
 
-        let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
+        let mut rt = RealtimeTranscriber::start(
+            audio,
+            engine,
+            emitter.clone(),
+            16_000,
+            RealtimePolicy {
+                language: crate::config::Language::Zh,
+            },
+        );
 
         // Wait long enough for one transcription cycle (STEP_MS=500 + processing).
         thread::sleep(Duration::from_millis(800));
@@ -856,7 +880,15 @@ mod tests {
         let engine = Arc::new(MockEngine::new("should not emit"));
         let emitter = Arc::new(MockEventEmitter::new());
 
-        let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
+        let mut rt = RealtimeTranscriber::start(
+            audio,
+            engine,
+            emitter.clone(),
+            16_000,
+            RealtimePolicy {
+                language: crate::config::Language::Zh,
+            },
+        );
 
         thread::sleep(Duration::from_millis(800));
         rt.stop_and_wait();
@@ -877,7 +909,15 @@ mod tests {
         let engine = Arc::new(MockEngine::new("First"));
         let emitter = Arc::new(MockEventEmitter::new());
 
-        let mut rt = RealtimeTranscriber::start(audio, engine, emitter.clone(), 16_000);
+        let mut rt = RealtimeTranscriber::start(
+            audio,
+            engine,
+            emitter.clone(),
+            16_000,
+            RealtimePolicy {
+                language: crate::config::Language::Zh,
+            },
+        );
 
         // Two cycles → same text emitted twice (accumulate dedups identical).
         thread::sleep(Duration::from_millis(1_200));
