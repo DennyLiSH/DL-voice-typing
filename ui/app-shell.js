@@ -1,5 +1,6 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import { call } from './lib/api.js';
+import { isFormDirty } from './lib/form-state.js';
 import { showError } from './lib/ui-utils.js';
 import {
     loadComputeMode,
@@ -10,7 +11,6 @@ import {
     updateModelAction,
 } from './model-manager.js';
 import {
-    isDirtyState,
     populateFields,
     setDirtyCheckEnabled,
     updateDirtyState,
@@ -30,8 +30,8 @@ let currentPage = 'general';
 export function switchPage(pageName) {
     // Dirty state check: warn user about unsaved changes before switching.
     // Must run before the data-leave hook so cancel also skips side effects
-    // (semantics: not leaving = not cleaning). isDirtyState is imported above.
-    if (currentPage !== pageName && isDirtyState()) {
+    // (semantics: not leaving = not cleaning). isFormDirty is imported above.
+    if (currentPage !== pageName && isFormDirty()) {
         if (!window.confirm('有未保存的更改，确定要离开此页吗？')) {
             return; // user cancelled or confirm disabled — stay on current page
         }
@@ -92,7 +92,7 @@ window.addEventListener('beforeunload', (e) => {
     if (currentPage === 'data') {
         onDataPageLeave();
     }
-    if (isDirtyState()) {
+    if (isFormDirty()) {
         e.preventDefault();
         e.returnValue = '';
     }

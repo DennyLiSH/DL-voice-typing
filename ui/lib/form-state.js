@@ -31,3 +31,23 @@ export function onFormChange(cb) {
 export function notifyFormChange() {
     changeListeners.forEach((cb) => cb());
 }
+
+/**
+ * Dirty-state ownership for the settings form.
+ *
+ * settings-form.js computes and writes it (setFormDirty); app-shell.js reads
+ * it (isFormDirty) for the switchPage guard and the beforeunload guard. Keeps
+ * the shell decoupled from the settings page's internal module state — same
+ * seam-tightening role as the change-event bus above.
+ */
+let dirty = false;
+
+/** @returns {boolean} */
+export function isFormDirty() {
+    return dirty;
+}
+
+/** @param {boolean} value */
+export function setFormDirty(value) {
+    dirty = value;
+}

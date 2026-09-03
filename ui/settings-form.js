@@ -1,6 +1,6 @@
 import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
-import { onFormChange } from './lib/form-state.js';
+import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
 import { isConfigDirty, validateSettings } from './lib/settings-utils.js';
 import { hideError, showError } from './lib/ui-utils.js';
 import {
@@ -49,7 +49,6 @@ toggleKeyBtn.innerHTML = EYE_SVG;
 
 // State
 let loadedConfig = null;
-let isDirty = false;
 let dirtyCheckEnabled = false;
 let loadedAutostart = false;
 
@@ -363,9 +362,10 @@ function setTestStatus(message, type) {
 export function updateDirtyState() {
     if (!loadedConfig || !dirtyCheckEnabled) return;
 
-    isDirty = isConfigDirty(getCurrentConfig(), loadedConfig);
+    const dirty = isConfigDirty(getCurrentConfig(), loadedConfig);
+    setFormDirty(dirty);
 
-    saveBtn.disabled = !isDirty;
+    saveBtn.disabled = !dirty;
     saveStatus.textContent = '';
     saveStatus.className = 'status';
 }
@@ -421,7 +421,7 @@ saveBtn.addEventListener('click', async () => {
             saveMsg = '⚠ 已保存，开机自启同步失败';
             saveMsgType = 'error';
         }
-        isDirty = false;
+        setFormDirty(false);
         setSaveStatus(saveMsg, saveMsgType);
         setTimeout(() => {
             saveStatus.textContent = '';
@@ -432,7 +432,7 @@ saveBtn.addEventListener('click', async () => {
     } finally {
         saveBtn.textContent = '保存';
         saveBtn.classList.remove('saving');
-        saveBtn.disabled = !isDirty;
+        saveBtn.disabled = !isFormDirty();
     }
 });
 
@@ -443,10 +443,6 @@ function setSaveStatus(message, type) {
 
 export function setDirtyCheckEnabled(enabled) {
     dirtyCheckEnabled = enabled;
-}
-
-export function isDirtyState() {
-    return isDirty;
 }
 
 export function getLoadedAutostart() {
