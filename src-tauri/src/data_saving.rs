@@ -128,7 +128,7 @@ pub(crate) fn set_segment_result(
 
 /// Save raw audio samples as a 16kHz mono WAV file with a companion JSON metadata file.
 /// The JSON initially has no transcription — call `set_transcription_result()` after transcription.
-pub fn save_audio(
+pub(crate) fn save_audio(
     samples: &[f32],
     original_sample_rate: u32,
     config: &SaveConfig,
