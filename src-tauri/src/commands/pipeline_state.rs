@@ -38,6 +38,40 @@ pub(crate) struct TestComponents {
     pub(crate) review: Arc<dyn ReviewProvider>,
 }
 
+#[cfg(test)]
+impl TestComponents {
+    /// Swap the window controller, keeping the rest (variant rebuilds).
+    pub(crate) fn with_window_controller(mut self, wc: Arc<dyn WindowController>) -> Self {
+        self.window_controller = wc;
+        self
+    }
+
+    /// Swap the clipboard provider, keeping the rest.
+    pub(crate) fn with_clipboard(mut self, cb: Arc<dyn ClipboardProvider>) -> Self {
+        self.clipboard = cb;
+        self
+    }
+
+    /// Assemble the variant PipelineState. The ONLY `PipelineState::new` call
+    /// site on the variant-rebuild path — adding/removing/reordering `new()`
+    /// parameters now requires updating exactly one place instead of 7.
+    pub(crate) fn build(self) -> PipelineState {
+        PipelineState::new(
+            self.sm,
+            self.ac,
+            self.engine,
+            self.clipboard,
+            self.perf_history,
+            self.config_cache,
+            self.cached_llm,
+            self.realtime_transcriber,
+            self.window_controller,
+            self.emitter,
+            self.review,
+        )
+    }
+}
+
 #[derive(Clone)]
 pub struct PipelineState {
     sm: Arc<Mutex<StateMachine>>,

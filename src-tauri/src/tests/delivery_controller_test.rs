@@ -140,20 +140,10 @@ async fn test_show_review_fallback_injects_when_window_missing() {
     let policy = build_policy();
 
     // Swap to a window controller that pretends the review window is missing.
-    let c = ps.test_components();
-    let ps = PipelineState::new(
-        c.sm,
-        c.ac,
-        c.engine,
-        c.clipboard,
-        c.perf_history,
-        c.config_cache,
-        c.cached_llm,
-        c.realtime_transcriber,
-        Arc::new(HiddenReviewWindowController),
-        c.emitter,
-        c.review,
-    );
+    let ps = ps
+        .test_components()
+        .with_window_controller(Arc::new(HiddenReviewWindowController))
+        .build();
 
     ps.delivery()
         .show_review(
@@ -185,20 +175,10 @@ async fn show_review_fallback_clears_context() {
 
     // Swap to a window controller that pretends the review window is missing,
     // forcing show_review into the fallback direct-injection branch.
-    let c = ps.test_components();
-    let ps = PipelineState::new(
-        c.sm,
-        c.ac,
-        c.engine,
-        c.clipboard,
-        c.perf_history,
-        c.config_cache,
-        c.cached_llm,
-        c.realtime_transcriber,
-        Arc::new(HiddenReviewWindowController),
-        c.emitter,
-        c.review,
-    );
+    let ps = ps
+        .test_components()
+        .with_window_controller(Arc::new(HiddenReviewWindowController))
+        .build();
 
     ps.delivery()
         .show_review(
@@ -299,20 +279,10 @@ async fn test_cancel_review_clipboard_restore_failure_still_returns_idle() {
     to_reviewing(&ps);
 
     let failing_clipboard = Arc::new(MockClipboard::new().with_restore_error("restore failed"));
-    let c = ps.test_components();
-    let ps_with_failing = PipelineState::new(
-        c.sm,
-        c.ac,
-        c.engine,
-        failing_clipboard,
-        c.perf_history,
-        c.config_cache,
-        c.cached_llm,
-        c.realtime_transcriber,
-        c.window_controller,
-        c.emitter,
-        c.review,
-    );
+    let ps_with_failing = ps
+        .test_components()
+        .with_clipboard(failing_clipboard)
+        .build();
 
     let cancel_result = ps_with_failing
         .delivery()
@@ -333,20 +303,10 @@ async fn test_clipboard_restore_on_inject_failure() {
 
     let mock = Arc::new(MockClipboard::new().with_inject_error("inject failed"));
     let failing_clipboard = mock.clone();
-    let c = ps.test_components();
-    let ps_with_failing = PipelineState::new(
-        c.sm,
-        c.ac,
-        c.engine,
-        failing_clipboard,
-        c.perf_history,
-        c.config_cache,
-        c.cached_llm,
-        c.realtime_transcriber,
-        c.window_controller,
-        c.emitter,
-        c.review,
-    );
+    let ps_with_failing = ps
+        .test_components()
+        .with_clipboard(failing_clipboard)
+        .build();
 
     let mut perf = crate::perf::PerfMetrics::new(0);
     let policy = build_policy();
@@ -526,20 +486,11 @@ async fn confirm_review_error_branch_restores_focus() {
     let recording = Arc::new(RecordingWindowController::new());
 
     let (base_ps, emitter) = build_ps();
-    let c = base_ps.test_components();
-    let ps = PipelineState::new(
-        c.sm,
-        c.ac,
-        c.engine,
-        failing_clipboard,
-        c.perf_history,
-        c.config_cache,
-        c.cached_llm,
-        c.realtime_transcriber,
-        recording.clone(),
-        c.emitter,
-        c.review,
-    );
+    let ps = base_ps
+        .test_components()
+        .with_clipboard(failing_clipboard)
+        .with_window_controller(recording.clone())
+        .build();
 
     to_transcribing(&ps);
     let perf = crate::perf::PerfMetrics::new(0);
@@ -1083,22 +1034,12 @@ async fn catchall_confirm_from_llm_refining_resets_clears_context() {
 async fn catchall_cancel_from_injecting_hides_windows_and_clears_context() {
     let (ps, _) = build_ps();
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let c = ps.test_components();
-    let ps = PipelineState::new(
-        c.sm,
-        c.ac,
-        c.engine,
-        c.clipboard,
-        c.perf_history,
-        c.config_cache,
-        c.cached_llm,
-        c.realtime_transcriber,
-        Arc::new(CallRecordingWindowController {
+    let ps = ps
+        .test_components()
+        .with_window_controller(Arc::new(CallRecordingWindowController {
             calls: calls.clone(),
-        }),
-        c.emitter,
-        c.review,
-    );
+        }))
+        .build();
     ps.force_state_tag(StateTag::Injecting);
     let result = ps.delivery().cancel_review(&ps).await;
     assert!(result.is_err());
@@ -1117,22 +1058,12 @@ async fn catchall_cancel_from_injecting_hides_windows_and_clears_context() {
 async fn catchall_cancel_from_llm_refining_hides_windows_and_clears_context() {
     let (ps, _) = build_ps();
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let c = ps.test_components();
-    let ps = PipelineState::new(
-        c.sm,
-        c.ac,
-        c.engine,
-        c.clipboard,
-        c.perf_history,
-        c.config_cache,
-        c.cached_llm,
-        c.realtime_transcriber,
-        Arc::new(CallRecordingWindowController {
+    let ps = ps
+        .test_components()
+        .with_window_controller(Arc::new(CallRecordingWindowController {
             calls: calls.clone(),
-        }),
-        c.emitter,
-        c.review,
-    );
+        }))
+        .build();
     ps.force_state_tag(StateTag::LLMRefining);
     let result = ps.delivery().cancel_review(&ps).await;
     assert!(result.is_err());
