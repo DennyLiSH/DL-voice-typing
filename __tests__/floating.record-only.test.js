@@ -79,7 +79,9 @@ describe('floating record-only in-flight indicator', () => {
             payload: { stem: 'x', status: 'failed', dropped_blocks: 80 },
         });
 
-        expect(text().textContent).toBe('录音保存失败（丢块过多）');
+        expect(text().textContent).toBe(
+            '录音不完整已提前停止，已保存部分可在转录窗口查看',
+        );
         expect(indicator().classList.contains('error')).toBe(true);
 
         vi.advanceTimersByTime(4_500);

@@ -304,7 +304,7 @@ listen('record-only-finished', (event) => {
         indicator.style.background = '';
         indicator.style.boxShadow = '';
         indicator.classList.add('error');
-        transcriptText.textContent = '录音保存失败（丢块过多）';
+        transcriptText.textContent = '录音不完整已提前停止，已保存部分可在转录窗口查看';
         transcriptText.classList.add('visible', 'error');
         hide(4500);
     } else {
