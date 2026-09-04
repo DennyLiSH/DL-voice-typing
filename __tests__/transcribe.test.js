@@ -161,7 +161,7 @@ describe('shouldAutoScroll', () => {
 });
 
 // ---------------------------------------------------------------------------
-// uiFlags (C5 phase state machine — pure mapping, all 7 output fields)
+// uiFlags (C5 phase state machine — pure mapping, all 8 output fields)
 // ---------------------------------------------------------------------------
 
 describe('uiFlags', () => {
@@ -179,6 +179,7 @@ describe('uiFlags', () => {
             cancelVisible: false,
             progressVisible: false,
             segmentsLoading: false,
+            detailBusy: false,
             injectDisabled: false,
             injectSpinnerVisible: false,
             listLocked: false,
@@ -215,6 +216,7 @@ describe('uiFlags', () => {
             cancelVisible: true,
             progressVisible: true,
             segmentsLoading: false,
+            detailBusy: false,
             injectDisabled: true,
             injectSpinnerVisible: false,
             listLocked: true,
@@ -229,6 +231,8 @@ describe('uiFlags', () => {
         expect(flags.cancelVisible).toBe(false);
         expect(flags.progressVisible).toBe(false);
         expect(flags.segmentsLoading).toBe(true);
+        // aria-busy on #detail: skeleton is aria-hidden, this is the SR cue.
+        expect(flags.detailBusy).toBe(true);
         expect(flags.injectSpinnerVisible).toBe(false);
     });
 
@@ -240,6 +244,7 @@ describe('uiFlags', () => {
         expect(flags.listLocked).toBe(true);
         expect(flags.cancelVisible).toBe(false);
         expect(flags.segmentsLoading).toBe(false);
+        expect(flags.detailBusy).toBe(false);
     });
 });
 
@@ -885,6 +890,8 @@ describe('segments loading skeleton (LOADING phase)', () => {
         clickRow(ITEM2.filename);
         await flush();
         expect(get('segments-loading').hidden).toBe(false);
+        // Screen-reader cue: the skeleton itself is aria-hidden.
+        expect(get('detail').getAttribute('aria-busy')).toBe('true');
         // BehaviorChange lock: clearDetail wiped the stale segment rows and
         // hid the empty-state badge.
         expect(get('segments').children.length).toBe(0);
@@ -895,6 +902,7 @@ describe('segments loading skeleton (LOADING phase)', () => {
         await flush();
         // Loaded: skeleton hidden again, real segments rendered.
         expect(get('segments-loading').hidden).toBe(true);
+        expect(get('detail').getAttribute('aria-busy')).toBe('false');
         expect(get('segments').children.length).toBe(2);
     });
 });

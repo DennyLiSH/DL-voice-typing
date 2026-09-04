@@ -132,6 +132,9 @@ export const PHASE = {
  *   cancelVisible: boolean,        // phase===TRANSCRIBING
  *   progressVisible: boolean,      // phase===TRANSCRIBING
  *   segmentsLoading: boolean,      // phase===LOADING (skeleton rows in detail pane)
+ *   detailBusy: boolean,           // phase===LOADING (aria-busy on #detail — the
+ *                                  // skeleton itself is aria-hidden, so this is the
+ *                                  // only screen-reader feedback during detail loads)
  *   injectDisabled: boolean,       // phase!==IDLE || mergedEmpty
  *   injectSpinnerVisible: boolean, // phase===INJECTING
  *   listLocked: boolean,           // phase!==IDLE (visual symmetry with entry guards)
@@ -145,6 +148,7 @@ export function uiFlags({ phase, selected, status, mergedEmpty }) {
         cancelVisible: phase === PHASE.TRANSCRIBING,
         progressVisible: phase === PHASE.TRANSCRIBING,
         segmentsLoading: phase === PHASE.LOADING,
+        detailBusy: phase === PHASE.LOADING,
         injectDisabled: busy || mergedEmpty,
         injectSpinnerVisible: phase === PHASE.INJECTING,
         listLocked: busy,

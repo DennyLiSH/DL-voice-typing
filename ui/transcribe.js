@@ -342,6 +342,11 @@ function syncUI() {
     if (progress) progress.hidden = !flags.progressVisible;
     const skeleton = $('segments-loading');
     if (skeleton) skeleton.hidden = !flags.segmentsLoading;
+    // The skeleton is aria-hidden, so aria-busy on #detail is the only
+    // screen-reader feedback while a recording switch is loading.
+    const detail = $('detail');
+    if (detail)
+        detail.setAttribute('aria-busy', flags.detailBusy ? 'true' : 'false');
     const btnInject = $('btn-inject');
     if (btnInject) btnInject.disabled = flags.injectDisabled;
     const spinner = $('inject-spinner');

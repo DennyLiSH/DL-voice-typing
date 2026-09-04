@@ -238,6 +238,11 @@ describe('buildRecordingRow', () => {
         expect(row.querySelector('.audio-missing-badge').textContent).toBe(
             '音频缺失',
         );
+        // Variant hook for the CSS preview-floor override (442px row budget).
+        expect(row.classList.contains('audio-missing')).toBe(true);
+        expect(
+            buildRecordingRow(baseEntry).classList.contains('audio-missing'),
+        ).toBe(false);
     });
 
     it('does NOT include tabindex on .data-row (constraint F4: rows not focusable)', () => {

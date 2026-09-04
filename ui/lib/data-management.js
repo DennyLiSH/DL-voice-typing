@@ -182,6 +182,10 @@ export function buildRecordingRow(entry, opts = {}) {
         );
         row.appendChild(playBtn);
     } else {
+        // Variant hook: the text badge is ~28px wider than the 28px play
+        // button it replaces, which overflows the 442px row budget together
+        // with the preview floor. The CSS drops the floor for this variant.
+        row.classList.add('audio-missing');
         const badge = document.createElement('span');
         badge.className = 'audio-missing-badge';
         badge.textContent = '音频缺失';

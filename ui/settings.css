@@ -903,6 +903,17 @@ button:disabled {
     cursor: not-allowed;
 }
 
+/* wav_size === 0 variant: the "音频缺失" badge (~56px) is ~28px wider than
+ * the 28px play button it replaces, so fixed siblings + the 72px preview
+ * floor overflow the 442px budget (≈460px, worst on classic rows). Fixed
+ * siblings alone always fit, so dropping the floor — not shrinking it —
+ * turns the no-overflow guarantee into arithmetic instead of estimates.
+ * Preview collapses to leftover width with ellipsis; the full text stays
+ * reachable in the expanded section. */
+.data-row.audio-missing .data-row-preview {
+    min-width: 0;
+}
+
 .audio-error-badge {
     flex-shrink: 0;
     font-size: 11px;

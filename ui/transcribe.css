@@ -222,15 +222,27 @@ body {
 }
 
 .skel {
+    position: relative;
+    overflow: hidden;
     height: 14px;
     border-radius: var(--radius-sm);
+    background: var(--surface);
+}
+
+/* Composite-path shimmer: translateX runs on the compositor, whereas the
+   previous background-position animation repainted each span every frame.
+   The gradient band sweeps over the flat surface base; at rest (::before
+   parked off-canvas) the span shows the plain base. */
+.skel::before {
+    content: '';
+    position: absolute;
+    inset: 0;
     background: linear-gradient(
         90deg,
-        var(--surface) 25%,
+        transparent 25%,
         var(--accent-light) 50%,
-        var(--surface) 75%
+        transparent 75%
     );
-    background-size: 200% 100%;
     /* 1.2s literal (not --duration-*): skeleton shimmer convention sits at
        1-1.5s — below flicker-perception threshold, intentionally slower
        than UI transitions (100/200/350ms are for state feedback, not
@@ -249,16 +261,18 @@ body {
 
 @keyframes skel-shimmer {
     from {
-        background-position: 200% 0;
+        transform: translateX(100%);
     }
     to {
-        background-position: -200% 0;
+        transform: translateX(-100%);
     }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .skel {
+    .skel::before {
         animation: none;
+    }
+    .skel {
         background: var(--accent-light);
     }
 }
