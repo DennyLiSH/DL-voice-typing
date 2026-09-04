@@ -421,7 +421,7 @@ saveBtn.addEventListener('click', async () => {
             saveMsg = '⚠ 已保存，开机自启同步失败';
             saveMsgType = 'error';
         }
-        setFormDirty(false);
+        updateDirtyState();
         setSaveStatus(saveMsg, saveMsgType);
         setTimeout(() => {
             saveStatus.textContent = '';
