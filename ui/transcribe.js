@@ -384,6 +384,9 @@ async function startTranscription() {
         const ok = await confirmDialog({
             title: '重新转录',
             message: '重新转录将清除当前所有编辑，确定继续？',
+            // Wiping all edits is destructive (no undo) — focus CANCEL so a
+            // stray Enter cannot confirm, matching the delete dialogs.
+            danger: true,
         });
         if (!ok) return;
     }

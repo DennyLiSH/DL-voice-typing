@@ -1066,6 +1066,7 @@ describe('re-transcription edit-wipe confirmation', () => {
         expect(confirmDialog).toHaveBeenCalledWith({
             title: '重新转录',
             message: '重新转录将清除当前所有编辑，确定继续？',
+            danger: true,
         });
         expect(
             invokeMock.mock.calls.map((c) => c[0]),

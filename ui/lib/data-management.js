@@ -177,7 +177,17 @@ export function buildRecordingRow(entry, opts = {}) {
     row.appendChild(previewSpan);
 
     // Play button OR "音频缺失" badge
-    if (entry.wav_size > 0) {
+    if (entry.wav_size > 0 && opts.audioFailed) {
+        // Load-failure state: kept in render state (dataState.audioFailedFiles)
+        // so the badge survives list rebuilds — the old DOM-patch badge was
+        // destroyed by the rebuild before it could ever paint. The badge
+        // replaces the play button (442px row budget — both would overflow);
+        // retry = the refresh button, which clears the failure set.
+        const badge = document.createElement('span');
+        badge.className = 'audio-error-badge';
+        badge.textContent = '音频加载失败';
+        row.appendChild(badge);
+    } else if (entry.wav_size > 0) {
         const playBtn = document.createElement('button');
         playBtn.type = 'button';
         playBtn.className = 'btn-icon btn-play';

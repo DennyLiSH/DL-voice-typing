@@ -29,6 +29,10 @@ const dataState = {
     expandedRowId: null,
     audioPlayerRowId: null,
     audioElement: null,
+    // Rows whose audio failed to load (rendered as a persistent badge by
+    // buildRecordingRow — the old DOM-patch badge was destroyed by the
+    // renderDataList rebuild before it could ever paint).
+    audioFailedFiles: new Set(),
     isLoading: false,
     lastReqId: 0,
     searchDebounceTimer: null,
@@ -101,6 +105,9 @@ async function loadRecordingsPage(offset) {
         dataState.offset = resp.offset;
         dataState.total = resp.total;
         dataState.items = resp.items;
+        // Fresh data: reset per-page transient failure states (the refresh
+        // button is the retry path for audio-load failures).
+        dataState.audioFailedFiles.clear();
         renderDataList();
         renderStats(resp.total, resp.total_bytes);
         renderPagination();
@@ -136,6 +143,7 @@ function renderDataList() {
         const row = buildRecordingRow(entry, {
             selected: isSelected,
             expanded: isExpanded,
+            audioFailed: dataState.audioFailedFiles.has(entry.filename),
         });
         list.appendChild(row);
         if (isExpanded) {
@@ -175,6 +183,7 @@ async function attachAudioSrc(audioEl, filename) {
         // an orphan element would leak it — nobody can reach it for revoke.
         if (dataState.audioElement !== audioEl || !audioEl.isConnected) return;
         attachAudio(audioEl, bytes);
+        dataState.audioFailedFiles.delete(filename);
     } catch (_e) {
         // Mark this row's audio as failed.
         onAudioError(filename);
@@ -183,21 +192,10 @@ async function attachAudioSrc(audioEl, filename) {
 
 function onAudioError(filename) {
     if (dataState.audioPlayerRowId !== filename) return;
-    const row = document.querySelector(
-        `.data-row[data-filename="${cssEscape(filename)}"]`,
-    );
-    if (row) {
-        // Replace play button area with a temporary error badge.
-        const existing = row.querySelector('.audio-error-badge');
-        if (!existing) {
-            const badge = document.createElement('span');
-            badge.className = 'audio-error-badge';
-            badge.textContent = '音频加载失败';
-            row.appendChild(badge);
-            // Auto-remove after 3 seconds (constraint F4).
-            setTimeout(() => badge.remove(), 3000);
-        }
-    }
+    // Record the failure in render state (NOT a DOM patch — the list rebuild
+    // below would destroy a patched badge before it could ever paint, which
+    // is exactly the dead-code bug this replaces).
+    dataState.audioFailedFiles.add(filename);
     releaseAudio();
     renderDataList();
 }

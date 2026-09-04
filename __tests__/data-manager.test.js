@@ -222,3 +222,30 @@ describe('row expand keyboard activation', () => {
         ).toBe('false');
     });
 });
+
+describe('audio load failure badge (P1 fix: render-state driven)', () => {
+    it('failed audio renders a persistent badge that survives list rebuilds', async () => {
+        await loadFresh((cmd) => {
+            if (cmd === 'read_recording_audio') {
+                return Promise.reject(new Error('file locked'));
+            }
+            return defaultInvoke(cmd);
+        });
+        mod.onDataPageEnter();
+        await flush();
+        await flush();
+
+        // Click play → fetch fails → badge replaces the play button.
+        document
+            .querySelector('.btn-play')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flush();
+        await flush();
+
+        const row = document.querySelector('.data-row');
+        expect(row.querySelector('.audio-error-badge').textContent).toBe(
+            '音频加载失败',
+        );
+        expect(row.querySelector('.btn-play')).toBeNull();
+    });
+});
