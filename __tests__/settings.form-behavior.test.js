@@ -33,6 +33,7 @@ const MINIMAL_DOM = `
   <div id="llm-toggle"></div>
   <div id="llm-fields"></div>
   <input id="api-url" />
+  <div id="api-url-warning" hidden></div>
   <input id="api-key" />
   <input id="model" />
   <button id="toggle-key"></button>
@@ -212,5 +213,54 @@ describe('settings save flow dirty-state recalculation', () => {
         expect(document.getElementById('save-status').textContent).toContain(
             '保存失败',
         );
+    });
+});
+
+describe('api-url credential warning hint visibility', () => {
+    beforeEach(async () => {
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    const warning = () => document.getElementById('api-url-warning');
+
+    it('appears when the URL embeds a credential query param', () => {
+        setInputValue('api-url', 'https://h.com/v1?key=sk-123');
+        expect(warning().hidden).toBe(false);
+    });
+
+    it('disappears again when the param is removed', () => {
+        setInputValue('api-url', 'https://h.com/v1?key=sk-123');
+        setInputValue('api-url', 'https://h.com/v1/chat/completions');
+        expect(warning().hidden).toBe(true);
+    });
+
+    it('stays hidden for harmless query params', () => {
+        setInputValue('api-url', 'https://h.com/v1?model=gpt-4o');
+        expect(warning().hidden).toBe(true);
+    });
+
+    it('shows on load when the saved config already embeds a key', async () => {
+        // loadFresh already ran with a clean URL (warning hidden); reload
+        // with a saved config whose api_url contains a credential param —
+        // populateFields must surface the warning without any user input.
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'get_config') {
+                const config = await originalImpl(cmd, args);
+                return { ...config, llm_api_url: 'https://h.com/v1?api_key=x' };
+            }
+            return originalImpl(cmd, args);
+        });
+
+        vi.resetModules();
+        await import('../ui/settings.js');
+        await flush();
+
+        expect(warning().hidden).toBe(false);
     });
 });

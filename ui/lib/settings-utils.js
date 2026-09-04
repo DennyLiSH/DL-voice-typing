@@ -27,6 +27,41 @@ export function isConfigDirty(current, loaded) {
     );
 }
 
+const CREDENTIAL_WORDS = new Set([
+    'key',
+    'apikey',
+    'token',
+    'secret',
+    'password',
+    'signature',
+    'auth',
+    'authorization',
+    'bearer',
+    'credential',
+    'sk',
+]);
+
+/**
+ * Detect credential-like query/fragment params embedded in the LLM API URL.
+ * Such URLs are persisted to config.json in plaintext (DPAPI covers only
+ * llm_api_key), so the user should move the key to the dedicated field.
+ * Param names are split on non-alphanumerics, then matched exactly —
+ * `keyboard`/`monkey`/`author` must NOT match.
+ * Bare-word counterpart of the backend log-redaction list
+ * `src-tauri/src/llm/mod.rs::REDACT_QUERY_KEYS` (keep both in sync).
+ */
+export function hasCredentialInUrl(url) {
+    const segments = url.split(/[?&#]/).slice(1);
+    for (const segment of segments) {
+        const name = segment.split('=')[0].toLowerCase();
+        const words = name.split(/[^a-z0-9]+/);
+        if (words.some((w) => CREDENTIAL_WORDS.has(w))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * Validate settings before save.
  * Returns { valid: boolean, error: string|null }.

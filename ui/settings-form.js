@@ -1,7 +1,11 @@
 import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
-import { isConfigDirty, validateSettings } from './lib/settings-utils.js';
+import {
+    hasCredentialInUrl,
+    isConfigDirty,
+    validateSettings,
+} from './lib/settings-utils.js';
 import { hideError, showError } from './lib/ui-utils.js';
 import {
     getModelStatus,
@@ -21,6 +25,7 @@ const hotkeySelect = document.getElementById('hotkey');
 const llmToggle = document.getElementById('llm-toggle');
 const llmFields = document.getElementById('llm-fields');
 const apiUrlInput = document.getElementById('api-url');
+const apiUrlWarning = document.getElementById('api-url-warning');
 const apiKeyInput = document.getElementById('api-key');
 const modelInput = document.getElementById('model');
 const toggleKeyBtn = document.getElementById('toggle-key');
@@ -198,6 +203,7 @@ const FIELDS = [
 export function populateFields(config) {
     loadedConfig = config;
     FIELDS.forEach(({ key, set }) => set(config[key]));
+    updateApiUrlWarning();
 
     // In dev builds without DL_AUTOSTART=1, gray out the autostart toggle.
     // Probe is in populateFields (not in FIELDS) because it is a one-shot
@@ -382,6 +388,16 @@ downloadMirrorSelect.addEventListener('change', updateDirtyState);
 apiUrlInput.addEventListener('input', updateDirtyState);
 apiKeyInput.addEventListener('input', updateDirtyState);
 modelInput.addEventListener('input', updateDirtyState);
+
+// Show the plaintext-persistence warning when the URL embeds credential-like
+// query params. Intentionally stays visible while the LLM toggle is off:
+// api_url is persisted to config.json regardless of llm_enabled, so the
+// exposure does not depend on the toggle.
+function updateApiUrlWarning() {
+    apiUrlWarning.hidden = !hasCredentialInUrl(apiUrlInput.value.trim());
+}
+
+apiUrlInput.addEventListener('input', updateApiUrlWarning);
 
 // --- Save ---
 

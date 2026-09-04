@@ -189,12 +189,33 @@ impl TextCorrector for LLMClient {
 /// request URL, so a key placed in the `api_url` query (some OpenAI-compatible
 /// endpoints accept `?key=…`) would otherwise reach the plaintext log file.
 ///
+/// Word-level aligned with the frontend warn list
+/// `ui/lib/settings-utils.js::CREDENTIAL_WORDS` (bare words only): the match
+/// below is exact-parameter-name (`eq_ignore_ascii_case`), so compound names
+/// (`client_secret`) and hyphenated forms (`api-key`, truncated at the span
+/// boundary) still escape — known residual, tracked in TODO.md.
+///
 /// Conservative allowlist: layer 2 of `redact_error_detail` (api_key value
 /// replace) catches unlisted parameter names whose value equals the
 /// configured key. `code` may over-redact non-credential parameters (status
 /// or language codes) — over-redaction is the safe direction; do NOT remove
 /// a marker on a false-positive report, tighten the match instead.
-const REDACT_QUERY_KEYS: [&str; 6] = ["key", "apikey", "api_key", "token", "access_token", "code"];
+const REDACT_QUERY_KEYS: [&str; 14] = [
+    "key",
+    "apikey",
+    "api_key",
+    "token",
+    "access_token",
+    "code",
+    "secret",
+    "password",
+    "signature",
+    "auth",
+    "authorization",
+    "bearer",
+    "credential",
+    "sk",
+];
 
 /// Redact an LLM error string before it reaches the tracing log:
 /// 1. replace `?name=value` / `&name=value` query credentials (name in
@@ -358,7 +379,22 @@ mod tests {
     fn test_redact_query_keys_content_pinned() {
         assert_eq!(
             REDACT_QUERY_KEYS,
-            ["key", "apikey", "api_key", "token", "access_token", "code"]
+            [
+                "key",
+                "apikey",
+                "api_key",
+                "token",
+                "access_token",
+                "code",
+                "secret",
+                "password",
+                "signature",
+                "auth",
+                "authorization",
+                "bearer",
+                "credential",
+                "sk"
+            ]
         );
     }
 

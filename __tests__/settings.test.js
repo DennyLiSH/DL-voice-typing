@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { MASKED_MARKER } from '../ui/lib/api-key-mask.js';
-import { isConfigDirty, validateSettings } from '../ui/lib/settings-utils.js';
+import {
+    hasCredentialInUrl,
+    isConfigDirty,
+    validateSettings,
+} from '../ui/lib/settings-utils.js';
 
 const baseConfig = {
     language: 'zh',
@@ -102,6 +106,37 @@ describe('isConfigDirty', () => {
     it('returns true when record_only_hotkey differs', () => {
         const current = { ...baseConfig, record_only_hotkey: 'F9' };
         expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
+});
+
+describe('hasCredentialInUrl', () => {
+    it.each([
+        ['https://h.com/v1?key=sk-123'],
+        ['https://h.com/v1?api_key=abc'],
+        ['https://h.com/v1?a=1&token=xyz'],
+        ['https://h.com/v1?API_KEY=abc'],
+        ['https://h.com/v1?access_token=t'],
+        ['https://h.com/v1?client_secret=s'],
+        ['https://h.com/v1?bearer_token=t'],
+        ['https://h.com/v1?secret_key=k'],
+        ['https://h.com/v1?api-key=k'],
+        ['https://h.com/v1#access_token=t'],
+        ['https://h.com/v1?sk=abc'],
+    ])('detects credential param in %s', (url) => {
+        expect(hasCredentialInUrl(url)).toBe(true);
+    });
+
+    it.each([
+        ['https://api.openai.com/v1/chat/completions'],
+        ['https://h.com/v1?model=gpt-4o'],
+        ['https://h.com/v1?stream=true&a=1'],
+        [''],
+        ['https://h.com/v1?keyboard=logitech'],
+        ['https://h.com/v1?monkey=1'],
+        ['https://h.com/v1?author=denny'],
+        ['https://h.com/v1?task=1'],
+    ])('does not flag %s', (url) => {
+        expect(hasCredentialInUrl(url)).toBe(false);
     });
 });
 
