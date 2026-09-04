@@ -1,5 +1,6 @@
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { notifyFormChange } from './lib/form-state.js';
+import { confirmDialog } from './lib/confirm-dialog.js';
 import { showError } from './lib/ui-utils.js';
 
 const { listen } = window.__TAURI__.event;
@@ -79,7 +80,7 @@ export function updateModelAction() {
     if (isCustom && !isDownloading) {
         // Custom model — show delete button
         btnDownloadModel.textContent = '删除';
-        btnDownloadModel.className = 'btn-download-model btn-delete-model';
+        btnDownloadModel.className = 'btn-download-model btn-danger';
         btnDownloadModel.style.display = 'inline-block';
         btnDownloadModel.disabled = false;
         whisperModelSelect.disabled = false;
@@ -94,7 +95,7 @@ export function updateModelAction() {
     } else if (isCustom) {
         // Custom model during download of another model
         btnDownloadModel.textContent = '删除';
-        btnDownloadModel.className = 'btn-download-model btn-delete-model';
+        btnDownloadModel.className = 'btn-download-model btn-danger';
         btnDownloadModel.style.display = 'inline-block';
         btnDownloadModel.disabled = true;
         whisperModelSelect.disabled = true;
@@ -142,7 +143,12 @@ btnDownloadModel.addEventListener('click', async () => {
     const isCustom = selectedModel.startsWith('custom:');
     if (isCustom) {
         const filename = selectedModel.replace(/^custom:/, '');
-        if (!confirm(`确认删除模型 ${filename}？`)) return;
+        const ok = await confirmDialog({
+            title: '删除模型',
+            message: `确认删除模型 ${filename}？`,
+            danger: true,
+        });
+        if (!ok) return;
         try {
             await call('delete_custom_model', { filename });
             // Refresh model list

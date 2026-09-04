@@ -1,5 +1,6 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import { call } from './lib/api.js';
+import { confirmDialog, isDialogOpen } from './lib/confirm-dialog.js';
 import { isFormDirty } from './lib/form-state.js';
 import { showError } from './lib/ui-utils.js';
 import {
@@ -27,13 +28,21 @@ let currentPage = 'general';
 
 // --- Sidebar Navigation ---
 
-export function switchPage(pageName) {
+export async function switchPage(pageName) {
+    // Modal short-circuit: while a dialog is open, further navigation
+    // requests are dropped — the queued question's premise (dirty state)
+    // may already have been changed by the pending confirm.
+    if (isDialogOpen()) return;
     // Dirty state check: warn user about unsaved changes before switching.
     // Must run before the data-leave hook so cancel also skips side effects
     // (semantics: not leaving = not cleaning). isFormDirty is imported above.
     if (currentPage !== pageName && isFormDirty()) {
-        if (!window.confirm('有未保存的更改，确定要离开此页吗？')) {
-            return; // user cancelled or confirm disabled — stay on current page
+        const ok = await confirmDialog({
+            title: '未保存的更改',
+            message: '有未保存的更改，确定要离开此页吗？',
+        });
+        if (!ok) {
+            return; // user cancelled — stay on current page
         }
     }
     // Page leave hook: pause audio + clear audio state when leaving data sub-page.

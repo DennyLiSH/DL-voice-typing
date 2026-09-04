@@ -21,6 +21,7 @@
 //      segments without re-transcribing.
 
 import { call, reportError } from './lib/api.js';
+import { confirmDialog } from './lib/confirm-dialog.js';
 import { attachAudio, loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
     filterRecordOnly,
@@ -379,11 +380,12 @@ async function startTranscription() {
     if (state.phase !== PHASE.IDLE || !state.selected) return;
     // Re-transcribing wipes the user's segment edits on completion
     // (reloadSelectedDetail re-reads stored segments) — confirm first.
-    if (
-        state.edits.size > 0 &&
-        !window.confirm('重新转录将清除当前所有编辑，确定继续？')
-    ) {
-        return;
+    if (state.edits.size > 0) {
+        const ok = await confirmDialog({
+            title: '重新转录',
+            message: '重新转录将清除当前所有编辑，确定继续？',
+        });
+        if (!ok) return;
     }
     state.transcribingStem = state.selected;
     setPhase(PHASE.TRANSCRIBING);

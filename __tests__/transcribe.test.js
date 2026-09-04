@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The re-transcription confirmation goes through the shared in-app dialog.
+vi.mock('../ui/lib/confirm-dialog.js', () => ({
+    confirmDialog: vi.fn(async () => false),
+    isDialogOpen: () => false,
+}));
 import {
     filterRecordOnly,
     findActiveSegmentIndex,
@@ -1050,14 +1056,16 @@ describe('re-transcription edit-wipe confirmation', () => {
             input.value = 'edited text';
             input.dispatchEvent(new Event('input', { bubbles: true }));
         }
-        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+        const { confirmDialog } = await import('../ui/lib/confirm-dialog.js');
+        confirmDialog.mockResolvedValueOnce(false);
 
         document.getElementById('btn-transcribe').click();
         await flush();
 
-        expect(confirmSpy).toHaveBeenCalledWith(
-            '重新转录将清除当前所有编辑，确定继续？',
-        );
+        expect(confirmDialog).toHaveBeenCalledWith({
+            title: '重新转录',
+            message: '重新转录将清除当前所有编辑，确定继续？',
+        });
         expect(
             invokeMock.mock.calls.map((c) => c[0]),
         ).not.toContain('transcribe_recording');
@@ -1074,7 +1082,8 @@ describe('re-transcription edit-wipe confirmation', () => {
             input.value = 'edited text';
             input.dispatchEvent(new Event('input', { bubbles: true }));
         }
-        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        const { confirmDialog } = await import('../ui/lib/confirm-dialog.js');
+        confirmDialog.mockResolvedValueOnce(true);
 
         document.getElementById('btn-transcribe').click();
         await flush();

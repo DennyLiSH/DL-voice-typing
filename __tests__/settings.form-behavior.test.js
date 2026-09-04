@@ -13,6 +13,12 @@
 // settings.js, then drive the real save click handler.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// switchPage's dirty guard goes through the shared in-app dialog.
+vi.mock('../ui/lib/confirm-dialog.js', () => ({
+    confirmDialog: vi.fn(async () => false),
+    isDialogOpen: () => false,
+}));
+
 let invokeMock;
 let listeners;
 
@@ -109,8 +115,6 @@ async function loadFresh() {
         app: { getVersion: vi.fn(async () => '0.0.0-test') },
         autostart: { enable: vi.fn(), disable: vi.fn() },
     });
-
-    vi.stubGlobal('confirm', () => false);
 
     document.body.innerHTML = MINIMAL_DOM;
 

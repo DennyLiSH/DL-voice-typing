@@ -192,6 +192,69 @@ button:active:not(:disabled) {
   100% { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes dialog-pop {
+  0% { opacity: 0; transform: scale(0.96); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes dialog-fade {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+/* --------------------------------------------------------------------------
+   In-app confirm dialog (shared: settings + transcribe windows)
+   -------------------------------------------------------------------------- */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: dialog-fade var(--duration-short) ease-out;
+}
+
+.dialog {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  max-width: 400px;
+  width: calc(100% - 48px);
+  padding: var(--space-5);
+  animation: dialog-pop var(--duration-short) var(--ease-spring);
+}
+
+.dialog-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-section);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.dialog-message {
+  margin: 0 0 var(--space-4);
+  font-size: var(--font-body);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-overlay,
+  .dialog {
+    animation: none;
+  }
+}
+
 /* --------------------------------------------------------------------------
    Shared buttons (settings + transcribe windows)
    -------------------------------------------------------------------------- */
@@ -278,13 +341,14 @@ button:active:not(:disabled) {
 }
 
 /* --------------------------------------------------------------------------
-   Legacy helpers (keep for backward compatibility)
+   Destructive-action button (confirm-dialog danger variant; formerly the
+   legacy .btn-delete-model)
    -------------------------------------------------------------------------- */
-.btn-delete-model {
+.btn-danger {
   background: var(--error);
   color: #fff;
 }
 
-.btn-delete-model:hover:not(:disabled) {
+.btn-danger:hover:not(:disabled) {
   background: #B91C1C;
 }

@@ -26,6 +26,12 @@ import {
     vi,
 } from 'vitest';
 
+// Deletion confirmations go through the shared in-app dialog.
+vi.mock('../ui/lib/confirm-dialog.js', () => ({
+    confirmDialog: vi.fn(async () => false),
+    isDialogOpen: () => false,
+}));
+
 let invokeMock;
 let listeners;
 
@@ -130,9 +136,6 @@ async function loadFresh() {
         app: { getVersion: vi.fn(async () => '0.0.0-test') },
     });
 
-    // jsdom defaults `confirm` to false (cancels the delete path).
-    // Per-test can override via vi.stubGlobal('confirm', () => true).
-    vi.stubGlobal('confirm', () => false);
 
     document.body.innerHTML = MINIMAL_DOM;
 

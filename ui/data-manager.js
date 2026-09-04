@@ -1,4 +1,5 @@
 import { call } from './lib/api.js';
+import { confirmDialog } from './lib/confirm-dialog.js';
 import {
     buildExpandedMetadata,
     buildRecordingRow,
@@ -408,7 +409,12 @@ function wireDataListEvents() {
 }
 
 async function handleSingleDelete(filename) {
-    if (!confirm(deleteConfirmMessage(1))) return;
+    const ok = await confirmDialog({
+        title: '删除录音',
+        message: deleteConfirmMessage(1),
+        danger: true,
+    });
+    if (!ok) return;
     try {
         await call('delete_recording', { filename });
         // Clear audio state if it was this row (constraint #10a).
@@ -433,7 +439,7 @@ async function handleSingleDelete(filename) {
             await loadRecordingsPage(dataState.offset);
         }
     } catch (e) {
-        alert(
+        showDataError(
             `删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
         );
     }
@@ -442,7 +448,12 @@ async function handleSingleDelete(filename) {
 async function handleBatchDelete() {
     const count = dataState.selectedFiles.size;
     if (count === 0) return;
-    if (!confirm(deleteConfirmMessage(count))) return;
+    const ok = await confirmDialog({
+        title: '删除录音',
+        message: deleteConfirmMessage(count),
+        danger: true,
+    });
+    if (!ok) return;
     const filenames = Array.from(dataState.selectedFiles);
     try {
         const result = await call('delete_recordings', { filenames });
@@ -474,12 +485,12 @@ async function handleBatchDelete() {
             const failedList = result.failed
                 .map((f) => `${f.filename}：${f.error}`)
                 .join('\n');
-            alert(
+            showDataError(
                 `已删除 ${result.deleted} 条，失败 ${result.failed.length} 条：\n${failedList}`,
             );
         }
     } catch (e) {
-        alert(
+        showDataError(
             `批量删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
         );
     }

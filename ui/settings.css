@@ -729,8 +729,11 @@ button:disabled {
     margin-bottom: var(--space-3);
     font-size: var(--font-label);
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--space-2);
+    /* Batch-delete partial failures carry a multi-line file list. */
+    white-space: pre-line;
+    overflow-wrap: anywhere;
 }
 
 .data-error-bar[hidden] {
