@@ -147,7 +147,10 @@ function renderDataList() {
             playerWrap.className = 'data-row-player';
             const audio = document.createElement('audio');
             audio.controls = true;
-            audio.autoplay = true;
+            // No autoplay: sound starts only on an explicit play click —
+            // matches the transcribe window's behavior (no surprise audio
+            // when a row is expanded).
+            audio.autoplay = false;
             // The actual src will be set by attachAudioSrc() once the bytes arrive.
             playerWrap.appendChild(audio);
             list.appendChild(playerWrap);
