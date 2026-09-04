@@ -1038,3 +1038,49 @@ describe('recording list keyboard navigation', () => {
         expect(stops[0]).toBe(rows[0]); // no selection → first row is the stop
     });
 });
+
+describe('re-transcription edit-wipe confirmation', () => {
+    it('confirm=false with pending edits aborts without invoking transcribe_recording', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        // Simulate a user edit on segment 0 (edits are module-private;
+        // drive them through the segment input).
+        const input = document.querySelector('.segment-text');
+        if (input) {
+            input.value = 'edited text';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+        document.getElementById('btn-transcribe').click();
+        await flush();
+
+        expect(confirmSpy).toHaveBeenCalledWith(
+            '重新转录将清除当前所有编辑，确定继续？',
+        );
+        expect(
+            invokeMock.mock.calls.map((c) => c[0]),
+        ).not.toContain('transcribe_recording');
+    });
+
+    it('confirm=true proceeds to transcribe_recording', async () => {
+        await loadFresh((cmd) => {
+            if (cmd === 'transcribe_recording') return Promise.resolve(null);
+            return defaultInvoke(cmd);
+        });
+        await selectFirstRecording();
+        const input = document.querySelector('.segment-text');
+        if (input) {
+            input.value = 'edited text';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+        document.getElementById('btn-transcribe').click();
+        await flush();
+
+        expect(
+            invokeMock.mock.calls.map((c) => c[0]),
+        ).toContain('transcribe_recording');
+    });
+});
