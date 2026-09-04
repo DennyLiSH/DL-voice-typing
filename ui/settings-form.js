@@ -442,9 +442,10 @@ saveBtn.addEventListener('click', async () => {
         setTimeout(() => {
             saveStatus.textContent = '';
         }, 1500);
-    } catch (_e) {
-        setSaveStatus('✗ 保存失败，请重试', 'error');
-        showError('保存失败，请重试');
+    } catch (e) {
+        const msg = e?.message || '保存失败，请重试';
+        setSaveStatus(`✗ ${msg}`, 'error');
+        showError(msg);
     } finally {
         saveBtn.textContent = '保存';
         saveBtn.classList.remove('saving');

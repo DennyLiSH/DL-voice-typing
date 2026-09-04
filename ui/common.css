@@ -20,6 +20,8 @@
   --warning: #D97706;
   --error: #DC2626;
   --error-rgb: 220, 38, 38;
+  --warning-rgb: 217, 119, 6;
+  --success-rgb: 22, 163, 74;
 
   /* Typography */
   --font-family: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
@@ -251,12 +253,12 @@ button:active:not(:disabled) {
 
 .badge-pending,
 .badge-warning {
-  background: rgba(217, 119, 6, 0.15);
+  background: rgba(var(--warning-rgb), 0.15);
   color: var(--warning-text);
 }
 
 .badge-done {
-  background: rgba(22, 163, 74, 0.15);
+  background: rgba(var(--success-rgb), 0.15);
   color: var(--success-text);
 }
 

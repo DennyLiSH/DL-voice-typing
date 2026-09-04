@@ -482,12 +482,12 @@ button:disabled {
 }
 
 .mode-badge.gpu {
-  background: rgba(22, 163, 74, 0.1);
+  background: rgba(var(--success-rgb), 0.1);
   color: var(--success-text);
 }
 
 .mode-badge.cpu {
-  background: rgba(234, 179, 8, 0.15);
+  background: rgba(var(--warning-rgb), 0.15);
   color: var(--warning-text);
 }
 
@@ -541,7 +541,7 @@ button:disabled {
   height: 32px;
   border-radius: var(--radius-full);
   background: var(--accent);
-  color: #ffffff;
+  color: var(--accent-contrast);
   display: flex;
   align-items: center;
   justify-content: center;

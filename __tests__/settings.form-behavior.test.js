@@ -210,8 +210,13 @@ describe('settings save flow dirty-state recalculation', () => {
 
         const { isFormDirty } = await import('../ui/lib/form-state.js');
         expect(isFormDirty()).toBe(true);
+        // Message passthrough (Task 8): the backend reason surfaces instead
+        // of a fixed "保存失败" string.
         expect(document.getElementById('save-status').textContent).toContain(
-            '保存失败',
+            'disk full',
+        );
+        expect(document.getElementById('save-status').textContent).toContain(
+            '✗',
         );
     });
 });
