@@ -189,13 +189,7 @@ impl DeliveryController {
         llm_transition: bool,
     ) {
         #[cfg(not(test))]
-        if !Arc::ptr_eq(&self.review(), &ps.review()) {
-            error!(
-                target: "delivery",
-                "delivery review handle diverged from PipelineState"
-            );
-            debug_assert!(false, "delivery review handle diverged from PipelineState");
-        }
+        self.assert_review_insync(ps);
 
         let transitioned = if llm_transition {
             ps.sm_llm_to_injecting()
@@ -245,13 +239,7 @@ impl DeliveryController {
         llm_transition: bool,
     ) {
         #[cfg(not(test))]
-        if !Arc::ptr_eq(&self.review(), &ps.review()) {
-            error!(
-                target: "delivery",
-                "delivery review handle diverged from PipelineState"
-            );
-            debug_assert!(false, "delivery review handle diverged from PipelineState");
-        }
+        self.assert_review_insync(ps);
 
         info!(
             "show_review: ENTER ({} chars, llm_transition={})",
@@ -394,13 +382,7 @@ impl DeliveryController {
     /// migrates the foreground handle into our context.
     pub(crate) fn realtime_review_handoff(&self, ps: &PipelineState, accumulated: Option<String>) {
         #[cfg(not(test))]
-        if !Arc::ptr_eq(&self.review(), &ps.review()) {
-            error!(
-                target: "delivery",
-                "delivery review handle diverged from PipelineState"
-            );
-            debug_assert!(false, "delivery review handle diverged from PipelineState");
-        }
+        self.assert_review_insync(ps);
 
         info!(
             "realtime_review_handoff: accumulated={} chars",
@@ -431,13 +413,7 @@ impl DeliveryController {
         text: String,
     ) -> Result<(), CommandError> {
         #[cfg(not(test))]
-        if !Arc::ptr_eq(&self.review(), &ps.review()) {
-            error!(
-                target: "delivery",
-                "delivery review handle diverged from PipelineState"
-            );
-            debug_assert!(false, "delivery review handle diverged from PipelineState");
-        }
+        self.assert_review_insync(ps);
 
         info!("confirm_review: start ({} chars)", text.len());
 
@@ -476,13 +452,7 @@ impl DeliveryController {
     /// Cancel the review and return to idle.
     pub(crate) async fn cancel_review(&self, ps: &PipelineState) -> Result<(), CommandError> {
         #[cfg(not(test))]
-        if !Arc::ptr_eq(&self.review(), &ps.review()) {
-            error!(
-                target: "delivery",
-                "delivery review handle diverged from PipelineState"
-            );
-            debug_assert!(false, "delivery review handle diverged from PipelineState");
-        }
+        self.assert_review_insync(ps);
 
         info!("cancel_review: start");
 
@@ -766,6 +736,21 @@ impl DeliveryController {
                 error!(target: "delivery", "delivery_review lock poisoned — failing loudly");
                 panic!("delivery_review lock poisoned");
             }
+        }
+    }
+
+    /// Production-only differentiation guard: the delivery-side review handle
+    /// must be the same object as the PipelineState slot. Differentiation
+    /// tests deliberately swap the delivery handle, so this compiles out
+    /// under cfg(test).
+    #[cfg(not(test))]
+    fn assert_review_insync(&self, ps: &PipelineState) {
+        if !Arc::ptr_eq(&self.review(), &ps.review()) {
+            error!(
+                target: "delivery",
+                "delivery review handle diverged from PipelineState"
+            );
+            debug_assert!(false, "delivery review handle diverged from PipelineState");
         }
     }
 
