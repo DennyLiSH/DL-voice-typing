@@ -416,6 +416,9 @@ function setProgress(percent, stage) {
     const fill = $('progress-fill');
     if (fill)
         fill.style.transform = `scaleX(${Math.min(100, Math.max(0, percent)) / 100})`;
+    const wrap = $('progress-wrap');
+    if (wrap)
+        wrap.setAttribute('aria-valuenow', String(Math.min(100, Math.max(0, percent))));
     const label = $('progress-label');
     if (label) {
         label.textContent =

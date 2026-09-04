@@ -178,6 +178,7 @@ async function startDownload(size) {
     activeDownload = size;
     progressFill.style.transform = 'scaleX(0)';
     progressPercent.textContent = '0%';
+    downloadProgress.setAttribute('aria-valuenow', '0');
     updateModelAction();
 
     try {
@@ -216,6 +217,7 @@ listen('download-progress', (event) => {
 
     progressFill.style.transform = `scaleX(${percent / 100})`;
     progressPercent.textContent = `${percent}%`;
+    downloadProgress.setAttribute('aria-valuenow', String(percent));
 });
 
 // Listen for background model loading completion

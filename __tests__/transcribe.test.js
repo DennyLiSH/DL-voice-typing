@@ -629,6 +629,7 @@ describe('transcription lifecycle UI', () => {
         });
         expect(get('progress-fill').style.transform).toBe('scaleX(0.42)');
         expect(get('progress-label').textContent).toBe('转录中 42%');
+        expect(get('progress-wrap').getAttribute('aria-valuenow')).toBe('42');
         listeners['transcription-progress']({
             payload: { percent: 100, stage: 'llm' },
         });
