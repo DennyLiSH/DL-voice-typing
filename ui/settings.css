@@ -1041,3 +1041,10 @@ button:disabled {
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
+
+/* #record-only-hotkey-group.disabled (form-group): dims the label + hint
+   so the disabled state is visible beyond the select's native graying. */
+.form-group.disabled label,
+.form-group.disabled .hint {
+    opacity: 0.5;
+}

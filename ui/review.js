@@ -112,19 +112,21 @@ btnCancel.addEventListener('click', () => {
     doCancel();
 });
 
-// Keyboard shortcuts.
+// Keyboard shortcuts. Escape is guarded by isComposing like Enter: an IME
+// composing session consumes the key to dismiss the candidate list — it
+// must not also cancel the whole review window.
 textarea.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         doConfirm();
-    } else if (e.key === 'Escape') {
+    } else if (e.key === 'Escape' && !e.isComposing) {
         e.preventDefault();
         doCancel();
     }
 });
 
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
+    if (e.key === 'Escape' && !e.isComposing) {
         e.preventDefault();
         doCancel();
     }

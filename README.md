@@ -248,8 +248,7 @@ ui/                            # 前端 (纯 HTML/CSS/JS, 无框架)
 ├── floating.html/js/css       # 浮动波形指示器
 ├── settings.html/js/css       # 设置界面 (6 页侧栏导航)
 ├── review.html/js/css         # 粘贴前确认编辑窗口
-├── common.css                 # 共享样式
-└── index.html                 # 入口页面
+└── common.css                 # 共享样式
 
 __tests__/                     # 前端测试 (vitest)
 ├── floating.test.js           # 波形动画、RMS 映射、事件处理

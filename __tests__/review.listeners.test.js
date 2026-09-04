@@ -199,3 +199,28 @@ describe('doCancel error recovery', () => {
 // setter; reaching it requires driving doConfirm (which sets isClosing = true
 // before awaiting confirm_inject). That path is out of scope for this listener
 // integration test and belongs to a future doConfirm integration test.
+
+describe('Escape isComposing guard (2026-09-04)', () => {
+    it('Escape during IME composition does not cancel the review', async () => {
+        await loadFresh();
+        // doCancel's observable side effect: isClosing disables the buttons.
+        const btnCancel = get('btn-cancel');
+
+        document.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: 'Escape',
+                isComposing: true,
+                bubbles: true,
+            }),
+        );
+        expect(btnCancel.disabled).toBe(false);
+
+        document.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: 'Escape',
+                bubbles: true,
+            }),
+        );
+        expect(btnCancel.disabled).toBe(true);
+    });
+});
