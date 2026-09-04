@@ -1139,13 +1139,8 @@ mod tests {
         let acc = Arc::new(Mutex::new(TextAccumulator::new()));
         let acc_for_poison = acc.clone();
         let poison_handle = std::thread::spawn(move || {
-            // Acquire via match — the global check-unwrap hook scans every
-            // source line (incl. cfg(test)) for the forbidden method form.
-            if let Ok(_g) = acc_for_poison.lock() {
-                panic!("intentional poison");
-            } else {
-                panic!("lock failed before poison setup");
-            }
+            let _g = acc_for_poison.lock().unwrap();
+            panic!("intentional poison");
         });
         let _ = poison_handle.join();
         // acc is now poisoned.
@@ -1192,11 +1187,8 @@ mod tests {
         let acc = Arc::new(Mutex::new(TextAccumulator::new()));
         let acc_for_poison = acc.clone();
         let poison_handle = std::thread::spawn(move || {
-            if let Ok(_g) = acc_for_poison.lock() {
-                panic!("intentional poison");
-            } else {
-                panic!("lock failed before poison setup");
-            }
+            let _g = acc_for_poison.lock().unwrap();
+            panic!("intentional poison");
         });
         let _ = poison_handle.join();
         // acc is now poisoned.
