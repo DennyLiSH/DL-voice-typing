@@ -245,9 +245,10 @@ describe('buildRecordingRow', () => {
         ).toBe(false);
     });
 
-    it('does NOT include tabindex on .data-row (constraint F4: rows not focusable)', () => {
+    it('row carries the expand tab stop (F4 evolved 2026-09-04: keyboard-reachable expand)', () => {
         const row = buildRecordingRow(baseEntry);
-        expect(row.getAttribute('tabindex')).toBeNull();
+        expect(row.tabIndex).toBe(0);
+        expect(row.getAttribute('aria-expanded')).toBe('false');
     });
 
     it('reflects selected state in class and checkbox', () => {
