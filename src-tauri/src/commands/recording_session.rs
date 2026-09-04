@@ -32,6 +32,17 @@ use super::pipeline_state::PipelineState;
 /// differ (floating window vs transcribe window).
 pub(crate) const LLM_ERROR_USER_MSG: &str = "LLM 纠错失败，已保留原始转录";
 
+/// User-facing payload for the `speech-error` not-ready branch, routed by
+/// model-file presence. Pure function so the routing is testable without
+/// touching the un-injectable `model_path_for_size` (config_dir-derived).
+pub(crate) fn not_ready_message(model_on_disk: bool) -> &'static str {
+    if model_on_disk {
+        "模型加载中，请稍候..."
+    } else {
+        "模型未下载，请在 设置→模型 下载"
+    }
+}
+
 /// Snapshot of config consumed by a single recording session.
 ///
 /// Built once at hotkey press/release entry to prevent mid-session config
@@ -157,11 +168,33 @@ impl RecordingSession {
         let can_record = self.ps.sm_start_recording();
 
         if can_record && !self.ps.engine().is_ready() {
-            reset_to_idle(&self.ps);
+            // Route the not-ready message by model-file presence: a missing
+            // download must say so instead of the misleading "loading".
+            // The exists() stat lands on the hook thread — one local
+            // %APPDATA% stat is microsecond-scale and only reached in this
+            // branch; if hook latency ever shows up, cache an atomic flag at
+            // engine-load time instead.
+            let model_on_disk = {
+                let cfg = self.ps.config_cache().read_cached();
+                crate::config::model_path_for_size(&cfg.whisper_model).exists()
+            };
+            let msg = not_ready_message(model_on_disk);
+            // The classic floating-window show happens AFTER this early
+            // return, so the window is OS-hidden here — emitting alone would
+            // never be visible. Show it, emit, then schedule a delayed
+            // backend hide: the frontend showError only clears DOM state and
+            // never hides the OS window.
+            self.ps.window_controller().show_floating_near_caret();
             self.ps.emitter().emit(
                 "speech-error",
-                serde_json::to_value("模型加载中，请稍候...").unwrap_or_default(),
+                serde_json::to_value(msg).unwrap_or_default(),
             );
+            self.ps.sm_reset();
+            let wc = self.ps.window_controller();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(4500));
+                wc.hide_floating();
+            });
             return;
         }
 

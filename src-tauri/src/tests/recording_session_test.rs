@@ -46,9 +46,32 @@ fn build_rig(cfg: AppConfig, engine_text: &str) -> Rig {
 /// `build_rig` with an injectable corrector — the default wrapper keeps the
 /// existing 9 call sites unchanged; LLM-failure tests pass `MockCorrector::failing()`.
 fn build_rig_with_corrector(cfg: AppConfig, engine_text: &str, corrector: MockCorrector) -> Rig {
+    build_rig_inner(cfg, engine_text, corrector, Arc::new(NoopWindowController))
+}
+
+fn build_rig_inner(
+    cfg: AppConfig,
+    engine_text: &str,
+    corrector: MockCorrector,
+    wc: Arc<dyn crate::commands::window_controller::WindowController>,
+) -> Rig {
+    build_rig_full(cfg, engine_text, corrector, wc, true)
+}
+
+/// Full-control variant: `engine_ready=false` drives the on_press not-ready
+/// branch (first-run dead-end routing tests).
+fn build_rig_full(
+    cfg: AppConfig,
+    engine_text: &str,
+    corrector: MockCorrector,
+    wc: Arc<dyn crate::commands::window_controller::WindowController>,
+    engine_ready: bool,
+) -> Rig {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let engine = Arc::new(MockEngine::new(engine_text));
+    let mut engine = MockEngine::new(engine_text);
+    engine.set_ready(engine_ready);
+    let engine = Arc::new(engine);
     let clipboard = Arc::new(MockClipboard::new());
     let emitter = Arc::new(MockEmitter::new());
     let ps = crate::commands::pipeline_state::PipelineState::new(
@@ -60,7 +83,7 @@ fn build_rig_with_corrector(cfg: AppConfig, engine_text: &str, corrector: MockCo
         crate::config::ConfigCache::new(cfg),
         Arc::new(Mutex::new(Some(Box::new(corrector)))),
         Arc::new(Mutex::new(None)),
-        Arc::new(NoopWindowController),
+        wc,
         emitter.clone(),
         Arc::new(MockReviewProvider::new()),
     );
@@ -70,6 +93,39 @@ fn build_rig_with_corrector(cfg: AppConfig, engine_text: &str, corrector: MockCo
         emitter,
         clipboard,
     }
+}
+
+/// Window controller that records call names (not-ready visibility asserts).
+struct CallLogWindowController {
+    calls: Arc<Mutex<Vec<&'static str>>>,
+}
+
+impl crate::commands::window_controller::WindowController for CallLogWindowController {
+    fn show_floating_near_caret(&self) -> bool {
+        self.calls.lock().unwrap().push("show_floating");
+        true
+    }
+    fn hide_floating(&self) {
+        self.calls.lock().unwrap().push("hide_floating");
+    }
+    fn show_review_near_caret(&self) -> bool {
+        true
+    }
+    fn hide_review(&self) {}
+    fn focus_review(&self) -> bool {
+        true
+    }
+    fn eval_review_js(&self, _js: &str) -> bool {
+        true
+    }
+    fn emit_review_show(&self) {}
+    fn emit_review_final_text(&self, _text: &str) {}
+    fn restore_foreground_hwnd(&self, _hwnd: isize) {}
+    fn show_floating_corner(&self) -> bool {
+        self.calls.lock().unwrap().push("show_floating_corner");
+        true
+    }
+    fn set_tray_tooltip(&self, _tooltip: &str) {}
 }
 
 /// Drive the state machine into `Transcribing` (the precondition for the
@@ -401,4 +457,57 @@ fn on_release_silent_audio_is_done() {
     }
     let action = rig.session.on_release();
     assert!(matches!(action, ReleaseAction::Done));
+}
+
+// -----------------------------------------------------------------------------
+// First-run dead-end: on_press not-ready branch (model routing + visibility)
+// -----------------------------------------------------------------------------
+
+#[test]
+fn test_not_ready_message_routes_by_model_presence() {
+    assert_eq!(
+        crate::commands::recording_session::not_ready_message(true),
+        "模型加载中，请稍候..."
+    );
+    assert_eq!(
+        crate::commands::recording_session::not_ready_message(false),
+        "模型未下载，请在 设置→模型 下载"
+    );
+}
+
+#[test]
+fn test_on_press_not_ready_missing_model_shows_actionable_error() {
+    // A Custom model name that cannot exist on disk makes the exists() probe
+    // deterministic without touching the real %APPDATA% models dir.
+    let cfg = AppConfig {
+        whisper_model: crate::config::WhisperModel::Custom(
+            "no-such-model-for-test.bin".to_string(),
+        ),
+        ..config(false, false, false)
+    };
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let wc = Arc::new(CallLogWindowController {
+        calls: calls.clone(),
+    });
+    let rig = build_rig_full(cfg, "unused", MockCorrector::new("x"), wc, false);
+
+    rig.session.on_press();
+
+    // Routing: the missing-download message, not the misleading "loading".
+    let events = rig.emitter.take_events();
+    let speech_err = events
+        .iter()
+        .find(|(e, _)| e == "speech-error")
+        .expect("speech-error emitted");
+    assert_eq!(
+        speech_err.1,
+        serde_json::json!("模型未下载，请在 设置→模型 下载")
+    );
+    // Visibility: the floating window was never shown by the classic path
+    // (it early-returns before show), so the branch must show it itself.
+    let logged = calls.lock().unwrap().clone();
+    assert!(logged.contains(&"show_floating"), "logged: {logged:?}");
+    assert!(!logged.contains(&"show_floating_corner"));
+    // State returns to Idle.
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
 }

@@ -85,6 +85,7 @@ pub fn run() {
             app.manage(commands::PendingReview::new());
             app.manage(commands::transcribe_cmd::PendingTranscribe::new());
             start_watchdog(app.handle(), state_machine.clone());
+            maybe_open_settings_on_missing_model(app.handle(), &config);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -263,10 +264,77 @@ fn spawn_model_loading(
             warn!(
                 "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
             );
+            // Surface the failure on the tray. Deliberately via the raw
+            // app handle (not PipelineState): manage_pipeline_state runs
+            // later in setup, so state access here could panic — and
+            // panic=abort would kill the whole process.
+            if let Some(tray) = app_handle.tray_by_id("default") {
+                let _ = tray.set_tooltip(Some("语文兔 - 模型加载失败"));
+            }
         }
         let _ = app_handle.emit("model-loaded", ());
         info!("background model loading finished");
     });
+}
+
+/// First-run dead-end guard: when the selected Whisper model file is missing,
+/// open the settings window straight at the model page so a fresh install
+/// lands on the download UI instead of hitting the misleading "loading"
+/// error on the first hotkey press. Runs off the setup thread so window
+/// creation cannot block app startup.
+fn maybe_open_settings_on_missing_model(app: &tauri::AppHandle, config: &AppConfig) {
+    #[cfg(feature = "whisper")]
+    {
+        if config::model_path_for_size(&config.whisper_model).exists() {
+            return;
+        }
+        info!("whisper model file missing; opening settings at the model page");
+        let app = app.clone();
+        std::thread::spawn(move || open_settings_at_model_page(&app));
+    }
+    #[cfg(not(feature = "whisper"))]
+    {
+        let _ = (app, config);
+    }
+}
+
+/// Show the settings window (creating it on first open, mirroring the tray
+/// menu handler) and navigate to the model sub-page. The navigation eval is
+/// attached via `on_page_load(Finished)` on the fresh window — evaluating
+/// during setup would race the page load and silently no-op. `.catch` keeps
+/// genuine failures degraded to the default general page, never a crash.
+fn open_settings_at_model_page(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("settings") {
+        // Already opened once (and navigated to the model page then) — keep
+        // whatever page the user is on now.
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let built = tauri::webview::WebviewWindowBuilder::new(
+        app,
+        "settings",
+        tauri::WebviewUrl::App("settings.html".into()),
+    )
+    .title("语文兔语音输入法 - 设置")
+    .inner_size(560.0, 620.0)
+    .resizable(true)
+    .center()
+    .visible(false)
+    .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
+    .on_page_load(|window, payload| {
+        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+            let _ = window
+                .eval("import('./app-shell.js').then(m => m.switchPage('model')).catch(() => {})");
+        }
+    })
+    .build();
+    match built {
+        Ok(window) => {
+            let _ = window.show();
+        }
+        Err(e) => warn!("failed to open settings for missing model: {e}"),
+    }
 }
 
 /// Create the floating indicator and review windows (both hidden by default).
