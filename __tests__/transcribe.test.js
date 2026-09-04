@@ -275,7 +275,7 @@ const SEGS = {
 const BODY_HTML = `
     <button id="btn-refresh"></button>
     <div id="list-error" hidden></div>
-    <div id="rec-list"></div>
+    <div id="rec-list" role="listbox" aria-label="录音列表"></div>
     <div id="rec-empty" hidden></div>
     <div id="detail-empty"></div>
     <div id="detail" hidden>
@@ -977,5 +977,64 @@ describe('llmConfigured', () => {
             }),
         ).toBe(false);
         expect(llmConfigured(null)).toBe(false);
+    });
+});
+
+describe('recording list keyboard navigation', () => {
+    it('ArrowDown/ArrowUp move focus cyclically across rows', async () => {
+        await loadFresh(twoItemInvoke);
+        await flush();
+        const rows = document.querySelectorAll('.rec-row');
+        rows[0].focus();
+
+        rows[0].dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+        );
+        expect(document.activeElement).toBe(rows[1]);
+
+        rows[1].dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+        );
+        expect(document.activeElement).toBe(rows[0]); // cyclic wrap
+
+        rows[0].dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
+        );
+        expect(document.activeElement).toBe(rows[1]);
+    });
+
+    it('Enter on a focused row selects it (segments fetched, roving tab stop moves)', async () => {
+        await loadFresh(twoItemInvoke);
+        await flush();
+        const rows = document.querySelectorAll('.rec-row');
+        rows[1].focus();
+
+        rows[1].dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+        await flush();
+        await flush();
+
+        expect(
+            invokeMock.mock.calls.map((c) => c[0]),
+        ).toContain('get_recording_segments');
+        const freshRows = document.querySelectorAll('.rec-row');
+        expect(freshRows[1].getAttribute('aria-selected')).toBe('true');
+        expect(freshRows[1].tabIndex).toBe(0);
+        expect(freshRows[0].tabIndex).toBe(-1);
+    });
+
+    it('rows expose listbox semantics with exactly one roving tab stop', async () => {
+        await loadFresh(twoItemInvoke);
+        await flush();
+        const list = document.getElementById('rec-list');
+        expect(list.getAttribute('role')).toBe('listbox');
+        expect(list.getAttribute('aria-label')).toBe('录音列表');
+
+        const rows = document.querySelectorAll('.rec-row');
+        expect(rows[0].getAttribute('role')).toBe('option');
+        const stops = [...rows].filter((r) => r.tabIndex === 0);
+        expect(stops).toHaveLength(1);
+        expect(stops[0]).toBe(rows[0]); // no selection → first row is the stop
     });
 });

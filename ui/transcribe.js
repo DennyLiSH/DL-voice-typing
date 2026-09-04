@@ -122,6 +122,14 @@ function renderList() {
     for (const item of state.items) {
         list.appendChild(buildListRow(item));
     }
+    // Roving tabindex (same model as the settings sidebar): exactly one row
+    // is the tab stop — the selected row, else the first.
+    const rows = Array.from(list.querySelectorAll('.rec-row'));
+    const hasSelected = rows.some((r) => r.classList.contains('selected'));
+    rows.forEach((row, i) => {
+        const isStop = row.classList.contains('selected') || (!hasSelected && i === 0);
+        row.tabIndex = isStop ? 0 : -1;
+    });
     const empty = $('rec-empty');
     if (empty) empty.hidden = state.items.length > 0;
 }
@@ -130,7 +138,10 @@ function buildListRow(item) {
     const row = document.createElement('div');
     row.className = 'rec-row';
     row.dataset.filename = item.filename;
-    if (item.filename === state.selected) row.classList.add('selected');
+    row.setAttribute('role', 'option');
+    const isSelected = item.filename === state.selected;
+    row.setAttribute('aria-selected', String(isSelected));
+    if (isSelected) row.classList.add('selected');
     // Rule 2 + BC(C5)#1: any in-flight phase locks list switching (visual
     // symmetry with the selectRecording entry guard).
     if (state.phase !== PHASE.IDLE) row.classList.add('disabled');
@@ -529,6 +540,28 @@ function wireEvents() {
             if (!row || row.classList.contains('disabled')) return;
             const filename = row.dataset.filename;
             if (filename) selectRecording(filename);
+        });
+        // Keyboard navigation (mirrors the settings sidebar's roving model):
+        // ArrowUp/Down move focus through rows; Enter/Space activate.
+        list.addEventListener('keydown', (e) => {
+            const row = e.target.closest?.('.rec-row');
+            if (!row) return;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                const rows = Array.from(list.querySelectorAll('.rec-row'));
+                if (rows.length === 0) return;
+                const idx = rows.indexOf(row);
+                const next =
+                    e.key === 'ArrowDown'
+                        ? (idx + 1) % rows.length
+                        : (idx - 1 + rows.length) % rows.length;
+                rows[next].focus();
+            } else if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (row.classList.contains('disabled')) return;
+                const filename = row.dataset.filename;
+                if (filename) selectRecording(filename);
+            }
         });
     }
 

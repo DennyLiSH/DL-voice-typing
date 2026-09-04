@@ -120,6 +120,7 @@ export function previewText(entry) {
 export function buildRecordingRow(entry, opts = {}) {
     const row = document.createElement('div');
     row.className = 'data-row';
+    row.setAttribute('role', 'listitem');
     row.dataset.filename = entry.filename;
     if (opts.selected) row.classList.add('selected');
     if (opts.expanded) row.classList.add('expanded');
