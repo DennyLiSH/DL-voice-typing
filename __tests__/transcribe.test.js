@@ -930,17 +930,17 @@ describe('live inject-button refresh (BC(C5)#2)', () => {
 describe('injectTargetLabel', () => {
     it('shows the target window title when present', () => {
         expect(injectTargetLabel('WeChat')).toEqual({
-            text: '将注入到：WeChat',
+            text: '将粘贴到：WeChat',
             muted: false,
         });
     });
     it('falls back to the reopen hint for null/empty titles', () => {
         expect(injectTargetLabel(null)).toEqual({
-            text: '重新打开窗口以选择注入目标',
+            text: '重新打开窗口以选择粘贴目标',
             muted: true,
         });
         expect(injectTargetLabel('   ')).toEqual({
-            text: '重新打开窗口以选择注入目标',
+            text: '重新打开窗口以选择粘贴目标',
             muted: true,
         });
     });

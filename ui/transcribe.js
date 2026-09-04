@@ -457,10 +457,10 @@ async function injectText() {
             filename: state.selected,
             text,
         });
-        showToast('注入成功');
+        showToast('粘贴成功');
     } catch (e) {
         // Backend messages include the clipboard-fallback guidance.
-        showToast(e?.message || '注入失败', true);
+        showToast(e?.message || '粘贴失败', true);
     } finally {
         setPhase(PHASE.IDLE);
         refreshInjectTarget();

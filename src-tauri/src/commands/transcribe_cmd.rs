@@ -174,7 +174,7 @@ pub async fn inject_transcript_text(
 ) -> Result<(), CommandError> {
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() {
-        return Err(CommandError::validation("注入文本不能为空"));
+        return Err(CommandError::validation("粘贴文本不能为空"));
     }
     // Validate the filename BEFORE consuming the take-once HWND.
     let base = recordings_base_dir(&ps)?;

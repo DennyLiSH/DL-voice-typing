@@ -166,9 +166,9 @@ export function uiFlags({ phase, selected, status, mergedEmpty }) {
  */
 export function injectTargetLabel(title) {
     if (typeof title === 'string' && title.trim() !== '') {
-        return { text: `将注入到：${title}`, muted: false };
+        return { text: `将粘贴到：${title}`, muted: false };
     }
-    return { text: '重新打开窗口以选择注入目标', muted: true };
+    return { text: '重新打开窗口以选择粘贴目标', muted: true };
 }
 
 /**

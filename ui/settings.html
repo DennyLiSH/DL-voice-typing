@@ -59,15 +59,15 @@
                     <div class="toggle-switch" id="autostart-toggle" role="switch" aria-checked="false" aria-label="开机自动启动" tabindex="0"></div>
                 </div>
                 <div class="toggle-row">
-                    <span class="toggle-label">实时语音转写</span>
-                    <div class="toggle-switch" id="realtime-transcription-toggle" role="switch" aria-checked="false" aria-label="实时语音转写" tabindex="0"></div>
+                    <span class="toggle-label">实时语音转录</span>
+                    <div class="toggle-switch" id="realtime-transcription-toggle" role="switch" aria-checked="false" aria-label="实时语音转录" tabindex="0"></div>
                 </div>
-                <div class="hint">按住快捷键时实时显示转写文字（预览效果，最终文本仍以释放后为准）</div>
+                <div class="hint">按住快捷键时实时显示转录文字（预览效果，最终文本仍以释放后为准）</div>
                 <div class="toggle-row">
                     <span class="toggle-label">粘贴前确认</span>
                     <div class="toggle-switch" id="review-toggle" role="switch" aria-checked="false" aria-label="粘贴前确认" tabindex="0"></div>
                 </div>
-                <div class="hint">转写完成后弹出编辑窗口，确认后再粘贴</div>
+                <div class="hint">转录完成后弹出编辑窗口，确认后再粘贴</div>
             </div>
 
             <!-- Page: Hotkey -->
@@ -95,14 +95,14 @@
                         <option value="F11">F11</option>
                         <option value="F12">F12</option>
                     </select>
-                    <div class="hint">按住说话，松开转写。切换需重启生效。</div>
+                    <div class="hint">按住说话，松开转录。切换需重启生效。</div>
                 </div>
                 <div class="form-group">
                     <div class="toggle-row">
                         <span class="toggle-label">录音模式（只录不转）</span>
                         <div class="toggle-switch" id="record-only-toggle" role="switch" aria-checked="false" aria-label="录音模式" tabindex="0"></div>
                     </div>
-                    <div class="hint">按住录音快捷键开始录音，松开保存到数据目录，不做转写。之后可在转录窗口择时转写。</div>
+                    <div class="hint">按住录音快捷键开始录音，松开保存到数据目录，不做转录。之后可在转录窗口择时转录。</div>
                 </div>
                 <div class="form-group" id="record-only-hotkey-group">
                     <label for="record-only-hotkey">录音快捷键</label>
@@ -212,7 +212,7 @@
                             <input type="text" id="data-saving-path" placeholder="选择保存训练数据的文件夹" aria-label="数据保存路径">
                             <button class="btn-secondary" id="btn-browse-path" style="white-space:nowrap">浏览</button>
                         </div>
-                        <div class="hint">录音结束后将保存音频(WAV)和转写文本(JSON)到该目录</div>
+                        <div class="hint">录音结束后将保存音频(WAV)和转录文本(JSON)到该目录</div>
                     </div>
                 </div>
 
@@ -266,21 +266,21 @@
                             <div class="help-step-num">2</div>
                             <div class="help-step-body">
                                 <div class="help-step-title">对着麦克风说话</div>
-                                <div class="help-step-desc">正常音量即可。开启实时转写后，文字会实时显示在浮动窗口中。</div>
+                                <div class="help-step-desc">正常音量即可。开启实时转录后，文字会实时显示在浮动窗口中。</div>
                             </div>
                         </div>
                         <div class="help-step">
                             <div class="help-step-num">3</div>
                             <div class="help-step-body">
                                 <div class="help-step-title">松开热键</div>
-                                <div class="help-step-desc">松开即触发完整转写（ Whisper ），如有开启 LLM 纠错会随后自动处理。</div>
+                                <div class="help-step-desc">松开即触发完整转录（ Whisper ），如有开启 LLM 纠错会随后自动处理。</div>
                             </div>
                         </div>
                         <div class="help-step">
                             <div class="help-step-num">4</div>
                             <div class="help-step-body">
                                 <div class="help-step-title">文字自动粘贴</div>
-                                <div class="help-step-desc">转写结果通过剪贴板 + Ctrl+V 注入当前焦点应用。如开启「粘贴前确认」，会先弹出编辑窗口。</div>
+                                <div class="help-step-desc">转录结果通过剪贴板 + Ctrl+V 粘贴到当前焦点应用。如开启「粘贴前确认」，会先弹出编辑窗口。</div>
                             </div>
                         </div>
                     </div>
@@ -299,8 +299,8 @@
                             <div class="help-item-body">在「通用」设置页选择语言，更改后立即生效，无需重启。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">实时转写不显示文字</div>
-                            <div class="help-item-body">确认「通用」设置中已开启「实时语音转写」开关；同时确保模型已下载完成。</div>
+                            <div class="help-item-title">实时转录不显示文字</div>
+                            <div class="help-item-body">确认「通用」设置中已开启「实时语音转录」开关；同时确保模型已下载完成。</div>
                         </div>
                         <div class="help-item">
                             <div class="help-item-title">模型下载速度慢</div>
@@ -365,7 +365,7 @@
                     </summary>
                     <div class="help-section-body">
                         <div class="help-item">
-                            <div class="help-item-title">管理员权限应用无法注入文字</div>
+                            <div class="help-item-title">管理员权限应用无法粘贴文字</div>
                             <div class="help-item-body">如果目标窗口以管理员权限运行（如任务管理器、某些 IDE），本软件无法向其粘贴文字。这是 Windows 安全模型的限制。</div>
                         </div>
                         <div class="help-item">
@@ -373,8 +373,8 @@
                             <div class="help-item-body">某些应用（如截图工具、Office 套件）可能长时间占用剪贴板。本软件已设置 2 秒超时保护，超时会自动报错恢复。</div>
                         </div>
                         <div class="help-item">
-                            <div class="help-item-title">实时转写准确性较低</div>
-                            <div class="help-item-body">实时转写基于 5 秒滑动窗口的短音频片段，准确性略低于热键松开后对完整录音的全量识别。最终文本以全量识别为准。</div>
+                            <div class="help-item-title">实时转录准确性较低</div>
+                            <div class="help-item-body">实时转录基于 5 秒滑动窗口的短音频片段，准确性略低于热键松开后对完整录音的全量识别。最终文本以全量识别为准。</div>
                         </div>
                         <div class="help-item">
                             <div class="help-item-title">GPU 模式首次加载耗时</div>

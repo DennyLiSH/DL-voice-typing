@@ -42,7 +42,7 @@ listen('review-show', async () => {
             updateButtons();
         }
     } catch (_e) {
-        errorMsg.textContent = '加载转写结果失败';
+        errorMsg.textContent = '加载转录结果失败';
     }
     textarea.focus();
     if (textarea.value) {

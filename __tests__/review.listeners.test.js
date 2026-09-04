@@ -75,7 +75,7 @@ describe('review-show listener', () => {
 
         await listeners['review-show']();
 
-        expect(get('error-msg').textContent).toBe('加载转写结果失败');
+        expect(get('error-msg').textContent).toBe('加载转录结果失败');
     });
 });
 
