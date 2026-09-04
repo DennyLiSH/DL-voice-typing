@@ -293,7 +293,7 @@ fn create_overlay_windows(app: &mut tauri::App) -> Result<(), tauri::Error> {
         "review",
         tauri::WebviewUrl::App("review.html".into()),
     )
-    .title("Review")
+    .title("确认粘贴")
     .inner_size(420.0, 220.0)
     .decorations(false)
     .transparent(true)

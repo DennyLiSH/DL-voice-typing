@@ -415,6 +415,7 @@ saveBtn.addEventListener('click', async () => {
     saveBtn.textContent = '保存中...';
     saveBtn.classList.add('saving');
 
+    const prevHotkey = loadedConfig?.hotkey;
     try {
         await call('save_settings', { config });
         loadedConfig = config;
@@ -422,6 +423,9 @@ saveBtn.addEventListener('click', async () => {
         // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
         let saveMsg = '✓ 已保存';
         let saveMsgType = 'success';
+        if (config.hotkey !== prevHotkey) {
+            saveMsg = '✓ 已保存（新热键重启应用后生效）';
+        }
         try {
             const wantAutostart = autostartToggle.classList.contains('active');
             const autostartAvailable = await call('is_autostart_available');
