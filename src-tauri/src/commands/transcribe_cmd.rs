@@ -145,10 +145,17 @@ pub fn get_inject_target(
 }
 
 fn peek_inject_target(pt: &PendingTranscribe) -> Option<String> {
-    let guard = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd")?;
-    match guard.as_ref() {
-        Some(h) if crate::win32::is_window_valid(*h) => crate::win32::get_window_title(*h),
-        _ => None,
+    // Copy the HWND out and drop the guard before any Win32 call — same
+    // lock discipline as the inject path's take-then-call (GetWindowTextW
+    // sends WM_GETTEXT and can block).
+    let hwnd: isize = {
+        let guard = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd")?;
+        *guard.as_ref()?
+    };
+    if crate::win32::is_window_valid(hwnd) {
+        crate::win32::get_window_title(hwnd)
+    } else {
+        None
     }
 }
 
