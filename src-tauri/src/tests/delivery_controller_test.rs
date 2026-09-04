@@ -398,6 +398,13 @@ impl WindowController for CallRecordingWindowController {
             c.push("restore_foreground");
         }
     }
+    fn show_floating_corner(&self) -> bool {
+        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
+            c.push("show_floating_corner");
+        }
+        true
+    }
+    fn set_tray_tooltip(&self, _tooltip: &str) {}
 }
 
 /// Window controller that simulates a missing review window so the fallback
@@ -422,6 +429,10 @@ impl WindowController for HiddenReviewWindowController {
     fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
     fn restore_foreground_hwnd(&self, _hwnd: isize) {}
+    fn show_floating_corner(&self) -> bool {
+        true
+    }
+    fn set_tray_tooltip(&self, _tooltip: &str) {}
 }
 
 // -----------------------------------------------------------------------------
@@ -476,6 +487,10 @@ impl WindowController for RecordingWindowController {
     fn restore_foreground_hwnd(&self, hwnd: isize) {
         self.record("restore_foreground_hwnd", Some(hwnd));
     }
+    fn show_floating_corner(&self) -> bool {
+        true
+    }
+    fn set_tray_tooltip(&self, _tooltip: &str) {}
 }
 
 #[tokio::test]

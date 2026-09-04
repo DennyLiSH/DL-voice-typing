@@ -26,6 +26,13 @@ pub trait WindowController: Send + Sync {
     fn emit_review_final_text(&self, text: &str);
     /// Restore focus to the saved foreground window handle.
     fn restore_foreground_hwnd(&self, hwnd: isize);
+    /// Show the floating indicator pinned to the primary monitor's work-area
+    /// bottom-right corner (record-only long sessions — must not cover the
+    /// caret where the user keeps typing). Returns `true` if shown.
+    fn show_floating_corner(&self) -> bool;
+    /// Update the system tray tooltip (secondary status channel for
+    /// record-only sessions whose floating window may be occluded).
+    fn set_tray_tooltip(&self, tooltip: &str);
 }
 
 /// Tauri-based implementation of window operations.
@@ -120,6 +127,35 @@ impl WindowController for TauriWindowController {
     fn restore_foreground_hwnd(&self, hwnd: isize) {
         crate::win32::restore_foreground_hwnd(hwnd);
     }
+
+    fn show_floating_corner(&self) -> bool {
+        // (0, 0) = monitor-from-point origin → the primary monitor's work
+        // area (the point (0,0) always lies on the primary). Deliberately NOT
+        // the caret coordinates — the record-only indicator must stay away
+        // from where the user is typing.
+        let win_w = 180.0_f64;
+        let win_h = 180.0_f64;
+        let margin = 12.0;
+        let mut x = 0.0;
+        let mut y = 0.0;
+        if let Some((_left, _top, right, bottom)) = crate::win32::get_monitor_work_area(0, 0) {
+            x = (right as f64 - win_w - margin).max(0.0);
+            y = (bottom as f64 - win_h - margin).max(0.0);
+        }
+        if let Some(win) = self.app.get_webview_window("floating") {
+            let _ = win.set_position(Position::Logical(tauri::LogicalPosition::new(x, y)));
+            let _ = win.show();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn set_tray_tooltip(&self, tooltip: &str) {
+        if let Some(tray) = self.app.tray_by_id("default") {
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
+    }
 }
 
 /// No-op window controller for tests or headless environments.
@@ -143,6 +179,10 @@ impl WindowController for NoopWindowController {
     fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
     fn restore_foreground_hwnd(&self, _hwnd: isize) {}
+    fn show_floating_corner(&self) -> bool {
+        true
+    }
+    fn set_tray_tooltip(&self, _tooltip: &str) {}
 }
 
 /// Helper to create the appropriate window controller from an AppHandle.

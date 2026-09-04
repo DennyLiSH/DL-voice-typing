@@ -38,6 +38,47 @@ let hideTimeout = null;
 let rafId = null;
 let isSpringActive = false;
 
+// Record-only in-flight timer state (long sessions: 30min+).
+let recordOnlyTimer = null;
+let recordOnlySeconds = 0;
+
+function formatDuration(totalSeconds) {
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function stopRecordOnlyTimer() {
+    if (recordOnlyTimer) {
+        clearInterval(recordOnlyTimer);
+        recordOnlyTimer = null;
+    }
+}
+
+function updateRecordOnlyText() {
+    transcriptText.textContent = `录音中 ${formatDuration(recordOnlySeconds)}`;
+    transcriptText.classList.remove('error');
+    transcriptText.classList.add('visible');
+}
+
+function showRecordOnly() {
+    // The record-only look is CSS-driven (breathe keyframes + tint), so any
+    // inline background/shadow/transform left by the spring-driven modes
+    // must be cleared — inline styles beat class rules.
+    indicator.style.background = '';
+    indicator.style.boxShadow = '';
+    indicator.style.transform = '';
+    indicator.classList.remove('processing', 'error', 'exit');
+    indicator.classList.add('record-only', 'visible');
+    stopRecordOnlyTimer();
+    recordOnlySeconds = 0;
+    updateRecordOnlyText();
+    recordOnlyTimer = setInterval(() => {
+        recordOnlySeconds += 1;
+        updateRecordOnlyText();
+    }, 1000);
+}
+
 function updateVisuals(visualRms) {
     const c = getColor(visualRms);
     indicator.style.background = `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${c[3].toFixed(2)})`;
@@ -134,7 +175,8 @@ function hide(delay = 0) {
     }
     // Remove any lingering ripples
     document.querySelectorAll('.ripple').forEach((r) => r.remove());
-    indicator.classList.remove('visible', 'processing');
+    stopRecordOnlyTimer();
+    indicator.classList.remove('visible', 'processing', 'record-only');
     indicator.classList.add('exit');
     transcriptText.textContent = '';
     transcriptText.classList.remove('visible', 'error');
@@ -162,10 +204,14 @@ function showError(eventName, payload) {
 }
 
 function showRecording() {
+    // Defensive double cleanup: backend escape hatches (watchdog/tray reset)
+    // only OS-hide the window — the webview interval would otherwise keep
+    // overwriting transcription-partial text with the record-only timer.
+    stopRecordOnlyTimer();
     indicator.style.background = BASE_BG;
     indicator.style.boxShadow = BASE_SHADOW;
     indicator.style.transform = `scale(${MIN_SCALE})`;
-    indicator.classList.remove('processing', 'error', 'exit');
+    indicator.classList.remove('processing', 'error', 'exit', 'record-only');
     currentScale = MIN_SCALE;
     velocity = 0;
     targetScale = MIN_SCALE;
@@ -173,9 +219,11 @@ function showRecording() {
 }
 
 function showProcessing() {
-    // Clear partial transcript — final transcription is in progress.
-    transcriptText.textContent = '';
-    transcriptText.classList.remove('visible');
+    // Placeholder text keeps the transcript area from going blank while the
+    // final transcription runs (same textContent path as the error states).
+    transcriptText.textContent = '转录中…';
+    transcriptText.classList.remove('error');
+    transcriptText.classList.add('visible');
     // Let spring settle naturally before switching to CSS animation
     targetScale = 1.0;
     const settleAndTransition = () => {
@@ -237,4 +285,49 @@ listen('speech-error', (event) => {
 
 listen('llm-error', (event) => {
     showError('llm-error', event.payload);
+});
+
+// Record-only mode: long-session indicator (corner-pinned breathing circle
+// + mm:ss timer). Payloads are OBJECTS ({stem}/{stem,status}/{message}),
+// unlike the bare-string error payloads above.
+listen('record-only-started', () => {
+    show();
+    showRecordOnly();
+});
+
+listen('record-only-finished', (event) => {
+    stopRecordOnlyTimer();
+    indicator.classList.remove('record-only');
+    if (event.payload?.status === 'failed') {
+        // Backpressure controlled stop: the WAV was finalized but lost
+        // >3.2s of audio — surface it as an error, not "saved".
+        indicator.style.background = '';
+        indicator.style.boxShadow = '';
+        indicator.classList.add('error');
+        transcriptText.textContent = '录音保存失败（丢块过多）';
+        transcriptText.classList.add('visible', 'error');
+        hide(4500);
+    } else {
+        transcriptText.textContent = '录音已保存';
+        transcriptText.classList.remove('error');
+        transcriptText.classList.add('visible');
+        hide(1500);
+    }
+});
+
+listen('record-only-error', (event) => {
+    // Not routed through showError: it resolves defaults by event name and
+    // passes object payloads straight to errorDisplayText, which falls back
+    // to the table key and would lose the backend message. Unpack here.
+    stopRecordOnlyTimer();
+    indicator.classList.remove('record-only', 'processing');
+    indicator.style.background = '';
+    indicator.style.boxShadow = '';
+    indicator.classList.add('error', 'visible');
+    transcriptText.textContent = errorDisplayText(
+        event.payload?.message,
+        '录音失败',
+    );
+    transcriptText.classList.add('visible', 'error');
+    hide(4500);
 });

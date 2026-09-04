@@ -117,6 +117,11 @@ impl RecordOnlySession {
 
         if let Err(e) = Self::start_session(ps, &policy) {
             error!("record-only: failed to start session: {e}");
+            // The floating window is never shown on this path (it is shown at
+            // the end of a successful start_session), so the tray tooltip is
+            // the only visible feedback channel for the failed start.
+            ps.window_controller()
+                .set_tray_tooltip("语文兔 - 录音启动失败");
             ps.emitter().emit(
                 "record-only-error",
                 serde_json::json!({"message": "录音启动失败，请检查数据保存路径"}),
@@ -158,6 +163,10 @@ impl RecordOnlySession {
         let Some(session) = ps.take_record_only_session() else {
             if ps.sm_state() == Some(StateTag::RecordOnly) {
                 warn!("recover: RecordOnly state without an active session; resetting");
+                // No session ⇒ no finished event ⇒ the frontend never learns
+                // to hide the indicator. Backend must do it here.
+                ps.window_controller().hide_floating();
+                ps.window_controller().set_tray_tooltip("语文兔 - 就绪");
                 ps.sm_reset();
             }
             return;
@@ -192,6 +201,12 @@ impl RecordOnlySession {
             }),
         );
         info!("record_only_finalized: {stem} status={status} dropped={dropped}");
+
+        // The frontend shows a "已保存" confirmation on the finished event and
+        // hides the floating window itself — hiding here would race the IPC
+        // delivery and cut the confirmation short. Only the tray tooltip is
+        // restored on the backend side.
+        ps.window_controller().set_tray_tooltip("语文兔 - 就绪");
 
         // (4) State machine must return to Idle regardless of earlier failures.
         if !ps.sm_finish_record_only() {
@@ -245,6 +260,14 @@ impl RecordOnlySession {
             push_cell,
         });
         Self::spawn_backpressure_monitor(ps.clone(), dropped);
+        // Best-effort in-flight indicator (symmetric with the classic
+        // pipeline's show_floating_near_caret): pinned to the primary
+        // monitor's bottom-right corner so a 30min+ session never covers the
+        // caret where the user keeps typing.
+        if !ps.window_controller().show_floating_corner() {
+            warn!("record-only: failed to show floating corner indicator");
+        }
+        ps.window_controller().set_tray_tooltip("语文兔 - 录音中…");
         ps.emitter()
             .emit("record-only-started", serde_json::json!({"stem": stem}));
         info!("record_only_started: {stem}");
@@ -347,6 +370,13 @@ mod tests {
     use std::sync::Mutex;
 
     fn build_ps(config: AppConfig) -> (PipelineState, Arc<MockEmitter>) {
+        build_ps_with_wc(config, Arc::new(NoopWindowController))
+    }
+
+    fn build_ps_with_wc(
+        config: AppConfig,
+        wc: Arc<dyn crate::commands::window_controller::WindowController>,
+    ) -> (PipelineState, Arc<MockEmitter>) {
         let emitter = Arc::new(MockEmitter::new());
         let ps = PipelineState::new(
             Arc::new(Mutex::new(StateMachine::new())),
@@ -357,11 +387,69 @@ mod tests {
             ConfigCache::new(config),
             Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("x"))))),
             Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
+            wc,
             emitter.clone() as Arc<dyn EventEmitter>,
             Arc::new(MockReviewProvider::new()),
         );
         (ps, emitter)
+    }
+
+    /// One recorded window-controller call: (method, tooltip arg).
+    type WcCall = (&'static str, Option<String>);
+
+    /// Records every call as (name, tooltip-arg) for the in-flight indicator
+    /// (floating corner + tray tooltip) call-order asserts.
+    struct CallTrayWindowController {
+        calls: Arc<Mutex<Vec<WcCall>>>,
+    }
+
+    impl CallTrayWindowController {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn record(&self, name: &'static str, arg: Option<&str>) {
+            if let Some(mut c) = crate::util::lock_mutex(&self.calls, "ctw_controller") {
+                c.push((name, arg.map(|s| s.to_string())));
+            }
+        }
+
+        fn take_calls(&self) -> Vec<WcCall> {
+            crate::util::lock_mutex(&self.calls, "ctw_controller")
+                .map(|mut c| c.drain(..).collect())
+                .unwrap_or_default()
+        }
+    }
+
+    impl crate::commands::window_controller::WindowController for CallTrayWindowController {
+        fn show_floating_near_caret(&self) -> bool {
+            true
+        }
+        fn hide_floating(&self) {
+            self.record("hide_floating", None);
+        }
+        fn show_review_near_caret(&self) -> bool {
+            true
+        }
+        fn hide_review(&self) {}
+        fn focus_review(&self) -> bool {
+            true
+        }
+        fn eval_review_js(&self, _js: &str) -> bool {
+            true
+        }
+        fn emit_review_show(&self) {}
+        fn emit_review_final_text(&self, _text: &str) {}
+        fn restore_foreground_hwnd(&self, _hwnd: isize) {}
+        fn show_floating_corner(&self) -> bool {
+            self.record("show_floating_corner", None);
+            true
+        }
+        fn set_tray_tooltip(&self, tooltip: &str) {
+            self.record("set_tray_tooltip", Some(tooltip));
+        }
     }
 
     fn record_only_config(dir: &Path) -> AppConfig {
@@ -517,6 +605,104 @@ mod tests {
         ps.force_state_tag(StateTag::RecordOnly);
         RecordOnlySession::recover(&ps);
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -------------------------------------------------------------------------
+    // In-flight indicator (floating corner + tray tooltip) call contracts.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_press_shows_corner_indicator_and_recording_tooltip() {
+        let dir = temp_dir("press-indicator");
+        let wc = Arc::new(CallTrayWindowController::new());
+        let (ps, _) = build_ps_with_wc(record_only_config(&dir), wc.clone());
+        RecordOnlySession::on_press(&ps);
+        let calls = wc.take_calls();
+        assert_eq!(
+            calls,
+            vec![
+                ("show_floating_corner", None),
+                ("set_tray_tooltip", Some("语文兔 - 录音中…".to_string())),
+            ]
+        );
+        ps.sm_reset();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_press_failure_only_signals_tray_no_indicator() {
+        // Empty data_saving_path fails before any UI mutation; the tray
+        // tooltip is the sole feedback channel (the floating window was
+        // never shown).
+        let mut config = record_only_config(Path::new("unused"));
+        config.data_saving_path = String::new();
+        let wc = Arc::new(CallTrayWindowController::new());
+        let (ps, emitter) = build_ps_with_wc(config, wc.clone());
+        RecordOnlySession::on_press(&ps);
+        assert_eq!(
+            wc.take_calls(),
+            vec![(
+                "set_tray_tooltip",
+                Some("语文兔 - 录音启动失败".to_string())
+            )]
+        );
+        assert!(emitted(&emitter, "record-only-error"));
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+    }
+
+    #[test]
+    fn test_orphan_recover_hides_indicator_and_restores_tooltip() {
+        let dir = temp_dir("orphan-indicator");
+        let wc = Arc::new(CallTrayWindowController::new());
+        let (ps, _) = build_ps_with_wc(record_only_config(&dir), wc.clone());
+        ps.force_state_tag(StateTag::RecordOnly);
+        RecordOnlySession::recover(&ps);
+        let calls = wc.take_calls();
+        assert!(calls.contains(&("hide_floating", None)));
+        assert!(calls.contains(&("set_tray_tooltip", Some("语文兔 - 就绪".to_string()))));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_normal_press_recover_restores_tooltip_without_backend_hide() {
+        // The frontend owns the happy-path hide (confirmation display);
+        // the backend only restores the tray tooltip after `finished`.
+        let dir = temp_dir("normal-indicator");
+        let wc = Arc::new(CallTrayWindowController::new());
+        let (ps, emitter) = build_ps_with_wc(record_only_config(&dir), wc.clone());
+        RecordOnlySession::on_press(&ps);
+        RecordOnlySession::recover(&ps);
+        let calls = wc.take_calls();
+        assert!(!calls.contains(&("hide_floating", None)));
+        assert_eq!(
+            calls,
+            vec![
+                ("show_floating_corner", None),
+                ("set_tray_tooltip", Some("语文兔 - 录音中…".to_string())),
+                ("set_tray_tooltip", Some("语文兔 - 就绪".to_string())),
+            ]
+        );
+        assert!(emitted(&emitter, "record-only-finished"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_double_recover_hides_at_most_once() {
+        let dir = temp_dir("double-recover-indicator");
+        let wc = Arc::new(CallTrayWindowController::new());
+        let (ps, _) = build_ps_with_wc(record_only_config(&dir), wc.clone());
+        RecordOnlySession::on_press(&ps);
+        RecordOnlySession::recover(&ps);
+        RecordOnlySession::recover(&ps);
+        // Second recover: sm is already Idle and the session slot is empty,
+        // so the orphan branch never fires → no extra hide.
+        let hides = wc
+            .take_calls()
+            .into_iter()
+            .filter(|(name, _)| *name == "hide_floating")
+            .count();
+        assert_eq!(hides, 0);
         let _ = fs::remove_dir_all(&dir);
     }
 
