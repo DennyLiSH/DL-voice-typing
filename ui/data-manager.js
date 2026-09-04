@@ -365,6 +365,23 @@ function wireDataListEvents() {
             }
             renderDataList();
         });
+
+        // Keyboard activation for row expand (mirrors the click path; the
+        // native controls inside the row keep their own key handling).
+        list.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const row = e.target.closest('.data-row');
+            if (!row || row !== e.target) return; // only the row itself
+            e.preventDefault();
+            const filename = row.dataset.filename;
+            if (!filename) return;
+            if (dataState.expandedRowId === filename) {
+                dataState.expandedRowId = null;
+            } else {
+                dataState.expandedRowId = filename;
+            }
+            renderDataList();
+        });
     }
 
     const selectAllCb = $data('data-select-all-cb');

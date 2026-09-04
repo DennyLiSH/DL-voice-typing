@@ -174,9 +174,15 @@ describe('Data list — render contract', () => {
         expect(missingRow.querySelector('.audio-missing-badge')).not.toBeNull();
     });
 
-    it('row is NOT focusable (constraint F4: no tabindex)', () => {
+    it('row IS the keyboard-reachable expand control (F4 evolved 2026-09-04)', () => {
+        // F4 originally banned row tabindex so it never competed with the
+        // inner controls for focus. The 4th-round review (P2: expand was
+        // mouse-only) evolved the contract: the row itself is the expand
+        // control — one list-level tab stop + Enter/Space activation,
+        // tracked by aria-expanded.
         const row = buildRecordingRow(sampleEntries[0]);
-        expect(row.getAttribute('tabindex')).toBeNull();
+        expect(row.tabIndex).toBe(0);
+        expect(row.getAttribute('aria-expanded')).toBe('false');
     });
 
     it('expanded row appends metadata with four lines', () => {
@@ -226,10 +232,11 @@ describe('Data list — state machine (constraint coverage)', () => {
         expect(sm.audioPlayerRowId).toBeNull();
     });
 
-    it('constraint #4/F4: rows do not capture keyboard focus', () => {
+    it('constraint #4/F4 (evolved 2026-09-04): row is the expand tab stop', () => {
         const row = buildRecordingRow(sampleEntries[0]);
-        // The row itself has no tabindex; only checkbox + buttons do.
-        expect(row.getAttribute('tabindex')).toBeNull();
+        // The row is now the keyboard-reachable expand control (one tab
+        // stop); inner controls keep their own native focusability.
+        expect(row.tabIndex).toBe(0);
         const cb = row.querySelector('.data-row-cb');
         const play = row.querySelector('.btn-play');
         const del = row.querySelector('.btn-delete');
@@ -469,5 +476,19 @@ describe('Data list — vi mocks sanity', () => {
             expect(mockInvoke).toHaveBeenCalledTimes(1);
             expect(resp.total).toBe(0);
         });
+    });
+});
+
+describe('Data list — keyboard expand affordance (2026-09-04)', () => {
+    it('rows expose tabindex + aria-expanded driven by opts.expanded', () => {
+        const collapsed = buildRecordingRow(sampleEntries[0], {});
+        expect(collapsed.tabIndex).toBe(0);
+        expect(collapsed.getAttribute('aria-expanded')).toBe('false');
+
+        const expanded = buildRecordingRow(sampleEntries[0], {
+            expanded: true,
+        });
+        expect(expanded.getAttribute('aria-expanded')).toBe('true');
+        expect(expanded.classList.contains('expanded')).toBe(true);
     });
 });

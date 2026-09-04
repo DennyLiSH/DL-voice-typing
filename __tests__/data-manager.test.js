@@ -162,3 +162,63 @@ describe('audio blob lifecycle', () => {
         expect(URL.createObjectURL).not.toHaveBeenCalled();
     });
 });
+
+describe('row expand keyboard activation', () => {
+    it('Enter on the row toggles the expanded state (delegated keydown)', async () => {
+        await loadFresh(defaultInvoke);
+        mod.onDataPageEnter();
+        await flush();
+        await flush();
+
+        const row = document.querySelector('.data-row');
+        expect(row).not.toBeNull();
+        expect(row.getAttribute('aria-expanded')).toBe('false');
+
+        row.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+        await flush();
+
+        const after = document.querySelector('.data-row');
+        expect(after.getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('Space collapses an expanded row; keys on inner controls are ignored', async () => {
+        await loadFresh(defaultInvoke);
+        mod.onDataPageEnter();
+        await flush();
+        await flush();
+
+        // renderDataList rebuilds rows on each toggle — re-query before
+        // every dispatch (the detached old row would not bubble to the list).
+        document
+            .querySelector('.data-row')
+            .dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+            );
+        await flush();
+        expect(
+            document.querySelector('.data-row').getAttribute('aria-expanded'),
+        ).toBe('true');
+
+        document
+            .querySelector('.data-row')
+            .dispatchEvent(
+                new KeyboardEvent('keydown', { key: ' ', bubbles: true }),
+            );
+        await flush();
+        expect(
+            document.querySelector('.data-row').getAttribute('aria-expanded'),
+        ).toBe('false');
+
+        // Key events originating on an inner control must not toggle.
+        const cb = document.querySelector('.data-row-cb');
+        cb.dispatchEvent(
+            new KeyboardEvent('keydown', { key: ' ', bubbles: true }),
+        );
+        await flush();
+        expect(
+            document.querySelector('.data-row').getAttribute('aria-expanded'),
+        ).toBe('false');
+    });
+});
