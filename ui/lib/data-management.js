@@ -336,15 +336,18 @@ export function computeOffsetAfterDeletion(
 }
 
 /**
- * Confirmation message for delete operations. Per design-review F5, the text
- * explicitly says "永久删除" and "不可恢复" / "不会进入回收站".
+ * Confirmation message for delete operations. Per P2 用户控制权专项,
+ * the copy reflects the actual semantics: soft-delete with a 5-second undo
+ * window after the dialog closes. "应用退出则无法撤销" makes the lifetime
+ * of the pending window explicit (a crash kills the timer; startup sweep
+ * reaps residuals).
  *
  * @param {number} count - how many recordings will be deleted
  * @returns {string}
  */
 export function deleteConfirmMessage(count) {
     if (count === 1) {
-        return '确定永久删除这条录音？此操作不可恢复（不会进入回收站）。';
+        return '确定删除这条录音？删除后 5 秒内可撤销，应用退出则无法撤销。';
     }
-    return `确定永久删除选中的 ${count} 条录音？此操作不可恢复（不会进入回收站）。`;
+    return `确定删除选中的 ${count} 条录音？删除后 5 秒内可撤销，应用退出则无法撤销。`;
 }

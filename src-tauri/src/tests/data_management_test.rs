@@ -3,12 +3,15 @@
 //! Lives in `src/tests/` to keep production source files free of `.unwrap()`.
 
 use crate::commands::data_management_cmd::{
-    FailedDelete, friendly_delete_error, friendly_io_error, is_valid_stem, resolve_base,
-    resolve_child, scan_and_collect,
+    FailedDelete, PendingDeletes, friendly_delete_error, friendly_io_error, is_valid_stem,
+    resolve_base, resolve_child, scan_and_collect, soft_delete_files, sweep_pending_dir,
 };
+use crate::config::AppConfig;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 fn write_recording(base: &Path, stem: &str, transcription: Option<&str>) {
     fs::create_dir_all(base).expect("mkdir");
@@ -325,4 +328,238 @@ fn test_scan_defaults_classic_source_when_missing() {
     assert_eq!(entries[0].dropped_blocks, 0);
 
     cleanup(&dir);
+}
+
+// ===========================================================================
+// Soft-delete (P2 用户控制权专项) tests — moved-to-pending rename + 5s undo + sweep
+// ===========================================================================
+
+/// Per-test tempdir unique by pid + atomic counter to avoid parallel test
+/// collisions. `line!()` from inside `fresh_tempdir` is the same for every
+/// call — using an AtomicUsize counter instead keeps each test isolated.
+use std::sync::atomic::{AtomicUsize, Ordering};
+static TEMPDIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn fresh_tempdir() -> PathBuf {
+    let n = TEMPDIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "dl-test-{}-{}-{}",
+        std::process::id(),
+        n,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    dir
+}
+
+#[test]
+fn soft_delete_moves_pair_to_pending_and_restores() {
+    let base = fresh_tempdir();
+    let stem = "2026-09-05_10-00-00";
+    write_recording(&base, stem, Some("hello"));
+
+    // Soft-delete via the testable core (returns pairs for restore).
+    let (moved, failed, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    assert_eq!(moved, 1, "one stem moved (stem-counted, not file-counted)");
+    assert!(failed.is_empty());
+    assert_eq!(pairs.len(), 2, "wav + json pair");
+
+    // Original files gone, pending files present.
+    assert!(!base.join(format!("{stem}.wav")).exists());
+    assert!(!base.join(format!("{stem}.json")).exists());
+    let pending = base.join(".dl_pending");
+    assert!(pending.join(format!("{stem}.wav")).exists());
+    assert!(pending.join(format!("{stem}.json")).exists());
+
+    // Restore via PendingDeletes.take_entry — same shape as the command path.
+    let pd = Arc::new(PendingDeletes::default());
+    let id = pd.schedule(pairs);
+    let entry = pd.take_entry(id).expect("entry exists pre-window");
+    let mut restored = 0;
+    for (orig, src) in &entry.pairs {
+        if fs::rename(src, orig).is_ok() {
+            restored += 1;
+        }
+    }
+    assert_eq!(restored, 2);
+    assert!(base.join(format!("{stem}.wav")).exists());
+    assert!(base.join(format!("{stem}.json")).exists());
+    assert!(!pending.join(format!("{stem}.wav")).exists());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn soft_delete_rejects_invalid_stem_zero_io() {
+    let base = fresh_tempdir();
+    let bad = vec![
+        "../evil".to_string(),
+        "a\\b".to_string(),
+        "short".to_string(),
+        "".to_string(),
+    ];
+    let (moved, failed, pairs) = soft_delete_files(&base, &bad);
+    assert_eq!(moved, 0);
+    assert_eq!(failed.len(), bad.len(), "all rejected");
+    for f in &failed {
+        assert_eq!(f.error, "文件名不合法");
+    }
+    assert!(pairs.is_empty(), "zero filesystem side effects");
+    assert!(!base.join(".dl_pending").exists());
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn soft_delete_missing_files_count_as_moved_without_io() {
+    let base = fresh_tempdir();
+    let stem = "2026-09-05_10-00-01";
+    // No write_recording — files absent on disk.
+    let (moved, failed, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    assert_eq!(moved, 1, "target state already reached");
+    assert!(failed.is_empty());
+    assert!(pairs.is_empty(), "no pairs to track");
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn finalize_after_window_removes_pending_and_clears_entry() {
+    let base = fresh_tempdir();
+    let stem = "2026-09-05_10-00-02";
+    write_recording(&base, stem, Some("t"));
+
+    let (moved, _, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    assert_eq!(moved, 1);
+    let pd = Arc::new(PendingDeletes::default());
+    let id = pd.schedule(pairs);
+
+    // Simulate "5s passed, user did not undo" by driving finalize_by_id directly.
+    pd.finalize_by_id(id);
+
+    // Pending file should be gone.
+    let pending = base.join(".dl_pending");
+    assert!(!pending.join(format!("{stem}.wav")).exists());
+    assert!(!pending.join(format!("{stem}.json")).exists());
+    // Entry consumed — take_entry returns None (the take-once invariant).
+    assert!(
+        pd.take_entry(id).is_none(),
+        "take-once consumed by finalize"
+    );
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn restore_unknown_id_is_error() {
+    let base = fresh_tempdir();
+    let pd = PendingDeletes::default();
+    let result = pd.restore_with_id(99);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.code, "VALIDATION");
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn restore_partial_failure_leaves_failed_pairs_for_sweep() {
+    let base = fresh_tempdir();
+    let stem = "2026-09-05_10-00-03";
+    write_recording(&base, stem, Some("x"));
+
+    let (moved, _, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    assert_eq!(moved, 1);
+    let pd = Arc::new(PendingDeletes::default());
+    let id = pd.schedule(pairs);
+
+    // Yank one of the pending files before the user hits Undo — simulates
+    // a process holding the file open or a manual edit.
+    let pending = base.join(".dl_pending");
+    let wav_pending = pending.join(format!("{stem}.wav"));
+    assert!(wav_pending.exists());
+    fs::remove_file(&wav_pending).unwrap();
+
+    // restore_pending_delete: entry is consumed (take-once), but the missing
+    // pair stays gone (no orphan to restore) — restore_report returns 1/1
+    // restored (json only).
+    let report = pd.restore_with_id(id).expect("entry exists");
+    assert_eq!(report.restored, 1, "json restored, wav was already missing");
+    assert!(!pd.has_entry(id), "entry taken");
+
+    // Original wav: still missing (rename src was gone — no-op); json back.
+    assert!(!base.join(format!("{stem}.wav")).exists());
+    assert!(base.join(format!("{stem}.json")).exists());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn sweep_removes_residual_pending_files() {
+    let base = fresh_tempdir();
+    let pending = base.join(".dl_pending");
+    fs::create_dir_all(&pending).unwrap();
+    // Two legitimate files
+    fs::write(pending.join("2026-09-05_10-00-00.wav"), b"fake").unwrap();
+    fs::write(pending.join("2026-09-05_10-00-00.json"), b"{}").unwrap();
+    // One ill-named (should NOT be swept — stem invalid)
+    fs::write(pending.join("attacker.txt"), b"x").unwrap();
+
+    let cfg = AppConfig {
+        data_saving_path: base.to_string_lossy().to_string(),
+        ..AppConfig::default()
+    };
+    sweep_pending_dir(&cfg);
+
+    assert!(!pending.join("2026-09-05_10-00-00.wav").exists());
+    assert!(!pending.join("2026-09-05_10-00-00.json").exists());
+    assert!(pending.join("attacker.txt").exists(), "ill-named file kept");
+
+    // Empty/missing config path is a no-op (does not panic).
+    let cfg_empty = AppConfig {
+        data_saving_path: String::new(),
+        ..AppConfig::default()
+    };
+    sweep_pending_dir(&cfg_empty); // no panic
+
+    let cfg_missing = AppConfig {
+        data_saving_path: "/no/such/dir/xyz/abc".to_string(),
+        ..AppConfig::default()
+    };
+    sweep_pending_dir(&cfg_missing); // no panic
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn restore_with_id_returns_validation_when_id_unknown() {
+    let base = fresh_tempdir();
+    let pd = PendingDeletes::default();
+    let err = pd.restore_with_id(12345).unwrap_err();
+    assert_eq!(err.code, "VALIDATION");
+    assert!(err.message.contains("撤销") || err.message.contains("过期"));
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn schedule_stores_entry_and_timer_runs_finalize() {
+    // End-to-end: schedule a timer, sleep >5s, verify entry is gone and file removed.
+    let base = fresh_tempdir();
+    let stem = "2026-09-05_10-00-04";
+    write_recording(&base, stem, Some("z"));
+    let (moved, _, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    assert_eq!(moved, 1);
+
+    let pd: Arc<PendingDeletes> = Arc::new(PendingDeletes::default());
+    let id = pd.schedule(pairs);
+    assert!(pd.has_entry(id));
+
+    // Wait for the 5s std::thread timer to fire and finalize.
+    std::thread::sleep(Duration::from_secs(6));
+    assert!(!pd.has_entry(id), "timer consumed the entry");
+    let pending = base.join(".dl_pending");
+    assert!(!pending.join(format!("{stem}.wav")).exists());
+
+    let _ = fs::remove_dir_all(&base);
 }

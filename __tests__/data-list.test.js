@@ -299,22 +299,21 @@ describe('Data list — state machine (constraint coverage)', () => {
     });
 
     it('constraint F3: batch delete partial success message includes counts', () => {
-        // Simulate backend result
+        // Simulate backend result (P2 用户控制权专项: moved instead of deleted)
         const result = {
-            deleted: 3,
+            moved: 3,
             failed: [{ filename: '2026-06-23_10-15-42', error: '文件被占用' }],
         };
-        const msg = `已删除 ${result.deleted} 条，失败 ${result.failed.length} 条`;
+        const msg = `已移动 ${result.moved} 条到待撤销，失败 ${result.failed.length} 条`;
         expect(msg).toContain('3');
         expect(msg).toContain('1');
     });
 
-    it('constraint F5: delete confirm message warns permanent + no recycle bin', () => {
+    it('constraint F5: delete confirm message advertises the 5-second undo window', () => {
         const msg1 = deleteConfirmMessage(1);
         const msg5 = deleteConfirmMessage(5);
-        expect(msg1).toMatch(/永久删除/);
-        expect(msg1).toMatch(/不可恢复/);
-        expect(msg1).toMatch(/不会进入回收站/);
+        expect(msg1).toMatch(/确定删除/);
+        expect(msg1).toMatch(/5 秒内可撤销/);
         expect(msg5).toContain('5');
     });
 

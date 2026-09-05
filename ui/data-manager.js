@@ -8,6 +8,7 @@ import {
     formatBytes,
     getPageRange,
 } from './lib/data-management.js';
+import { destroyPendingToast, showPendingToast } from './lib/pending-toast.js';
 import {
     attachAudio,
     loadRecordings,
@@ -431,7 +432,17 @@ async function handleSingleDelete(filename) {
     });
     if (!ok) return;
     try {
-        await call('delete_recording', { filename });
+        // Soft-delete → 5-second undo window. The pending-toast replaces the
+        // old hard-delete (which had no recourse once confirmed).
+        const result = await call('soft_delete_recordings', {
+            filenames: [filename],
+        });
+        if (result.moved > 0) {
+            showPendingToast({
+                moved: result.moved,
+                onUndo: () => undoDelete(result.id),
+            });
+        }
         // Clear audio state if it was this row (constraint #10a).
         if (dataState.audioPlayerRowId === filename) {
             releaseAudio();
@@ -453,6 +464,12 @@ async function handleSingleDelete(filename) {
         } else {
             await loadRecordingsPage(dataState.offset);
         }
+        if (result.failed && result.failed.length > 0) {
+            const failedList = result.failed
+                .map((f) => `${f.filename}：${f.error}`)
+                .join('\n');
+            showDataError(`部分删除失败：\n${failedList}`);
+        }
     } catch (e) {
         showDataError(
             `删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
@@ -471,7 +488,13 @@ async function handleBatchDelete() {
     if (!ok) return;
     const filenames = Array.from(dataState.selectedFiles);
     try {
-        const result = await call('delete_recordings', { filenames });
+        const result = await call('soft_delete_recordings', { filenames });
+        if (result.moved > 0) {
+            showPendingToast({
+                moved: result.moved,
+                onUndo: () => undoDelete(result.id),
+            });
+        }
         dataState.selectedFiles.clear();
         // Clear audio if it was a selected row.
         if (
@@ -487,6 +510,9 @@ async function handleBatchDelete() {
             dataState.expandedRowId = null;
         }
         // Compute new offset using fresh total (constraint #9 + F6).
+        // `moved` is the count of stems that actually transitioned to
+        // pending; `filenames.length` is the user's selection (used for
+        // page math since the user no longer expects those rows to exist).
         const deletedCount = filenames.length;
         const newOffset = computeOffsetAfterDeletion(
             dataState.total,
@@ -501,7 +527,7 @@ async function handleBatchDelete() {
                 .map((f) => `${f.filename}：${f.error}`)
                 .join('\n');
             showDataError(
-                `已删除 ${result.deleted} 条，失败 ${result.failed.length} 条：\n${failedList}`,
+                `已移动 ${result.moved} 条到待撤销，失败 ${result.failed.length} 条：\n${failedList}`,
             );
         }
     } catch (e) {
@@ -509,6 +535,40 @@ async function handleBatchDelete() {
             `批量删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
         );
     }
+}
+
+/**
+ * Undo handler wired into the pending-toast's 撤销 button. Always refreshes
+ * the list afterwards (success or failure) so the user sees the final
+ * state of the recordings.
+ *
+ * @param {number} id - the soft-delete batch id returned by the backend
+ */
+async function undoDelete(id) {
+    try {
+        const restored = await call('restore_pending_delete', { id });
+        showDataError(`已撤销删除，恢复 ${restored} 条。`);
+    } catch (e) {
+        const msg = typeof e === 'string' ? e : e?.message || '未知错误';
+        showDataError(`撤销失败：${msg}`);
+    }
+    // Refresh regardless — failed restore leaves the files in pending,
+    // successful restore brings them back; either way the list needs reload.
+    try {
+        await loadRecordingsPage(dataState.offset);
+    } catch (_e) {
+        // loadRecordingsPage already surfaces its own error-bar message;
+        // swallowing here avoids a double error.
+    }
+}
+
+/**
+ * Lifecycle: drop any in-flight undo toast when leaving the data page
+ * (window close, navigation). The backend timer keeps running and will
+ * finalize naturally — the user just can't click Undo from another page.
+ */
+export function destroyPendingToastOnLeave() {
+    destroyPendingToast();
 }
 
 // Wire events after DOM is ready (script runs at end of body, so DOM is ready).

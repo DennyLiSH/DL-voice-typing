@@ -71,6 +71,10 @@ function defaultInvoke(cmd) {
             });
         case 'read_recording_audio':
             return Promise.resolve([1, 2, 3]);
+        case 'soft_delete_recordings':
+            return Promise.resolve({ id: 42, moved: 1, failed: [] });
+        case 'restore_pending_delete':
+            return Promise.resolve(1);
         default:
             return Promise.resolve(null);
     }

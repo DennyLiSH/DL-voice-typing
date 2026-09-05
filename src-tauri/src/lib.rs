@@ -67,12 +67,22 @@ pub fn run() {
                 streaming_recorder::salvage_incomplete_recordings(std::path::Path::new(
                     &config.data_saving_path,
                 ));
+                // Sweep residual .dl_pending/ files from a previous crashed
+                // or killed process. The 5s undo window is gone — these are
+                // either successfully-restored (file not present) or stale.
+                commands::data_management_cmd::sweep_pending_dir(&config);
             }
             let _engine = init_and_manage_engine(app.handle(), &config);
             create_overlay_windows(app)?;
             // Managed BEFORE manage_pipeline_state — from_app's try_state must
             // find it for the RecordingEmitter decorator on the first build.
             app.manage(Arc::new(commands::error_history::ErrorHistory::new()));
+            // PendingDeletes registry for the soft-delete 5s undo window
+            // (P2 用户控制权专项). Process-lifetime; the timer threads hold
+            // Arc clones.
+            app.manage(std::sync::Arc::new(
+                commands::data_management_cmd::PendingDeletes::default(),
+            ));
             manage_pipeline_state(
                 app.handle(),
                 state_machine.clone(),
@@ -105,8 +115,8 @@ pub fn run() {
             commands::perf_cmd::get_perf_history,
             commands::error_history::get_last_errors,
             commands::data_management_cmd::list_saved_recordings,
-            commands::data_management_cmd::delete_recording,
-            commands::data_management_cmd::delete_recordings,
+            commands::data_management_cmd::soft_delete_recordings,
+            commands::data_management_cmd::restore_pending_delete,
             commands::data_management_cmd::get_data_usage,
             commands::data_management_cmd::read_recording_audio,
             commands::review::confirm_inject,

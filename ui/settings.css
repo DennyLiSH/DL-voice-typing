@@ -740,6 +740,50 @@ button:disabled {
     display: none;
 }
 
+/* Pending (soft-delete) undo toast — fixed bottom-right single-instance slot.
+ * Counterpart to the in-page error bar; the toast uses the same surface
+ * treatment so the two feedback channels share visual weight. */
+.pending-toast {
+    position: fixed;
+    right: var(--space-5);
+    bottom: var(--space-5);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-lg, 0 4px 16px rgba(0, 0, 0, 0.2));
+    font-size: var(--font-label);
+    animation: status-pop 300ms var(--ease-spring, ease);
+    z-index: 300;
+}
+
+.pending-toast-text {
+    white-space: nowrap;
+}
+
+.pending-toast-undo {
+    background: transparent;
+    color: var(--accent, #3abab4);
+    border: none;
+    font-size: var(--font-label);
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+}
+
+.pending-toast-undo:hover {
+    background: rgba(var(--accent-rgb, 58 186 180), 0.1);
+}
+
+.pending-toast-undo:focus-visible {
+    outline: 2px solid var(--accent, #3abab4);
+    outline-offset: 2px;
+}
+
 .data-batch-bar {
     display: flex;
     align-items: center;

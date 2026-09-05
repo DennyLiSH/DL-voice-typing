@@ -179,17 +179,17 @@ describe('computeOffsetAfterDeletion', () => {
 describe('deleteConfirmMessage', () => {
     it('returns singular message for count=1', () => {
         const msg = deleteConfirmMessage(1);
-        expect(msg).toContain('永久删除');
-        expect(msg).toContain('不可恢复');
-        expect(msg).toContain('不会进入回收站');
+        expect(msg).toContain('确定删除');
+        expect(msg).toContain('5 秒内可撤销');
+        expect(msg).toContain('应用退出则无法撤销');
         expect(msg).not.toContain('1');
     });
 
     it('returns plural message with count for count>1', () => {
         const msg = deleteConfirmMessage(5);
-        expect(msg).toContain('永久删除');
+        expect(msg).toContain('确定删除');
         expect(msg).toContain('5');
-        expect(msg).toContain('不可恢复');
+        expect(msg).toContain('5 秒内可撤销');
     });
 });
 
