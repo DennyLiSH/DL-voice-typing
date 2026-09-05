@@ -1,3 +1,4 @@
+import { INJECTION_ERROR_MSG } from './lib/errors.js';
 import {
     errorDisplayText,
     getColor,
@@ -187,7 +188,7 @@ function hide(delay = 0) {
 const ERROR_DEFAULTS = {
     'speech-error': '语音识别失败',
     'llm-error': 'LLM 纠错失败，已保留原始转录',
-    'injection-error': '文本粘贴失败，原剪贴板内容已尝试恢复',
+    'injection-error': INJECTION_ERROR_MSG,
 };
 
 function showError(eventName, payload) {

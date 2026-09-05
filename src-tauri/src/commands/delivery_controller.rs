@@ -16,7 +16,7 @@ use super::recording_session::SessionPolicy;
 /// User-facing payload for the `injection-error` event: the floating/review
 /// windows have no room for the raw clipboard error string, so they show this
 /// fixed Chinese summary while the English detail stays in the `warn!` log.
-pub(crate) const INJECTION_ERROR_USER_MSG: &str = "文本粘贴失败，原剪贴板内容已尝试恢复";
+pub(crate) const INJECTION_ERROR_USER_MSG: &str = "粘贴失败，本次文字未保存，原剪贴板已恢复";
 
 /// Mutable delivery context held for the duration of a review cycle.
 ///

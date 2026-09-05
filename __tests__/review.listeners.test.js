@@ -135,18 +135,18 @@ describe('speech-error listener', () => {
 describe('injection-error listener', () => {
     it('renders payload as-is (backend sends a complete user-facing sentence)', () => {
         listeners['injection-error']({
-            payload: '文本粘贴失败，原剪贴板内容已尝试恢复',
+            payload: '粘贴失败，本次文字未保存，原剪贴板已恢复',
         });
 
         expect(get('error-msg').textContent).toBe(
-            '文本粘贴失败，原剪贴板内容已尝试恢复',
+            '粘贴失败，本次文字未保存，原剪贴板已恢复',
         );
     });
 
     it('renders default fallback when payload is empty', () => {
         listeners['injection-error']({ payload: '' });
 
-        expect(get('error-msg').textContent).toBe('粘贴失败，剪贴板被占用');
+        expect(get('error-msg').textContent).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
     });
 
     // Regression guard for review.js:82 contract:

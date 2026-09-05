@@ -4,21 +4,21 @@ import { formatInjectionError } from '../ui/review-utils.js';
 describe('formatInjectionError', () => {
     it('renders non-empty payload as-is (backend sends a complete user-facing sentence)', () => {
         expect(
-            formatInjectionError('文本粘贴失败，原剪贴板内容已尝试恢复'),
-        ).toBe('文本粘贴失败，原剪贴板内容已尝试恢复');
+            formatInjectionError('粘贴失败，本次文字未保存，原剪贴板已恢复'),
+        ).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
     });
 
     it('renders default fallback when payload is empty string', () => {
-        expect(formatInjectionError('')).toBe('粘贴失败，剪贴板被占用');
+        expect(formatInjectionError('')).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
     });
 
     it('renders default fallback when payload is non-string', () => {
-        expect(formatInjectionError(null)).toBe('粘贴失败，剪贴板被占用');
-        expect(formatInjectionError(undefined)).toBe('粘贴失败，剪贴板被占用');
+        expect(formatInjectionError(null)).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
+        expect(formatInjectionError(undefined)).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
         expect(formatInjectionError({ msg: 'x' })).toBe(
-            '粘贴失败，剪贴板被占用',
+            '粘贴失败，本次文字未保存，原剪贴板已恢复',
         );
-        expect(formatInjectionError(42)).toBe('粘贴失败，剪贴板被占用');
+        expect(formatInjectionError(42)).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
     });
 
     it('truncates payload longer than 500 chars', () => {
