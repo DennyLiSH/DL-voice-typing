@@ -26,10 +26,13 @@ const MINIMAL_DOM = `
   <div id="container"></div>
   <div class="sidebar"></div>
   <div class="sidebar-item" data-page="general"></div>
+  <div class="sidebar-item" data-page="help"></div>
   <div class="page-content" id="page-general"></div>
-  <select id="language"></select>
-  <select id="hotkey"></select>
-  <select id="whisper-model"></select>
+  <div class="page-content" id="page-help"></div>
+  <div id="error-history-list"></div>
+  <select id="language"><option value="zh"></option></select>
+  <select id="hotkey"><option value="RightCtrl"></option></select>
+  <select id="whisper-model"><option value="base"></option></select>
   <div id="model-status-text"></div>
   <button id="btn-download-model"></button>
   <div id="download-progress"></div>
@@ -48,7 +51,7 @@ const MINIMAL_DOM = `
   <button id="save-btn"></button>
   <div id="save-status"></div>
   <div id="error-banner"></div>
-  <select id="download-mirror"></select>
+  <select id="download-mirror"><option value="Official"></option></select>
   <div id="data-saving-toggle"></div>
   <div id="data-saving-fields"></div>
   <input id="data-saving-path" />
@@ -58,7 +61,7 @@ const MINIMAL_DOM = `
   <div id="realtime-transcription-toggle"></div>
   <div id="record-only-toggle"></div>
   <div id="record-only-hotkey-group"></div>
-  <select id="record-only-hotkey"></select>
+  <select id="record-only-hotkey"><option value="RightAlt"></option></select>
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
   <div id="data-error-bar"></div>
@@ -271,5 +274,92 @@ describe('api-url credential warning hint visibility', () => {
         await flush();
 
         expect(warning().hidden).toBe(false);
+    });
+});
+
+describe('help page recent-errors section', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    async function loadWithErrors(cmd, records) {
+        invokeMock = vi.fn(async (c) => {
+            if (c === 'get_config') {
+                return {
+                    language: 'zh',
+                    hotkey: 'RightCtrl',
+                    whisper_model: 'base',
+                    llm_enabled: false,
+                    llm_api_url: '',
+                    llm_api_key: '',
+                    llm_model: '',
+                    download_mirror: 'Official',
+                    data_saving_enabled: false,
+                    data_saving_path: '',
+                    review_before_paste: false,
+                    autostart: false,
+                    realtime_transcription: false,
+                    record_only_enabled: false,
+                    record_only_hotkey: 'RightAlt',
+                };
+            }
+            if (c === 'get_whisper_models') {
+                return { built_in: { base: true }, custom: [] };
+            }
+            if (c === 'get_last_errors') {
+                if (cmd === 'fail') throw new Error('backend gone');
+                return records;
+            }
+            return null;
+        });
+        vi.stubGlobal('__TAURI__', {
+            event: { listen: vi.fn(() => () => {}) },
+            core: { invoke: invokeMock },
+            app: { getVersion: vi.fn(async () => '0.0.0-test') },
+            autostart: { enable: vi.fn(), disable: vi.fn() },
+        });
+        document.body.innerHTML = MINIMAL_DOM;
+        vi.resetModules();
+        await import('../ui/settings.js');
+        await new Promise((r) => setTimeout(r, 10));
+        // Navigate to the help page (switchPage is async + exported).
+        const { switchPage } = await import('../ui/app-shell.js');
+        await switchPage('help');
+        await new Promise((r) => setTimeout(r, 10));
+    }
+
+    it('renders the most recent errors with channel labels', async () => {
+        await loadWithErrors('ok', [
+            {
+                timestamp: '2026-09-05T10:00:00+08:00',
+                event: 'speech-error',
+                message: '模型未下载，请在 设置→模型 下载',
+            },
+            {
+                timestamp: '2026-09-05T11:00:00+08:00',
+                event: 'injection-error',
+                message: '粘贴失败，本次文字未保存，原剪贴板已恢复',
+            },
+        ]);
+        const items = document.querySelectorAll('.error-history-item');
+        expect(items.length).toBe(2);
+        expect(items[0].querySelector('.badge').textContent).toBe('语音识别');
+        expect(items[0].querySelector('.error-history-message').textContent)
+            .toBe('模型未下载，请在 设置→模型 下载');
+        expect(items[1].querySelector('.badge').textContent).toBe('文本粘贴');
+    });
+
+    it('shows the empty-state hint when history is empty', async () => {
+        await loadWithErrors('ok', []);
+        const list = document.getElementById('error-history-list');
+        expect(list.querySelector('.hint').textContent).toBe('暂无错误记录');
+        expect(document.querySelectorAll('.error-history-item').length).toBe(0);
+    });
+
+    it('shows the failure hint when the invoke rejects (no error popup)', async () => {
+        await loadWithErrors('fail', null);
+        const list = document.getElementById('error-history-list');
+        expect(list.querySelector('.hint').textContent).toBe('无法加载错误记录');
     });
 });

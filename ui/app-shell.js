@@ -62,7 +62,77 @@ export async function switchPage(pageName) {
     // Page enter hook: reset + reload data list when entering data sub-page.
     if (pageName === 'data') {
         onDataPageEnter();
+    } else if (pageName === 'help') {
+        refreshErrorHistory();
     }
+}
+
+// --- Recent Errors (help page) ---
+
+const CHANNEL_LABELS = {
+    'speech-error': '语音识别',
+    'llm-error': 'LLM 纠错',
+    'injection-error': '文本粘贴',
+    'record-only-error': '录音模式',
+    'transcription-error': '转录',
+    'hotkey-error': '热键注册',
+};
+
+// Generation guard: a stale response from a previous help-page visit must
+// not overwrite a newer render (help → away → help rapid switching).
+let errorHistorySeq = 0;
+
+async function refreshErrorHistory() {
+    const list = document.getElementById('error-history-list');
+    if (!list) return;
+    const seq = ++errorHistorySeq;
+    let records;
+    try {
+        records = await call('get_last_errors', { n: 3 });
+    } catch (_e) {
+        if (seq === errorHistorySeq) {
+            renderErrorHistoryHint(list, '无法加载错误记录');
+        }
+        return;
+    }
+    if (seq !== errorHistorySeq) return;
+    if (!Array.isArray(records) || records.length === 0) {
+        renderErrorHistoryHint(list, '暂无错误记录');
+        return;
+    }
+    list.textContent = '';
+    for (const record of records) {
+        const item = document.createElement('div');
+        item.className = 'error-history-item';
+
+        const time = document.createElement('div');
+        time.className = 'error-history-time';
+        time.textContent = record.timestamp;
+        item.appendChild(time);
+
+        const head = document.createElement('div');
+        head.className = 'error-history-head';
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-warning';
+        badge.textContent = CHANNEL_LABELS[record.event] || record.event;
+        head.appendChild(badge);
+        item.appendChild(head);
+
+        const message = document.createElement('div');
+        message.className = 'error-history-message';
+        message.textContent = record.message || '（无详情）';
+        item.appendChild(message);
+
+        list.appendChild(item);
+    }
+}
+
+function renderErrorHistoryHint(list, text) {
+    list.textContent = '';
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = text;
+    list.appendChild(hint);
 }
 
 sidebarItems.forEach((item) => {

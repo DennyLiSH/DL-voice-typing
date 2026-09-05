@@ -1048,3 +1048,32 @@ button:disabled {
 .form-group.disabled .hint {
     opacity: 0.5;
 }
+
+/* --------------------------------------------------------------------------
+   Recent errors (help page)
+   -------------------------------------------------------------------------- */
+.error-history-item {
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.error-history-item:last-child {
+    border-bottom: none;
+}
+
+.error-history-time {
+    font-size: var(--font-hint);
+    color: var(--text-tertiary);
+    margin-bottom: 2px;
+}
+
+.error-history-head {
+    margin-bottom: 4px;
+}
+
+.error-history-message {
+    font-size: var(--font-body);
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+}
