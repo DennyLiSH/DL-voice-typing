@@ -432,15 +432,26 @@ fn manage_pipeline_state(
 /// confirm/cancel context flow (stored on one instance, taken on the other).
 /// Must be called after `manage_pipeline_state` (which manages PipelineState).
 fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyManager {
-    let hotkey_name = config.hotkey.clone();
     let mut hotkey_manager = WindowsHotkeyManager::new();
     let ps = app
         .state::<commands::pipeline_state::PipelineState>()
         .inner()
         .clone();
     let callback = commands::make_hotkey_callback(ps.clone());
-    if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
-        warn!("failed to register hotkey '{hotkey_name}': {e}");
+    // Stage 6 fix #2 — preserve load-path observability. The object-form
+    // HotkeySpec accepts any u32 vk on load; warn here if vk_to_key_name
+    // round-trip fails so the spec is a known "dead" hotkey.
+    if crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(config.hotkey.vk)).is_none() {
+        warn!(
+            "config hotkey vk={:#x} has no name representation; keydown will not match",
+            config.hotkey.vk
+        );
+    }
+    if let Err(e) = hotkey_manager.register(config.hotkey, callback) {
+        warn!(
+            "failed to register hotkey '{}': {e}",
+            config.hotkey.display()
+        );
     }
     // P1 Esc-cancel: register the cancel-slot dispatcher. The hook must
     // already be installed (above) so the dispatcher reaches the hook proc.
@@ -452,10 +463,10 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
     }
     if config.record_only_enabled {
         let callback = commands::record_only_session::make_record_only_callback(ps);
-        if let Err(e) = hotkey_manager.register_record_only(&config.record_only_hotkey, callback) {
+        if let Err(e) = hotkey_manager.register_record_only(config.record_only_hotkey, callback) {
             warn!(
                 "failed to register record-only hotkey '{}': {e}",
-                config.record_only_hotkey
+                config.record_only_hotkey.display()
             );
         }
     }

@@ -36,15 +36,21 @@ impl ConfigCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hotkey::windows::HotkeySpec;
 
     #[test]
     fn test_cache_reads_initial_config() {
         let config = AppConfig {
-            hotkey: "F9".to_string(),
+            hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0x78, // F9
+            },
             ..Default::default()
         };
         let cache = ConfigCache::new(config.clone());
         let cached = cache.read_cached();
-        assert_eq!(cached.hotkey, "F9");
+        assert_eq!(cached.hotkey.vk, 0x78);
     }
 }

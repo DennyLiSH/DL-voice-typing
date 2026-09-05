@@ -1,5 +1,4 @@
 use super::hotkey_pipeline::make_hotkey_callback;
-use super::pipeline_state::PipelineState;
 use crate::config::{ApiKeyMask, AppConfig};
 use crate::error::CommandError;
 use crate::hotkey::HotkeyManager;
@@ -68,7 +67,7 @@ pub fn save_settings(
     // Re-register hotkey if changed.
     if hotkey_changed {
         let (tx, rx) = mpsc::channel();
-        let old_key = old_config.hotkey.clone();
+        let old_key = old_config.hotkey;
         let new_key = config.hotkey;
         let app_clone = app.clone();
 
@@ -83,27 +82,39 @@ pub fn save_settings(
                 }
             };
 
-            // Unregister old.
-            if let Err(e) = hm.unregister() {
+            // Unregister ONLY the primary slot (M2 fix — keeps record_only
+            // and cancel_esc live across save_settings re-registration).
+            // Full unregister() here would wipe the cancel_esc slot, which
+            // the Esc-cancel dispatcher reads from to abort an in-flight
+            // transcription. The hook itself is removed by unregister_primary
+            // only when all three slots are clear.
+            if let Err(e) = hm.unregister_primary() {
                 let _ = tx.send(Err(format!("unregister failed: {e}")));
                 return;
             }
 
-            // Build callback with current state references.
-            let callback = make_hotkey_callback(PipelineState::from_app(&app_clone));
+            // M3 fix — pull the managed single PipelineState instance instead
+            // of constructing a new one with PipelineState::from_app. The new
+            // instance would have an independent DeliveryController context,
+            // and the cancel_esc callback would target the wrong PS.
+            let ps_managed = app_clone
+                .state::<super::pipeline_state::PipelineState>()
+                .inner()
+                .clone();
+            let callback = make_hotkey_callback(ps_managed.clone());
 
             // Try registering the new key.
-            match hm.register(&new_key, callback) {
+            match hm.register(new_key, callback) {
                 Ok(()) => {
                     let _ = tx.send(Ok(()));
                 }
                 Err(e) => {
                     // Fallback: re-register the old key.
-                    let fallback_callback =
-                        make_hotkey_callback(PipelineState::from_app(&app_clone));
-                    let _ = hm.register(&old_key, fallback_callback);
+                    let fallback_callback = make_hotkey_callback(ps_managed);
+                    let _ = hm.register(old_key, fallback_callback);
                     let _ = tx.send(Err(format!(
-                        "新热键注册失败({e})，已回退到旧热键: {old_key}"
+                        "新热键注册失败({e})，已回退到旧热键: {}",
+                        old_key.display()
                     )));
                 }
             }
@@ -145,12 +156,21 @@ pub fn save_settings(
 mod tests {
     use crate::config::AppConfig;
     use crate::config::WhisperModel;
+    use crate::hotkey::windows::HotkeySpec;
 
     #[test]
     fn test_read_cached_returns_default() {
         let cache = crate::config::ConfigCache::new(AppConfig::default());
         let result = cache.read_cached();
-        assert_eq!(result.hotkey, "RightCtrl");
+        assert_eq!(
+            result.hotkey,
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA3,
+            }
+        );
     }
 
     #[test]
@@ -175,8 +195,14 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_invalid_hotkey() {
+        // vk=0 is the simplest invalid object form — no name roundtrip.
         let config = AppConfig {
-            hotkey: "NoSuchKey".to_string(),
+            hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0,
+            },
             ..Default::default()
         };
         assert!(config.validate().is_err());

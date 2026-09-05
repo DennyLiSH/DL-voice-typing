@@ -102,6 +102,7 @@ pub fn scan_custom_models() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hotkey::windows::HotkeySpec;
     use std::fs;
 
     #[test]
@@ -111,7 +112,12 @@ mod tests {
         fs::create_dir_all(&dir)?;
 
         let config = AppConfig {
-            hotkey: "F9".to_string(),
+            hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0x78, // F9
+            },
             language: crate::config::Language::En,
             ..Default::default()
         };
@@ -122,7 +128,7 @@ mod tests {
         fs::write(&path, &content)?;
 
         let loaded: AppConfig = serde_json::from_str(&fs::read_to_string(&path)?)?;
-        assert_eq!(loaded.hotkey, "F9");
+        assert_eq!(loaded.hotkey.vk, 0x78);
         assert_eq!(loaded.language, crate::config::Language::En);
 
         let _ = fs::remove_dir_all(&dir);

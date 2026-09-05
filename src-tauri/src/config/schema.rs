@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::hotkey::parse_key_code;
+use crate::hotkey::windows::HotkeySpec;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -303,8 +303,9 @@ pub enum PipelineMode {
 /// Application configuration.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// Hotkey keycode name (default: "RightCtrl").
-    pub hotkey: String,
+    /// Hotkey spec (default: RightCtrl with no modifier flags).
+    #[serde(default = "default_hotkey")]
+    pub hotkey: HotkeySpec,
 
     /// Recognition language.
     #[serde(default)]
@@ -354,13 +355,27 @@ pub struct AppConfig {
     #[serde(default)]
     pub record_only_enabled: bool,
 
-    /// Hotkey keycode name for record-only mode (default: "RightAlt").
+    /// Hotkey spec for record-only mode (default: RightAlt with no modifier flags).
     #[serde(default = "default_record_only_hotkey")]
-    pub record_only_hotkey: String,
+    pub record_only_hotkey: HotkeySpec,
 }
 
-fn default_record_only_hotkey() -> String {
-    "RightAlt".to_string()
+fn default_hotkey() -> HotkeySpec {
+    HotkeySpec {
+        ctrl: false,
+        shift: false,
+        alt: false,
+        vk: 0xA3, // RightCtrl
+    }
+}
+
+fn default_record_only_hotkey() -> HotkeySpec {
+    HotkeySpec {
+        ctrl: false,
+        shift: false,
+        alt: false,
+        vk: 0xA5, // RightAlt
+    }
 }
 
 impl fmt::Debug for AppConfig {
@@ -395,7 +410,7 @@ impl fmt::Debug for AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            hotkey: "RightCtrl".to_string(),
+            hotkey: default_hotkey(),
             language: Language::Zh,
             whisper_model: WhisperModel::Base,
             llm_enabled: false,
@@ -418,17 +433,29 @@ impl AppConfig {
     /// Validate config fields.
     /// Model, language, and mirror are enforced by the type system (enums).
     pub fn validate(&self) -> Result<(), AppError> {
-        if parse_key_code(&self.hotkey).is_none() {
+        // vk must be non-zero AND the name roundtrip must succeed — this
+        // rejects arbitrary u32 values that the object-form Deserialize
+        // would otherwise accept silently (then surprise the user with a
+        // "dead" hotkey on first save).
+        if self.hotkey.vk == 0
+            || crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(self.hotkey.vk))
+                .is_none()
+        {
             let hotkey = &self.hotkey;
             return Err(AppError::Config(format!("invalid hotkey: {hotkey}")));
         }
-        if parse_key_code(&self.record_only_hotkey).is_none() {
+        if self.record_only_hotkey.vk == 0
+            || crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(
+                self.record_only_hotkey.vk,
+            ))
+            .is_none()
+        {
             let key = &self.record_only_hotkey;
             return Err(AppError::Config(format!(
                 "invalid record_only_hotkey: {key}"
             )));
         }
-        if self.record_only_enabled && self.hotkey.eq_ignore_ascii_case(&self.record_only_hotkey) {
+        if self.record_only_enabled && self.hotkey == self.record_only_hotkey {
             return Err(AppError::Config(
                 "hotkey and record_only_hotkey must be different".to_string(),
             ));
@@ -473,7 +500,15 @@ mod tests {
     #[test]
     fn test_default_values() {
         let config = AppConfig::default();
-        assert_eq!(config.hotkey, "RightCtrl");
+        assert_eq!(
+            config.hotkey,
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA3,
+            }
+        );
         assert_eq!(config.language, Language::Zh);
         assert_eq!(config.whisper_model, WhisperModel::Base);
         assert_eq!(config.download_mirror, DownloadMirror::HfMirror);
@@ -579,8 +614,15 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_invalid_hotkey() {
+        // vk=0 is invalid (the roundtrip would still fail because vk_to_key_name
+        // returns "VK0x0" and from_key_name cannot resolve it back).
         let config = AppConfig {
-            hotkey: "NoSuchKey".to_string(),
+            hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0,
+            },
             ..Default::default()
         };
         assert!(config.validate().is_err());
@@ -723,7 +765,15 @@ mod tests {
     fn test_record_only_defaults() {
         let config = AppConfig::default();
         assert!(!config.record_only_enabled);
-        assert_eq!(config.record_only_hotkey, "RightAlt");
+        assert_eq!(
+            config.record_only_hotkey,
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA5,
+            }
+        );
     }
 
     #[test]
@@ -746,13 +796,29 @@ mod tests {
             "realtime_transcription": false
         }"#;
         let parsed: AppConfig = serde_json::from_str(old_json)?;
-        assert_eq!(parsed.hotkey, "RightCtrl");
+        assert_eq!(
+            parsed.hotkey,
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA3,
+            }
+        );
         assert!(parsed.data_saving_enabled);
         assert_eq!(parsed.data_saving_path, "D:\\recordings");
         assert!(parsed.review_before_paste);
         assert!(parsed.autostart);
         assert!(!parsed.record_only_enabled);
-        assert_eq!(parsed.record_only_hotkey, "RightAlt");
+        assert_eq!(
+            parsed.record_only_hotkey,
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA5,
+            }
+        );
         Ok(())
     }
 
@@ -760,7 +826,12 @@ mod tests {
     fn test_validate_rejects_same_hotkeys_when_record_only_enabled() {
         let config = AppConfig {
             record_only_enabled: true,
-            record_only_hotkey: "RightCtrl".to_string(),
+            record_only_hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA3, // same as default hotkey
+            },
             ..Default::default()
         };
         assert!(config.validate().is_err());
@@ -769,7 +840,12 @@ mod tests {
     #[test]
     fn test_validate_rejects_invalid_record_only_hotkey() {
         let config = AppConfig {
-            record_only_hotkey: "NoSuchKey".to_string(),
+            record_only_hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0, // invalid — roundtrip fails
+            },
             ..Default::default()
         };
         assert!(config.validate().is_err());
@@ -779,7 +855,12 @@ mod tests {
     fn test_validate_accepts_record_only_with_distinct_hotkey() {
         let config = AppConfig {
             record_only_enabled: true,
-            record_only_hotkey: "RightAlt".to_string(),
+            record_only_hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA5,
+            },
             data_saving_path: "D:\\recordings".to_string(),
             ..Default::default()
         };
@@ -790,10 +871,206 @@ mod tests {
     fn test_validate_rejects_record_only_without_path() {
         let config = AppConfig {
             record_only_enabled: true,
-            record_only_hotkey: "RightAlt".to_string(),
+            record_only_hotkey: HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA5,
+            },
             data_saving_path: String::new(),
             ..Default::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    // ---- P2 HotkeySpec dual-form deserialize ----
+
+    #[test]
+    fn hotkey_spec_parses_object_form() {
+        let json = r#"{
+            "hotkey": {"ctrl":true,"shift":false,"alt":false,"vk":65},
+            "language": "zh",
+            "whisper_model": "base",
+            "llm_enabled": false,
+            "llm_api_url": "",
+            "llm_api_key": "",
+            "llm_model": "",
+            "data_saving_path": "",
+            "review_before_paste": false,
+            "autostart": false
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(json).expect("object form");
+        assert_eq!(
+            parsed.hotkey,
+            HotkeySpec {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                vk: 65,
+            }
+        );
+    }
+
+    #[test]
+    fn hotkey_spec_parses_legacy_string() {
+        let json = r#"{
+            "hotkey": "RightCtrl",
+            "language": "zh",
+            "whisper_model": "base",
+            "llm_enabled": false,
+            "llm_api_url": "",
+            "llm_api_key": "",
+            "llm_model": "",
+            "data_saving_path": "",
+            "review_before_paste": false,
+            "autostart": false
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(json).expect("legacy string");
+        assert_eq!(parsed.hotkey.vk, 0xA3);
+        assert!(!parsed.hotkey.ctrl);
+
+        // Aliases resolve to the same vk as canonical names.
+        let rctrl: AppConfig = serde_json::from_str(
+            r#"{"hotkey":"rctrl","language":"zh","whisper_model":"base","llm_enabled":false,"llm_api_url":"","llm_api_key":"","llm_model":"","data_saving_path":"","review_before_paste":false,"autostart":false}"#,
+        )
+        .expect("alias");
+        assert_eq!(rctrl.hotkey.vk, 0xA3);
+
+        // "escape" -> 0x1B.
+        let esc: AppConfig = serde_json::from_str(
+            r#"{"hotkey":"escape","language":"zh","whisper_model":"base","llm_enabled":false,"llm_api_url":"","llm_api_key":"","llm_model":"","data_saving_path":"","review_before_paste":false,"autostart":false}"#,
+        )
+        .expect("escape");
+        assert_eq!(esc.hotkey.vk, 0x1B);
+    }
+
+    #[test]
+    fn hotkey_spec_legacy_string_unknown_errors() {
+        // Unknown key name in legacy form must fail — silently accepting
+        // would let a typo downgrade to vk=0 and create a dead hotkey.
+        let json = r#"{
+            "hotkey": "NoSuchKey",
+            "language": "zh",
+            "whisper_model": "base",
+            "llm_enabled": false,
+            "llm_api_url": "",
+            "llm_api_key": "",
+            "llm_model": "",
+            "data_saving_path": "",
+            "review_before_paste": false,
+            "autostart": false
+        }"#;
+        let result: Result<AppConfig, _> = serde_json::from_str(json);
+        assert!(result.is_err(), "unknown legacy name must error");
+    }
+
+    #[test]
+    fn hotkey_spec_serializes_as_object() {
+        let config = AppConfig::default();
+        let json = serde_json::to_string(&config).expect("serialize");
+        // Save format: object, not string.
+        assert!(
+            json.contains(r#""hotkey":{"ctrl":false,"shift":false,"alt":false,"vk":163"#),
+            "hotkey must serialize as object: {json}"
+        );
+        assert!(
+            !json.contains(r#""hotkey":"RightCtrl""#),
+            "no legacy string form"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_zero_vk_and_duplicate_spec() {
+        // Zero vk -> invalid.
+        let zero = AppConfig {
+            hotkey: HotkeySpec {
+                vk: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(zero.validate().is_err(), "vk=0 rejected");
+
+        // Unknown vk (arbitrary u32 with no name representation) -> invalid.
+        let unknown = AppConfig {
+            hotkey: HotkeySpec {
+                vk: 32, // space — not in NAMED_KEYS, not a letter/digit
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            unknown.validate().is_err(),
+            "arbitrary u32 vk rejected by roundtrip check"
+        );
+
+        // Duplicate spec when record_only_enabled -> invalid.
+        let same = AppConfig {
+            record_only_enabled: true,
+            record_only_hotkey: HotkeySpec {
+                vk: 0xA3, // same as default hotkey
+                ..Default::default()
+            },
+            data_saving_path: "D:\\recordings".to_string(),
+            ..Default::default()
+        };
+        assert!(same.validate().is_err(), "duplicate hotkey spec rejected");
+    }
+
+    #[test]
+    fn default_specs_unchanged() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.hotkey,
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA3,
+            }
+        );
+        assert_eq!(
+            config.record_only_hotkey,
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA5,
+            }
+        );
+    }
+
+    #[test]
+    fn hotkey_spec_display_string() {
+        assert_eq!(
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA3,
+            }
+            .display(),
+            "RightCtrl"
+        );
+        assert_eq!(
+            HotkeySpec {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                vk: 0x41,
+            }
+            .display(),
+            "Ctrl+Shift+A"
+        );
+        assert_eq!(
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA5,
+            }
+            .display(),
+            "RightAlt"
+        );
     }
 }
