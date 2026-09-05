@@ -171,6 +171,49 @@ fn all_slots_empty(hs: &HookState) -> bool {
     hs.primary.is_none() && hs.record_only.is_none() && hs.cancel_esc.is_none()
 }
 
+/// Symmetric cross-slot conflict check. Called from both `register()`
+/// and `register_record_only()` so a new spec is rejected when it equals
+/// the OTHER slot's spec. `self_slot` tells the helper which slot the
+/// caller is filling in (so it only inspects the opposite slot).
+/// Pure function on `&HookState` — enables direct unit tests without
+/// driving the Win32 hook install path.
+fn validate_no_conflict(
+    spec: HotkeySpec,
+    hs: &HookState,
+    self_slot: SlotKind,
+) -> Result<(), AppError> {
+    match self_slot {
+        SlotKind::Primary => {
+            if let Some((other, _)) = &hs.record_only {
+                if *other == spec {
+                    return Err(AppError::Hotkey(
+                        "primary hotkey must differ from the record-only hotkey".to_string(),
+                    ));
+                }
+            }
+        }
+        SlotKind::RecordOnly => {
+            if let Some((other, _)) = &hs.primary {
+                if *other == spec {
+                    return Err(AppError::Hotkey(
+                        "record-only hotkey must differ from the primary hotkey".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Identifies which of the two user-facing slots a `register*` call is
+/// filling. Used by `validate_no_conflict` to look only at the OTHER
+/// slot's spec, keeping the helper symmetric.
+#[derive(Debug, Clone, Copy)]
+enum SlotKind {
+    Primary,
+    RecordOnly,
+}
+
 static HOOK_STATE: Mutex<Option<HookState>> = Mutex::new(None);
 
 /// P1 Esc-cancel swallow decision: true only when a cancel callback is
@@ -212,13 +255,7 @@ impl HotkeyManager for WindowsHotkeyManager {
             .lock()
             .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
         let hook_state = state.get_or_insert_with(HookState::default);
-        if let Some((primary_spec, _)) = &hook_state.primary {
-            if *primary_spec == spec {
-                return Err(AppError::Hotkey(
-                    "record-only hotkey must differ from the primary hotkey".to_string(),
-                ));
-            }
-        }
+        validate_no_conflict(spec, hook_state, SlotKind::Primary)?;
         hook_state.primary = Some((spec, Arc::from(callback)));
         Ok(())
     }
@@ -241,13 +278,7 @@ impl HotkeyManager for WindowsHotkeyManager {
             .lock()
             .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
         let hook_state = state.get_or_insert_with(HookState::default);
-        if let Some((primary_spec, _)) = &hook_state.primary {
-            if *primary_spec == spec {
-                return Err(AppError::Hotkey(
-                    "record-only hotkey must differ from the primary hotkey".to_string(),
-                ));
-            }
-        }
+        validate_no_conflict(spec, hook_state, SlotKind::RecordOnly)?;
         hook_state.record_only = Some((spec, Arc::from(callback)));
         Ok(())
     }
@@ -653,6 +684,38 @@ mod tests {
             !modifiers_match(&spec, mods),
             "extra shift held -> no match (strict)"
         );
+        // Both-direction Ctrl self-exclusion: a LeftCtrl spec must match
+        // when RightCtrl is held (and vice versa). Both vks live in the
+        // ctrl family, so the self-exclusion treats them symmetrically —
+        // a config using LeftCtrl (0xA2) would be dead without this.
+        let left_ctrl_spec = HotkeySpec {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            vk: 0xA2,
+        };
+        let mut mods = ModifiersDown::default();
+        // RightCtrl held while spec is LeftCtrl -> match (self-family).
+        update_modifiers(&mut mods, 0xA3, true);
+        assert!(
+            modifiers_match(&left_ctrl_spec, mods),
+            "LeftCtrl spec matches RightCtrl press (self-family both directions)"
+        );
+        // Inverse: LeftCtrl spec still matches when LeftCtrl is pressed.
+        let mut mods = ModifiersDown::default();
+        update_modifiers(&mut mods, 0xA2, true);
+        assert!(
+            modifiers_match(&left_ctrl_spec, mods),
+            "LeftCtrl spec matches LeftCtrl press (own vk)"
+        );
+        // And RightCtrl spec matches when LeftCtrl is pressed (the reverse
+        // direction of the existing first assertion).
+        let mut mods = ModifiersDown::default();
+        update_modifiers(&mut mods, 0xA2, true);
+        assert!(
+            modifiers_match(&spec, mods),
+            "RightCtrl spec matches LeftCtrl press (self-family both directions)"
+        );
     }
 
     #[test]
@@ -741,9 +804,69 @@ mod tests {
             alt: false,
             vk: 0x41,
         };
-        assert_ne!(a_ctrl, a_shift);
-        // Full equality: conflict.
-        assert_eq!(a_ctrl, a_ctrl);
+        // Different specs, neither slot populated -> ok.
+        let hs = HookState::default();
+        assert!(validate_no_conflict(a_ctrl, &hs, SlotKind::RecordOnly).is_ok());
+        assert!(validate_no_conflict(a_shift, &hs, SlotKind::RecordOnly).is_ok());
+        // Full equality: registering record_only that equals existing primary
+        // must error.
+        let hs_with_primary = HookState {
+            primary: Some((a_ctrl, dummy_callback())),
+            record_only: None,
+            cancel_esc: None,
+        };
+        let err = validate_no_conflict(a_ctrl, &hs_with_primary, SlotKind::RecordOnly)
+            .expect_err("record_only == primary must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("record-only hotkey must differ from the primary hotkey"),
+            "expected record-only vs primary message, got: {msg}"
+        );
+        // Spec mismatch against existing primary -> still ok (no false-positive).
+        assert!(
+            validate_no_conflict(a_shift, &hs_with_primary, SlotKind::RecordOnly).is_ok(),
+            "different vk/modifier combos do not collide"
+        );
+    }
+
+    #[test]
+    fn primary_conflict_requires_full_spec_equality() {
+        // Symmetric guard: registering a primary that equals existing
+        // record_only must error (silent-degradation regression — see
+        // commit d0f1288 / validate_no_conflict helper).
+        let spec_a = HotkeySpec {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            vk: 0xA3,
+        };
+        let spec_b = HotkeySpec {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            vk: 0xA5,
+        };
+        // Empty state: anything goes.
+        let hs = HookState::default();
+        assert!(validate_no_conflict(spec_a, &hs, SlotKind::Primary).is_ok());
+        // record_only holds spec_b; registering primary == spec_b must error.
+        let hs_with_record = HookState {
+            primary: None,
+            record_only: Some((spec_b, dummy_callback())),
+            cancel_esc: None,
+        };
+        let err = validate_no_conflict(spec_b, &hs_with_record, SlotKind::Primary)
+            .expect_err("primary == record_only must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("primary hotkey must differ from the record-only hotkey"),
+            "expected primary vs record-only message, got: {msg}"
+        );
+        // Different spec -> ok (false-positive guard).
+        assert!(
+            validate_no_conflict(spec_a, &hs_with_record, SlotKind::Primary).is_ok(),
+            "different vk does not collide"
+        );
     }
 
     // ---- P2 write-side modifier table: pure function, table-driven ----
