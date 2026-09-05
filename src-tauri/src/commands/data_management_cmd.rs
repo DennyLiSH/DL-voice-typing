@@ -247,6 +247,32 @@ pub(crate) fn soft_delete_files(
             });
             continue;
         }
+        // Create + canonicalize the pending dir once per stem. The
+        // `starts_with(base_canon)` check rejects `.dl_pending` swapped
+        // for a junction (mklink /J). Per-ext canonicalize removed (the
+        // rename is the only file-system call that follows; a concurrent
+        // attacker swapping the dir mid-loop would only move the
+        // already-renamed file into an attacker-chosen target, which
+        // gives no privilege over the source — both sides are user-
+        // owned).
+        if let Err(e) = std::fs::create_dir_all(&pending)
+            .and_then(|_| pending.canonicalize())
+            .and_then(|pc| {
+                if pc.starts_with(&base_canon) {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other(
+                        "pending dir escapes base (junction?)",
+                    ))
+                }
+            })
+        {
+            failed.push(FailedDelete {
+                filename: filename.clone(),
+                error: friendly_io_error(&e),
+            });
+            continue;
+        }
         let mut ok = true;
         let mut pair_moved: Vec<(PathBuf, PathBuf)> = Vec::new();
         for ext in ["wav", "json"] {
@@ -272,18 +298,7 @@ pub(crate) fn soft_delete_files(
                 continue;
             }
             let dest = pending.join(format!("{filename}.{ext}"));
-            let move_res = std::fs::create_dir_all(&pending)
-                .and_then(|_| pending.canonicalize())
-                .and_then(|pc| {
-                    if pc.starts_with(&base_canon) {
-                        Ok(())
-                    } else {
-                        Err(std::io::Error::other(
-                            "pending dir escapes base (junction?)",
-                        ))
-                    }
-                })
-                .and_then(|_| std::fs::rename(&orig, &dest));
+            let move_res = std::fs::rename(&orig, &dest);
             if let Err(e) = move_res {
                 failed.push(FailedDelete {
                     filename: filename.clone(),

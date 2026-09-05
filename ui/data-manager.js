@@ -65,8 +65,11 @@ export function onDataPageEnter() {
 }
 
 export function onDataPageLeave() {
-    // Full release: pause + revoke blob URL + clear state (constraint #2).
+    // Full release: pause + revoke blob URL + clear state (constraint #2),
+    // plus drop any in-flight undo toast (window close / navigation —
+    // backend timer keeps running and finalizes naturally).
     releaseAudio();
+    destroyPendingToast();
 }
 
 function resetDataListState() {
@@ -560,15 +563,6 @@ async function undoDelete(id) {
         // loadRecordingsPage already surfaces its own error-bar message;
         // swallowing here avoids a double error.
     }
-}
-
-/**
- * Lifecycle: drop any in-flight undo toast when leaving the data page
- * (window close, navigation). The backend timer keeps running and will
- * finalize naturally — the user just can't click Undo from another page.
- */
-export function destroyPendingToastOnLeave() {
-    destroyPendingToast();
 }
 
 // Wire events after DOM is ready (script runs at end of body, so DOM is ready).

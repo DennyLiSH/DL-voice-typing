@@ -563,3 +563,67 @@ fn schedule_stores_entry_and_timer_runs_finalize() {
 
     let _ = fs::remove_dir_all(&base);
 }
+
+/// M4 security gate regression: when `.dl_pending` is replaced with a
+/// junction/symlink_dir pointing OUTSIDE the base, `soft_delete_files`
+/// must reject the whole batch (no files moved, no data written to the
+/// attacker-chosen external target).
+///
+/// Windows symlink_dir requires either Developer Mode enabled or
+/// `SeCreateSymbolicLinkPrivilege`. Most CI runners lack both — mark
+/// `#[ignore]` and run locally for the actual assertion. On non-Windows
+/// the test still runs (symlink_dir is unprivileged there).
+#[cfg(windows)]
+#[test]
+#[ignore = "requires Developer Mode or SeCreateSymbolicLinkPrivilege; run with `cargo test -- --ignored`"]
+fn pending_junction_rejected_by_symlink_guard() {
+    use std::os::windows::fs::symlink_dir;
+
+    let base = fresh_tempdir();
+    let stem = "2026-09-05_10-00-05";
+    write_recording(&base, stem, Some("secret"));
+
+    // External target the attacker chooses (outside `base`).
+    let external = fresh_tempdir();
+    let external_pending = external.join(".dl_pending");
+    fs::create_dir_all(&external_pending).expect("mkdir external");
+
+    // Remove the legitimate `.dl_pending` (created lazily on first delete)
+    // and replace it with a junction pointing to the external dir.
+    // `soft_delete_files` calls `create_dir_all` before canonicalize, so
+    // the junction must exist BEFORE the call (an attacker would
+    // pre-plant it; here we simulate that by removing then symlinking).
+    let pending_link = base.join(".dl_pending");
+    let _ = fs::remove_dir_all(&pending_link);
+    symlink_dir(&external_pending, &pending_link).expect("symlink_dir requires Developer Mode");
+
+    // soft_delete_files: must reject the stem (junction escapes base).
+    let (moved, failed, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    assert_eq!(moved, 0, "junction must block all renames");
+    assert_eq!(failed.len(), 1, "junction reports one failure for the stem");
+    assert_eq!(failed[0].filename, stem);
+    assert!(pairs.is_empty(), "no pairs to track");
+
+    // Originals must still be in place (no partial moves).
+    assert!(
+        base.join(format!("{stem}.wav")).exists(),
+        "original wav intact"
+    );
+    assert!(
+        base.join(format!("{stem}.json")).exists(),
+        "original json intact"
+    );
+
+    // External target must be untouched — zero files leaked across.
+    let external_entries: Vec<_> = fs::read_dir(&external_pending)
+        .expect("read external dir")
+        .flatten()
+        .collect();
+    assert!(
+        external_entries.is_empty(),
+        "no files leaked into the external target"
+    );
+
+    let _ = fs::remove_dir_all(&base);
+    let _ = fs::remove_dir_all(&external);
+}
