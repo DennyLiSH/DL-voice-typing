@@ -2,6 +2,7 @@ import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import { call } from './lib/api.js';
 import { confirmDialog, isDialogOpen } from './lib/confirm-dialog.js';
 import { isFormDirty } from './lib/form-state.js';
+import { populateMainKeySelects } from './lib/hotkeys.js';
 import { showError } from './lib/ui-utils.js';
 import {
     loadComputeMode,
@@ -194,6 +195,11 @@ export async function init() {
             call('get_config'),
             call('get_whisper_models'),
         ]);
+        // Fill the two hotkey <select> elements with one <option> per
+        // MAIN_KEYS entry. Must run BEFORE populateFields so the
+        // writeSpecToUI call inside populateFields can locate the right
+        // <option> for the loaded config's vk.
+        populateMainKeySelects();
         setDirtyCheckEnabled(false);
         setSelectedModel(config.whisper_model);
         setModelStatus(modelsData.built_in);

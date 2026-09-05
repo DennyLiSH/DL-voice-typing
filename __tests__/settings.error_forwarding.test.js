@@ -41,7 +41,14 @@ const MINIMAL_DOM = `
   <div class="sidebar-item" data-page="general"></div>
   <div class="page-content" id="page-general"></div>
   <select id="language"></select>
-  <select id="hotkey"></select>
+  <div id="hotkey-combo">
+    <input type="checkbox" id="hotkey-ctrl" />
+    <input type="checkbox" id="hotkey-shift" />
+    <input type="checkbox" id="hotkey-alt" />
+    <select id="hotkey">
+      <option value="RightCtrl">RightCtrl</option>
+    </select>
+  </div>
   <select id="whisper-model"></select>
   <div id="model-status-text"></div>
   <button id="btn-download-model"></button>
@@ -69,8 +76,14 @@ const MINIMAL_DOM = `
   <div id="autostart-toggle"></div>
   <div id="realtime-transcription-toggle"></div>
   <div id="record-only-toggle"></div>
-  <div id="record-only-hotkey-group"></div>
-  <select id="record-only-hotkey"></select>
+  <div id="record-only-hotkey-group">
+    <input type="checkbox" id="record-only-hotkey-ctrl" />
+    <input type="checkbox" id="record-only-hotkey-shift" />
+    <input type="checkbox" id="record-only-hotkey-alt" />
+    <select id="record-only-hotkey">
+      <option value="RightAlt">RightAlt</option>
+    </select>
+  </div>
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
   <div id="data-error-bar"></div>
@@ -101,7 +114,12 @@ async function loadFresh() {
         if (cmd === 'get_config') {
             return {
                 language: 'zh',
-                hotkey: 'RightCtrl',
+                hotkey: {
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                    vk: 163,
+                },
                 whisper_model: 'base',
                 llm_enabled: false,
                 llm_api_url: '',
@@ -114,7 +132,12 @@ async function loadFresh() {
                 autostart: false,
                 realtime_transcription: false,
                 record_only_enabled: false,
-                record_only_hotkey: 'RightAlt',
+                record_only_hotkey: {
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                    vk: 165,
+                },
             };
         }
         if (cmd === 'get_whisper_models') {
@@ -135,7 +158,6 @@ async function loadFresh() {
         core: { invoke: invokeMock },
         app: { getVersion: vi.fn(async () => '0.0.0-test') },
     });
-
 
     document.body.innerHTML = MINIMAL_DOM;
 

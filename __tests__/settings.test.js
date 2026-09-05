@@ -1,14 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { MASKED_MARKER } from '../ui/lib/api-key-mask.js';
+import { sameSpec } from '../ui/lib/hotkeys.js';
 import {
     hasCredentialInUrl,
     isConfigDirty,
     validateSettings,
 } from '../ui/lib/settings-utils.js';
 
+// Hotkey specs use vk codes (0xA3 = RightCtrl, 0xA5 = RightAlt, 0x70-0x7B =
+// F1-F12, 0x41-0x5A = A-Z). See backend hotkey/mod.rs NAMED_KEYS for the
+// authoritative mapping. 0x70 = 112 (F1), 0x41 = 65 ('A').
+const RIGHT_CTRL = { ctrl: false, shift: false, alt: false, vk: 0xa3 };
+const RIGHT_ALT = { ctrl: false, shift: false, alt: false, vk: 0xa5 };
+const F1 = { ctrl: false, shift: false, alt: false, vk: 0x70 };
+const F9 = { ctrl: false, shift: false, alt: false, vk: 0x78 };
+
 const baseConfig = {
     language: 'zh',
-    hotkey: 'RightCtrl',
+    hotkey: RIGHT_CTRL,
     whisper_model: 'base',
     llm_enabled: false,
     llm_api_url: '',
@@ -19,6 +28,9 @@ const baseConfig = {
     data_saving_path: '',
     review_before_paste: false,
     autostart: false,
+    realtime_transcription: false,
+    record_only_enabled: false,
+    record_only_hotkey: RIGHT_ALT,
 };
 
 describe('isConfigDirty', () => {
@@ -31,9 +43,27 @@ describe('isConfigDirty', () => {
         expect(isConfigDirty(current, baseConfig)).toBe(true);
     });
 
-    it('returns true when hotkey differs', () => {
-        const current = { ...baseConfig, hotkey: 'F9' };
+    it('returns true when hotkey vk differs (same modifier bits)', () => {
+        const current = { ...baseConfig, hotkey: F9 };
         expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
+
+    it('returns true when hotkey ctrl modifier differs', () => {
+        const current = {
+            ...baseConfig,
+            hotkey: { ctrl: true, shift: false, alt: false, vk: 0xa3 },
+        };
+        expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
+
+    it('returns false when hotkey matches structurally with different property order', () => {
+        // The form can produce specs with different property order than
+        // the loaded config (e.g. setter copy). sameSpec is order-independent.
+        const current = {
+            ...baseConfig,
+            hotkey: { vk: 0xa3, alt: false, shift: false, ctrl: false },
+        };
+        expect(isConfigDirty(current, baseConfig)).toBe(false);
     });
 
     it('returns true when whisper_model differs', () => {
@@ -103,8 +133,8 @@ describe('isConfigDirty', () => {
         expect(isConfigDirty(current, baseConfig)).toBe(true);
     });
 
-    it('returns true when record_only_hotkey differs', () => {
-        const current = { ...baseConfig, record_only_hotkey: 'F9' };
+    it('returns true when record_only_hotkey differs (vk change)', () => {
+        const current = { ...baseConfig, record_only_hotkey: F9 };
         expect(isConfigDirty(current, baseConfig)).toBe(true);
     });
 });
@@ -240,11 +270,34 @@ describe('validateSettings', () => {
         expect(result.valid).toBe(true);
     });
 
-    it('returns invalid when record-only hotkey equals main hotkey', () => {
+    it('returns invalid when record-only hotkey equals main hotkey (same vk, no mods)', () => {
         const config = {
             ...baseConfig,
             record_only_enabled: true,
-            record_only_hotkey: 'RightCtrl',
+            hotkey: RIGHT_CTRL,
+            record_only_hotkey: RIGHT_CTRL,
+            data_saving_path: 'D:\\recordings',
+        };
+        const result = validateSettings(config, modelStatus);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('录音快捷键');
+    });
+
+    it('returns invalid when record-only hotkey equals main hotkey (with mods)', () => {
+        // Modifier bits make the same vk distinguishable by spec but sameSpec
+        // ignores modifiers in the equality check (we use structural equality
+        // across the whole spec). The check here is whether the two specs
+        // are deeply equal — identical spec means the keys would collide.
+        const config = {
+            ...baseConfig,
+            record_only_enabled: true,
+            hotkey: { ctrl: true, shift: false, alt: false, vk: 0x41 },
+            record_only_hotkey: {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                vk: 0x41,
+            },
             data_saving_path: 'D:\\recordings',
         };
         const result = validateSettings(config, modelStatus);
@@ -256,7 +309,7 @@ describe('validateSettings', () => {
         const config = {
             ...baseConfig,
             record_only_enabled: true,
-            record_only_hotkey: 'RightAlt',
+            record_only_hotkey: RIGHT_ALT,
             data_saving_path: '',
         };
         const result = validateSettings(config, modelStatus);
@@ -268,10 +321,20 @@ describe('validateSettings', () => {
         const config = {
             ...baseConfig,
             record_only_enabled: true,
-            record_only_hotkey: 'RightAlt',
+            record_only_hotkey: RIGHT_ALT,
             data_saving_path: 'D:\\recordings',
         };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(true);
+    });
+});
+
+// sameSpec is the structural-equality primitive used by isConfigDirty and
+// validateSettings. Tested separately so failures point to the right layer.
+describe('sameSpec (sanity check — deep coverage lives in __tests__/hotkeys.test.js)', () => {
+    it('compares two specs structurally', () => {
+        expect(sameSpec(RIGHT_CTRL, RIGHT_CTRL)).toBe(true);
+        expect(sameSpec(RIGHT_CTRL, RIGHT_ALT)).toBe(false);
+        expect(sameSpec(F1, F9)).toBe(false);
     });
 });

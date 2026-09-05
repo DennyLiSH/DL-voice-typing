@@ -75,26 +75,13 @@
                 <div class="page-title">快捷键</div>
                 <div class="form-group">
                     <label for="hotkey">语音输入快捷键</label>
-                    <select id="hotkey" aria-label="快捷键">
-                        <option value="RightCtrl">Right Ctrl</option>
-                        <option value="LeftCtrl">Left Ctrl</option>
-                        <option value="RightAlt">Right Alt</option>
-                        <option value="LeftAlt">Left Alt</option>
-                        <option value="RightShift">Right Shift</option>
-                        <option value="LeftShift">Left Shift</option>
-                        <option value="F1">F1</option>
-                        <option value="F2">F2</option>
-                        <option value="F3">F3</option>
-                        <option value="F4">F4</option>
-                        <option value="F5">F5</option>
-                        <option value="F6">F6</option>
-                        <option value="F7">F7</option>
-                        <option value="F8">F8</option>
-                        <option value="F9">F9</option>
-                        <option value="F10">F10</option>
-                        <option value="F11">F11</option>
-                        <option value="F12">F12</option>
-                    </select>
+                    <div class="hotkey-combo" id="hotkey-combo">
+                        <label class="hotkey-mod"><input type="checkbox" id="hotkey-ctrl"> Ctrl</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="hotkey-shift"> Shift</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="hotkey-alt"> Alt</label>
+                        <span class="hotkey-plus">+</span>
+                        <select id="hotkey" aria-label="快捷键"></select>
+                    </div>
                     <div class="hint">按住说话，松开转录。切换需重启生效。</div>
                 </div>
                 <div class="form-group">
@@ -106,26 +93,13 @@
                 </div>
                 <div class="form-group" id="record-only-hotkey-group">
                     <label for="record-only-hotkey">录音快捷键</label>
-                    <select id="record-only-hotkey" aria-label="录音快捷键">
-                        <option value="RightAlt">Right Alt</option>
-                        <option value="LeftAlt">Left Alt</option>
-                        <option value="RightCtrl">Right Ctrl</option>
-                        <option value="LeftCtrl">Left Ctrl</option>
-                        <option value="RightShift">Right Shift</option>
-                        <option value="LeftShift">Left Shift</option>
-                        <option value="F1">F1</option>
-                        <option value="F2">F2</option>
-                        <option value="F3">F3</option>
-                        <option value="F4">F4</option>
-                        <option value="F5">F5</option>
-                        <option value="F6">F6</option>
-                        <option value="F7">F7</option>
-                        <option value="F8">F8</option>
-                        <option value="F9">F9</option>
-                        <option value="F10">F10</option>
-                        <option value="F11">F11</option>
-                        <option value="F12">F12</option>
-                    </select>
+                    <div class="hotkey-combo" id="record-only-hotkey-combo">
+                        <label class="hotkey-mod"><input type="checkbox" id="record-only-hotkey-ctrl"> Ctrl</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="record-only-hotkey-shift"> Shift</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="record-only-hotkey-alt"> Alt</label>
+                        <span class="hotkey-plus">+</span>
+                        <select id="record-only-hotkey" aria-label="录音快捷键"></select>
+                    </div>
                     <div class="hint">不能与语音输入快捷键相同。切换需重启生效。</div>
                 </div>
             </div>

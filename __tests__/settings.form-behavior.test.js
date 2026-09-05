@@ -31,7 +31,16 @@ const MINIMAL_DOM = `
   <div class="page-content" id="page-help"></div>
   <div id="error-history-list"></div>
   <select id="language"><option value="zh"></option></select>
-  <select id="hotkey"><option value="RightCtrl"></option></select>
+  <div id="hotkey-combo">
+    <input type="checkbox" id="hotkey-ctrl" />
+    <input type="checkbox" id="hotkey-shift" />
+    <input type="checkbox" id="hotkey-alt" />
+    <select id="hotkey">
+      <option value="RightCtrl">RightCtrl</option>
+      <option value="RightAlt">RightAlt</option>
+      <option value="F9">F9</option>
+    </select>
+  </div>
   <select id="whisper-model"><option value="base"></option></select>
   <div id="model-status-text"></div>
   <button id="btn-download-model"></button>
@@ -60,8 +69,15 @@ const MINIMAL_DOM = `
   <div id="autostart-toggle"></div>
   <div id="realtime-transcription-toggle"></div>
   <div id="record-only-toggle"></div>
-  <div id="record-only-hotkey-group"></div>
-  <select id="record-only-hotkey"><option value="RightAlt"></option></select>
+  <div id="record-only-hotkey-group">
+    <input type="checkbox" id="record-only-hotkey-ctrl" />
+    <input type="checkbox" id="record-only-hotkey-shift" />
+    <input type="checkbox" id="record-only-hotkey-alt" />
+    <select id="record-only-hotkey">
+      <option value="RightAlt">RightAlt</option>
+      <option value="F9">F9</option>
+    </select>
+  </div>
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
   <div id="data-error-bar"></div>
@@ -84,7 +100,15 @@ async function loadFresh() {
         if (cmd === 'get_config') {
             return {
                 language: 'zh',
-                hotkey: 'RightCtrl',
+                // HotkeySpec objects (mirror backend HotkeySpec shape):
+                //   hotkey           = {ctrl, shift, alt, vk} — RightCtrl = 0xA3 = 163
+                //   record_only_hotkey             — RightAlt  = 0xA5 = 165
+                hotkey: {
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                    vk: 163,
+                },
                 whisper_model: 'base',
                 llm_enabled: false,
                 llm_api_url: '',
@@ -97,7 +121,12 @@ async function loadFresh() {
                 autostart: false,
                 realtime_transcription: false,
                 record_only_enabled: false,
-                record_only_hotkey: 'RightAlt',
+                record_only_hotkey: {
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                    vk: 165,
+                },
             };
         }
         if (cmd === 'get_whisper_models') {
@@ -288,7 +317,12 @@ describe('help page recent-errors section', () => {
             if (c === 'get_config') {
                 return {
                     language: 'zh',
-                    hotkey: 'RightCtrl',
+                    hotkey: {
+                        ctrl: false,
+                        shift: false,
+                        alt: false,
+                        vk: 163,
+                    },
                     whisper_model: 'base',
                     llm_enabled: false,
                     llm_api_url: '',
@@ -301,7 +335,12 @@ describe('help page recent-errors section', () => {
                     autostart: false,
                     realtime_transcription: false,
                     record_only_enabled: false,
-                    record_only_hotkey: 'RightAlt',
+                    record_only_hotkey: {
+                        ctrl: false,
+                        shift: false,
+                        alt: false,
+                        vk: 165,
+                    },
                 };
             }
             if (c === 'get_whisper_models') {
@@ -345,8 +384,9 @@ describe('help page recent-errors section', () => {
         const items = document.querySelectorAll('.error-history-item');
         expect(items.length).toBe(2);
         expect(items[0].querySelector('.badge').textContent).toBe('语音识别');
-        expect(items[0].querySelector('.error-history-message').textContent)
-            .toBe('模型未下载，请在 设置→模型 下载');
+        expect(
+            items[0].querySelector('.error-history-message').textContent,
+        ).toBe('模型未下载，请在 设置→模型 下载');
         expect(items[1].querySelector('.badge').textContent).toBe('文本粘贴');
     });
 
@@ -360,7 +400,9 @@ describe('help page recent-errors section', () => {
     it('shows the failure hint when the invoke rejects (no error popup)', async () => {
         await loadWithErrors('fail', null);
         const list = document.getElementById('error-history-list');
-        expect(list.querySelector('.hint').textContent).toBe('无法加载错误记录');
+        expect(list.querySelector('.hint').textContent).toBe(
+            '无法加载错误记录',
+        );
     });
 });
 
@@ -397,9 +439,12 @@ describe('save status clearing semantics', () => {
     it('restart-hint message survives 1.5s and clears on the next input', async () => {
         makeDirty();
         // Change the hotkey so the save message becomes instructional.
-        const hotkey = document.getElementById('hotkey');
-        hotkey.value = 'RightAlt';
-        hotkey.dispatchEvent(new Event('change'));
+        // Hotkey is now a combo: 3 modifier checkboxes + main <select>.
+        // Toggling a checkbox changes the persisted HotkeySpec shape, which
+        // triggers the "新热键重启应用后生效" message branch.
+        const hotkeyCtrl = document.getElementById('hotkey-ctrl');
+        hotkeyCtrl.checked = true;
+        hotkeyCtrl.dispatchEvent(new Event('change'));
 
         saveWith();
         await vi.advanceTimersByTimeAsync(10);
@@ -487,5 +532,142 @@ describe('save status clearing semantics', () => {
         expect(document.getElementById('save-status').textContent).toContain(
             'disk full',
         );
+    });
+});
+
+describe('hotkey combo (Task 8: arbitrary combinations)', () => {
+    beforeEach(async () => {
+        // Real timers for these tests — the interactions are pure DOM
+        // checks that do not need fake-timer plumbing.
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function getCurrentConfigFromForm() {
+        // settings-form.js does not export getCurrentConfig (only updateDirtyState
+        // and a few others). We re-import dynamically to call the real function.
+        return import('../ui/settings-form.js').then((m) =>
+            m.getCurrentConfig(),
+        );
+    }
+
+    it('populates the main <select> from MAIN_KEYS via settings.js init', () => {
+        // After loadFresh, app-shell.js init() runs populateMainKeySelects()
+        // before populateFields(); verify the select has 54 options
+        // (6 modifier + 12 F-keys + 26 letters + 10 digits).
+        const sel = document.getElementById('hotkey');
+        // The MINIMAL_DOM seed has 3 options; settings.js init() should
+        // have populated them with all MAIN_KEYS (54 entries).
+        expect(sel.options.length).toBeGreaterThanOrEqual(54);
+        // RightCtrl is in MAIN_KEYS and must be present.
+        const hasRightCtrl = Array.from(sel.options).some(
+            (o) => o.value === 'RightCtrl',
+        );
+        expect(hasRightCtrl).toBe(true);
+    });
+
+    it('populateFields reflects the loaded HotkeySpec into checkboxes + select', async () => {
+        // loadFresh loaded hotkey = RightCtrl (vk 163, no mods). The select
+        // option value should be 'RightCtrl' after init.
+        const sel = document.getElementById('hotkey');
+        expect(sel.value).toBe('RightCtrl');
+        expect(document.getElementById('hotkey-ctrl').checked).toBe(false);
+        expect(document.getElementById('hotkey-shift').checked).toBe(false);
+        expect(document.getElementById('hotkey-alt').checked).toBe(false);
+    });
+
+    it('getCurrentConfig reads back the loaded spec structurally', async () => {
+        const config = await getCurrentConfigFromForm();
+        expect(config.hotkey).toEqual({
+            ctrl: false,
+            shift: false,
+            alt: false,
+            vk: 163,
+        });
+        expect(config.record_only_hotkey).toEqual({
+            ctrl: false,
+            shift: false,
+            alt: false,
+            vk: 165,
+        });
+    });
+
+    it('toggling a modifier checkbox does not produce a dirty form (already loaded = no change)', async () => {
+        // Loaded spec has ctrl=false. Toggling the checkbox ON then OFF
+        // must not leave the form dirty (round-tripped to same shape).
+        const cb = document.getElementById('hotkey-ctrl');
+        cb.checked = true;
+        cb.dispatchEvent(new Event('change'));
+        cb.checked = false;
+        cb.dispatchEvent(new Event('change'));
+        const { isFormDirty } = await import('../ui/lib/form-state.js');
+        expect(isFormDirty()).toBe(false);
+    });
+
+    it('toggling a modifier checkbox ON marks the form dirty', async () => {
+        const cb = document.getElementById('hotkey-ctrl');
+        cb.checked = true;
+        cb.dispatchEvent(new Event('change'));
+        const { isFormDirty } = await import('../ui/lib/form-state.js');
+        expect(isFormDirty()).toBe(true);
+    });
+
+    it('changing the main <select> value marks the form dirty', async () => {
+        const sel = document.getElementById('hotkey');
+        sel.value = 'F9';
+        sel.dispatchEvent(new Event('change'));
+        const { isFormDirty } = await import('../ui/lib/form-state.js');
+        expect(isFormDirty()).toBe(true);
+    });
+
+    it('unknown vk in loaded config leaves the select empty AND does NOT silently rewrite to a canonical name', async () => {
+        // Reload with an unknown vk (e.g. 0xDEAD) — the select stays empty,
+        // and the form must NOT silently rewrite to RightCtrl (the dangerous
+        // config-rewrite chain the plan calls out as a regression).
+        //
+        // Note on round-trip semantics: specFromUI reads from the DOM, so
+        // when the select is empty the spec returned is `{ctrl:..., vk:0}`
+        // — the unknown vk is lost in the DOM direction. The protection
+        // here is structural: the SPEC OBJECT passed into writeSpecToUI
+        // is NOT mutated (the loaded vk 0xDEAD stays in memory until the
+        // user changes the form). On save, validateSettings rejects
+        // vk=0, forcing the user to fix the config rather than silently
+        // persisting RightCtrl.
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'get_config') {
+                const config = await originalImpl(cmd, args);
+                return {
+                    ...config,
+                    hotkey: {
+                        ctrl: true,
+                        shift: false,
+                        alt: false,
+                        vk: 0xdead,
+                    },
+                };
+            }
+            return originalImpl(cmd, args);
+        });
+
+        vi.resetModules();
+        await import('../ui/settings.js');
+        await new Promise((r) => setTimeout(r, 10));
+
+        // Select value is empty (no matching option for 0xDEAD).
+        expect(document.getElementById('hotkey').value).toBe('');
+        // The <select> value did NOT silently fall back to RightCtrl —
+        // a real bug class this guards against (specLabel would still
+        // display "Ctrl+VK0xdead" via the loaded spec object).
+        expect(document.getElementById('hotkey').value).not.toBe('RightCtrl');
+        // vk read back is 0 (no option matches), not the unknown 0xDEAD —
+        // the DOM is lossy in this direction, but validateSettings would
+        // reject save, so the bad config never gets persisted silently.
+        const config = await getCurrentConfigFromForm();
+        expect(config.hotkey.vk).toBe(0);
     });
 });

@@ -1,6 +1,7 @@
 import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
+import { sameSpec, specFromUI, writeSpecToUI } from './lib/hotkeys.js';
 import {
     hasCredentialInUrl,
     isConfigDirty,
@@ -21,7 +22,6 @@ const LOCK_SVG =
 
 // DOM elements
 const languageSelect = document.getElementById('language');
-const hotkeySelect = document.getElementById('hotkey');
 const llmToggle = document.getElementById('llm-toggle');
 const llmFields = document.getElementById('llm-fields');
 const apiUrlInput = document.getElementById('api-url');
@@ -83,9 +83,12 @@ const FIELDS = [
     },
     {
         key: 'hotkey',
-        get: () => hotkeySelect.value,
+        get: () => specFromUI('hotkey'),
         set: (v) => {
-            hotkeySelect.value = v || 'RightCtrl';
+            writeSpecToUI(
+                'hotkey',
+                v ?? { ctrl: false, shift: false, alt: false, vk: 0xa3 },
+            );
         },
     },
     { key: 'whisper_model', get: getSelectedModel, set: setSelectedModel },
@@ -193,9 +196,12 @@ const FIELDS = [
     },
     {
         key: 'record_only_hotkey',
-        get: () => recordOnlyHotkeySelect.value,
+        get: () => specFromUI('record-only-hotkey'),
         set: (v) => {
-            recordOnlyHotkeySelect.value = v || 'RightAlt';
+            writeSpecToUI(
+                'record-only-hotkey',
+                v ?? { ctrl: false, shift: false, alt: false, vk: 0xa5 },
+            );
         },
     },
 ];
@@ -290,6 +296,9 @@ bindToggle(realtimeToggle);
 function updateRecordOnlyHotkeyState(enabled) {
     recordOnlyHotkeyGroup.classList.toggle('disabled', !enabled);
     recordOnlyHotkeySelect.disabled = !enabled;
+    document.getElementById('record-only-hotkey-ctrl').disabled = !enabled;
+    document.getElementById('record-only-hotkey-shift').disabled = !enabled;
+    document.getElementById('record-only-hotkey-alt').disabled = !enabled;
 }
 
 bindToggle(recordOnlyToggle, { onToggle: updateRecordOnlyHotkeyState });
@@ -382,12 +391,24 @@ export function getCurrentConfig() {
 
 // Track changes on all inputs
 languageSelect.addEventListener('change', updateDirtyState);
-hotkeySelect.addEventListener('change', updateDirtyState);
-recordOnlyHotkeySelect.addEventListener('change', updateDirtyState);
 downloadMirrorSelect.addEventListener('change', updateDirtyState);
 apiUrlInput.addEventListener('input', updateDirtyState);
 apiKeyInput.addEventListener('input', updateDirtyState);
 modelInput.addEventListener('input', updateDirtyState);
+
+// Hotkey combo controls: 3 modifier checkboxes + main-key <select> for each
+// of the two combos. The form fetches the spec via specFromUI(); any of
+// these 8 inputs being toggled must mark the form dirty.
+for (const prefix of ['hotkey', 'record-only-hotkey']) {
+    document
+        .getElementById(prefix)
+        .addEventListener('change', updateDirtyState);
+    for (const mod of ['ctrl', 'shift', 'alt']) {
+        document
+            .getElementById(`${prefix}-${mod}`)
+            .addEventListener('change', updateDirtyState);
+    }
+}
 
 // Show the plaintext-persistence warning when the URL embeds credential-like
 // query params. Intentionally stays visible while the LLM toggle is off:
@@ -423,7 +444,7 @@ saveBtn.addEventListener('click', async () => {
         // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
         let saveMsg = '✓ 已保存';
         let saveMsgType = 'success';
-        if (config.hotkey !== prevHotkey) {
+        if (!sameSpec(config.hotkey, prevHotkey)) {
             saveMsg = '✓ 已保存（新热键重启应用后生效）';
         }
         try {

@@ -1,8 +1,14 @@
 import { MASKED_MARKER } from './api-key-mask.js';
+import { sameSpec } from './hotkeys.js';
 
 /**
  * Compare current config against loaded config to determine dirty state.
  * Special handling: masked API key is never considered dirty.
+ *
+ * Note: hotkey / record_only_hotkey are HotkeySpec objects
+ * ({ctrl, shift, alt, vk}) since the arbitrary-combination feature shipped
+ * (2026-09-06). Shallow `!==` would always be true on objects, so we use
+ * sameSpec from lib/hotkeys.js for structural equality.
  */
 export function isConfigDirty(current, loaded) {
     const apiKeyDirty =
@@ -10,7 +16,7 @@ export function isConfigDirty(current, loaded) {
         current.llm_api_key !== loaded.llm_api_key;
     return (
         current.language !== loaded.language ||
-        current.hotkey !== loaded.hotkey ||
+        !sameSpec(current.hotkey, loaded.hotkey) ||
         current.whisper_model !== loaded.whisper_model ||
         current.llm_enabled !== loaded.llm_enabled ||
         current.llm_api_url !== loaded.llm_api_url ||
@@ -22,7 +28,7 @@ export function isConfigDirty(current, loaded) {
         current.review_before_paste !== loaded.review_before_paste ||
         current.realtime_transcription !== loaded.realtime_transcription ||
         current.record_only_enabled !== loaded.record_only_enabled ||
-        current.record_only_hotkey !== loaded.record_only_hotkey ||
+        !sameSpec(current.record_only_hotkey, loaded.record_only_hotkey) ||
         current.autostart !== loaded.autostart
     );
 }
@@ -85,7 +91,7 @@ export function validateSettings(config, modelStatus) {
     }
     if (
         config.record_only_enabled &&
-        config.record_only_hotkey === config.hotkey
+        sameSpec(config.record_only_hotkey, config.hotkey)
     ) {
         return {
             valid: false,
