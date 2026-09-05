@@ -652,6 +652,11 @@ async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
     let policy = SessionPolicy::from_config(&config(false, false, false));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
+    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
+    // actually proves the pipeline cleared it (not that the slot was never
+    // populated in the first place).
+    rig.session.ps_ref().set_cancel_token(cancel.clone());
+
     rig.session
         .run_pipeline(
             vec![],
@@ -695,6 +700,11 @@ async fn cancel_after_llm_drops_result_no_injection_no_review() {
     let policy = SessionPolicy::from_config(&config(false, false, true));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
+    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
+    // actually proves the pipeline cleared it (not that the slot was never
+    // populated in the first place).
+    rig.session.ps_ref().set_cancel_token(cancel.clone());
+
     rig.session
         .run_pipeline(
             vec![],
@@ -726,6 +736,11 @@ async fn cancel_before_delivery_skips_both_review_and_inject() {
     let perf = PerfMetrics::new(0);
     let policy = SessionPolicy::from_config(&config(false, true, false));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
+    // actually proves the pipeline cleared it (not that the slot was never
+    // populated in the first place).
+    rig.session.ps_ref().set_cancel_token(cancel.clone());
 
     rig.session
         .run_pipeline(
@@ -761,6 +776,11 @@ async fn cancel_during_fast_path_skips_injection() {
     let perf = PerfMetrics::new(0);
     let policy = SessionPolicy::from_config(&config(true, false, false));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
+    // actually proves the pipeline cleared it (not that the slot was never
+    // populated in the first place).
+    rig.session.ps_ref().set_cancel_token(cancel.clone());
 
     rig.session
         .run_realtime_fast_path(
