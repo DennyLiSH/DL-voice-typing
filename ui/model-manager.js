@@ -22,6 +22,9 @@ let activeDownload = null;
 
 // --- Model Select ---
 
+// Display sizes only. Single source of truth: BUILT_IN_MODELS in
+// src-tauri/src/config/schema.rs (verified 8/8 identical 2026-09-05).
+// Keep the two in sync manually — no compile/test guard exists.
 const MODEL_SIZES = [
     { id: 'tiny', name: 'Tiny', size: '75MB' },
     { id: 'tiny-q8_0', name: 'Tiny Q8_0', size: '~40MB', tag: '量化' },
@@ -145,7 +148,7 @@ btnDownloadModel.addEventListener('click', async () => {
         const filename = selectedModel.replace(/^custom:/, '');
         const ok = await confirmDialog({
             title: '删除模型',
-            message: `确认删除模型 ${filename}？`,
+            message: `确认删除模型 ${filename}？此操作不可恢复。`,
             danger: true,
         });
         if (!ok) return;

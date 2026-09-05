@@ -167,6 +167,9 @@ document.querySelector('.sidebar').addEventListener('keydown', (e) => {
 // destroy progress just because the user clicked the X. Audio playback,
 // however, should stop: a hidden window playing audio is wasted resources
 // and contradicts switchPage's onDataPageLeave contract.
+// NOTE: beforeunload's browser-native close confirmation is a platform
+// limitation — it cannot be replaced by the in-app confirm dialog (the
+// dialog dies with the page before the user could answer it).
 window.addEventListener('beforeunload', (e) => {
     if (currentPage === 'data') {
         onDataPageLeave();

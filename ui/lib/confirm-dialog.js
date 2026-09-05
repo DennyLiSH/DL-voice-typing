@@ -1,6 +1,6 @@
 /**
- * In-app confirmation dialog replacing native confirm()/alert() at the eight
- * destructive-decision sites (design review 2026-09-04 #4: the OS-styled
+ * In-app confirmation dialog replacing native confirm()/alert() at the five
+ * decision sites (design review 2026-09-04 #4: the OS-styled
  * dialogs broke the jade visual language and duplicated the in-app
  * banner/toast/error-bar channels).
  *

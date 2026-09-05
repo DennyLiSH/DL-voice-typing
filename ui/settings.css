@@ -770,24 +770,11 @@ button:disabled {
     color: var(--text-secondary);
 }
 
-.btn-danger {
+/* Right-alignment scoped to the batch bar: the shared .btn-danger must NOT
+   carry margin-left:auto — the confirm-dialog's .dialog-actions (flex-end)
+   and .model-select-row layouts break with an auto margin. */
+.data-batch-bar .btn-danger {
     margin-left: auto;
-    background: var(--error);
-    color: #fff;
-    border: none;
-    padding: 6px 14px;
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-size: var(--font-label);
-}
-
-.btn-danger:hover {
-    filter: brightness(0.92);
-}
-
-.btn-danger:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
 }
 
 .data-list {
@@ -926,7 +913,7 @@ button:disabled {
     flex-shrink: 0;
     font-size: 11px;
     color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--progress-bg);
     padding: 2px 6px;
     border-radius: 4px;
     cursor: not-allowed;

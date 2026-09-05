@@ -230,7 +230,7 @@ button:active:not(:disabled) {
   margin: 0 0 var(--space-2);
   font-size: var(--font-section);
   font-weight: 500;
-  color: var(--text);
+  color: var(--text-primary);
 }
 
 .dialog-message {
@@ -347,8 +347,18 @@ button:active:not(:disabled) {
 .btn-danger {
   background: var(--error);
   color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--font-label);
 }
 
 .btn-danger:hover:not(:disabled) {
   background: #B91C1C;
+}
+
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
