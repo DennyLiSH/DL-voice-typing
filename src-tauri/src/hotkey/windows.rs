@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use crate::hotkey::{HotkeyCallback, HotkeyEvent, HotkeyManager};
+use crate::hotkey::{CancelEscCallback, HotkeyCallback, HotkeyEvent, HotkeyManager};
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -9,17 +9,27 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 type SlotCallback = Arc<dyn Fn(HotkeyEvent) + Send + Sync>;
+type CancelSlot = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// Global state shared between WindowsHotkeyManager and the hook procedure.
-/// Two independent slots (primary voice-input hotkey + record-only hotkey)
-/// dispatched by virtual key code from a single low-level hook.
+/// Three slots (primary voice-input hotkey + record-only hotkey + cancel-Esc
+/// dispatcher) dispatched by virtual key code from a single low-level hook.
 #[derive(Default)]
 struct HookState {
     primary: Option<(u32, SlotCallback)>,
     record_only: Option<(u32, SlotCallback)>,
+    cancel_esc: Option<CancelSlot>,
 }
 
 static HOOK_STATE: Mutex<Option<HookState>> = Mutex::new(None);
+
+/// P1 Esc-cancel swallow decision: true only when a cancel callback is
+/// registered, the event is a plain key-down, and the callback actually
+/// handled the cancellation. Idle-time Esc must always pass through to
+/// the focused application.
+fn esc_should_swallow(has_slot: bool, is_keydown: bool, cancel_handled: bool) -> bool {
+    has_slot && is_keydown && cancel_handled
+}
 
 /// Windows global keyboard hook implementation.
 pub struct WindowsHotkeyManager {
@@ -93,6 +103,25 @@ impl HotkeyManager for WindowsHotkeyManager {
             }
         }
         hook_state.record_only = Some((vk_code, Arc::from(callback)));
+        Ok(())
+    }
+
+    fn register_cancel_esc(&mut self, callback: CancelEscCallback) -> Result<(), AppError> {
+        // The hook must already exist (set up by register()). If it does not,
+        // we still record the slot in HOOK_STATE so the keyboard_hook_proc can
+        // dispatch once the user later registers a primary hotkey. However,
+        // because primary registration is required to come first (lib.rs
+        // ordering), the slot is functionally live as soon as the hook is up.
+        // We do NOT ensure_hook() here — that would create a phantom hook
+        // before any user-facing hotkey exists.
+        match HOOK_STATE.lock() {
+            Ok(mut state) => {
+                state.get_or_insert_with(HookState::default).cancel_esc = Some(Arc::from(callback));
+            }
+            Err(e) => {
+                tracing::warn!(target: "cancel", "cancel-esc slot not registered: HOOK_STATE poisoned ({e})");
+            }
+        }
         Ok(())
     }
 
@@ -207,6 +236,34 @@ unsafe extern "system" fn keyboard_hook_proc(
             return unsafe { CallNextHookEx(None, n_code, w_param, l_param) };
         }
 
+        // P1 Esc-cancel: intercept plain Esc key-down only (NOT WM_SYSKEYDOWN —
+        // Alt+Esc is the system window-cycle shortcut). Dispatched before the
+        // regular slot table so the cancel path is independent of which hotkey
+        // the user registered as primary/record-only.
+        const VK_ESCAPE: u32 = 0x1B;
+        if vk == VK_ESCAPE && w_param.0 as u32 == WM_KEYDOWN {
+            let (has_slot, cb) = {
+                let state = HOOK_STATE.lock();
+                match state {
+                    Ok(guard) => {
+                        let hs = guard.as_ref();
+                        let slot = hs.and_then(|s| s.cancel_esc.clone());
+                        (slot.is_some(), slot)
+                    }
+                    Err(_) => (false, None),
+                }
+            };
+            if let Some(cb) = cb {
+                // Lock released — call outside (same convention as slot dispatch).
+                let handled = cb();
+                if esc_should_swallow(has_slot, true, handled) {
+                    // SAFETY: swallow this Esc — the focused app must not receive
+                    // the same key-press that just cancelled its transcription.
+                    return LRESULT(1);
+                }
+            }
+        }
+
         // Determine event type from w_param.
         let event = match w_param.0 as u32 {
             WM_KEYDOWN | WM_SYSKEYDOWN => Some(HotkeyEvent::Pressed),
@@ -292,6 +349,7 @@ mod tests {
         let hs = HookState {
             primary: Some((0xA3, primary_cb.clone())),
             record_only: Some((0xA5, record_cb.clone())),
+            cancel_esc: None,
         };
         let found_primary = find_callback(&hs, 0xA3);
         assert!(found_primary.is_some());
@@ -310,6 +368,7 @@ mod tests {
         let hs = HookState {
             primary: Some((0xA3, dummy_callback())),
             record_only: Some((0xA5, dummy_callback())),
+            cancel_esc: None,
         };
         assert!(find_callback(&hs, 0x70).is_none());
     }
@@ -322,9 +381,43 @@ mod tests {
         let only_record = HookState {
             primary: None,
             record_only: Some((0xA5, dummy_callback())),
+            cancel_esc: None,
         };
         assert!(only_record.primary.is_none());
         assert!(find_callback(&only_record, 0xA3).is_none());
         assert!(find_callback(&only_record, 0xA5).is_some());
+    }
+
+    // ---- P1 Esc-cancel: swallow key down only when a cancel callback handled it ----
+
+    #[test]
+    fn esc_swallow_requires_slot_keydown_and_dispatched_cancel() {
+        // (has_slot, is_keydown, cancel_handled) -> should_swallow
+        assert!(
+            esc_should_swallow(true, true, true),
+            "slot+keydown+handled -> swallow"
+        );
+        assert!(
+            !esc_should_swallow(true, true, false),
+            "callback declined (idle) -> pass through"
+        );
+        assert!(
+            !esc_should_swallow(true, false, true),
+            "keyup always passes"
+        );
+        assert!(
+            !esc_should_swallow(false, true, true),
+            "no slot -> pass through"
+        );
+    }
+
+    #[test]
+    fn esc_is_not_syskeydown_alias() {
+        // WM_SYSKEYDOWN must NOT trigger swallow: Alt+Esc is a system window
+        // cycle shortcut, swallowing it would block that system operation.
+        // The hook proc guards this by checking w_param == WM_KEYDOWN before
+        // dispatching to cancel_cb; here we only verify the swallow decision
+        // logic itself is "plain keydown only".
+        assert!(!esc_should_swallow(true, false, true));
     }
 }

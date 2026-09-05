@@ -143,7 +143,11 @@ impl WhisperEngine {
 
     /// Build base transcription params shared by all callers.
     /// Does NOT set `initial_prompt` — each caller sets its own.
-    fn build_base_params(&self) -> FullParams<'_, '_> {
+    ///
+    /// `cancel` wires whisper.cpp's abort callback so a long inference can be
+    /// stopped mid-flight (Esc cancel); `None` keeps the historical
+    /// no-abort behaviour byte-for-byte.
+    fn build_base_params(&self, cancel: Option<Arc<AtomicBool>>) -> FullParams<'_, '_> {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(Some(self.language.code()));
         params.set_print_progress(false);
@@ -151,6 +155,13 @@ impl WhisperEngine {
         params.set_no_timestamps(true);
         params.set_single_segment(true);
         params.set_translate(false);
+        if let Some(cancel) = cancel {
+            // whisper-rs 0.16 callback setters take O: Into<Option<F>>, which
+            // defeats closure type inference — spell out both type parameters.
+            type AbortCb = Box<dyn FnMut() -> bool>;
+            let abort_cb: AbortCb = Box::new(move || cancel.load(Ordering::Relaxed));
+            params.set_abort_callback_safe::<Option<AbortCb>, AbortCb>(Some(abort_cb));
+        }
         params
     }
 
@@ -246,7 +257,7 @@ impl WhisperEngine {
         samples: &[f32],
         context: Option<&str>,
     ) -> Result<String, AppError> {
-        let mut params = self.build_base_params();
+        let mut params = self.build_base_params(None);
         let lang_anchor = initial_prompt_for_lang(self.language);
         let prompt = match (lang_anchor, context) {
             (Some(anchor), Some(ctx_text)) => {
@@ -287,11 +298,30 @@ impl WhisperEngine {
 
 impl SpeechEngine for WhisperEngine {
     fn transcribe_sync(&self, samples: &[f32]) -> Result<String, AppError> {
-        let mut params = self.build_base_params();
+        let mut params = self.build_base_params(None);
         if let Some(prompt) = initial_prompt_for_lang(self.language) {
             params.set_initial_prompt(prompt);
         }
         self.transcribe_with_params(samples, params)
+    }
+
+    fn transcribe_sync_cancelable(
+        &self,
+        samples: &[f32],
+        cancel: Arc<AtomicBool>,
+    ) -> Result<String, AppError> {
+        let mut params = self.build_base_params(Some(cancel.clone()));
+        if let Some(prompt) = initial_prompt_for_lang(self.language) {
+            params.set_initial_prompt(prompt);
+        }
+        let result = self.transcribe_with_params(samples, params);
+        // Whisper's return value after an abort callback fires is not reliable
+        // (some paths return Ok with partial segments). The token is the single
+        // source of truth — if the user pressed Esc, surface as cancelled.
+        if cancel.load(Ordering::Relaxed) {
+            return Err(AppError::Speech(CANCELLED_MESSAGE.to_string()));
+        }
+        result
     }
 
     fn is_ready(&self) -> bool {

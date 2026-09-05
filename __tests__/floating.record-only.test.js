@@ -115,6 +115,34 @@ describe('floating record-only in-flight indicator', () => {
 
     it('transcription-complete leaves a 转录中… placeholder in the text area', () => {
         listeners['transcription-complete']({ payload: null });
-        expect(text().textContent).toBe('转录中…');
+        expect(text().textContent).toBe('转录中… 按 Esc 取消');
+    });
+});
+
+describe('pipeline-cancelled (Esc cancel)', () => {
+    beforeEach(async () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('requestAnimationFrame', () => 0);
+        vi.stubGlobal('cancelAnimationFrame', () => {});
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('hides the window immediately on pipeline-cancelled', () => {
+        // Backend emits pipeline-cancelled after Esc is swallowed; the UI
+        // must hide synchronously so the user sees instant feedback.
+        indicator().classList.add('visible', 'processing');
+        listeners['pipeline-cancelled']({ payload: null });
+        expect(indicator().classList.contains('visible')).toBe(false);
+    });
+
+    it('transcription-complete copy mentions Esc', () => {
+        listeners['transcription-complete']({ payload: null });
+        expect(text().textContent).toContain('按 Esc 取消');
     });
 });

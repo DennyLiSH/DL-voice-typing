@@ -432,6 +432,14 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
     if let Err(e) = hotkey_manager.register(&hotkey_name, callback) {
         warn!("failed to register hotkey '{hotkey_name}': {e}");
     }
+    // P1 Esc-cancel: register the cancel-slot dispatcher. The hook must
+    // already be installed (above) so the dispatcher reaches the hook proc.
+    {
+        let ps_cancel = ps.clone();
+        let _ = hotkey_manager.register_cancel_esc(Box::new(move || {
+            commands::recording_session::cancel_active_pipeline(&ps_cancel)
+        }));
+    }
     if config.record_only_enabled {
         let callback = commands::record_only_session::make_record_only_callback(ps);
         if let Err(e) = hotkey_manager.register_record_only(&config.record_only_hotkey, callback) {

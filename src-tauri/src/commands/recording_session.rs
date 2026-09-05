@@ -159,6 +159,13 @@ impl RecordingSession {
         }
     }
 
+    /// Test-only accessor for the shared PipelineState. Used by Esc-cancel
+    /// state-guard tests that need to set/inspect the slot directly.
+    #[cfg(test)]
+    pub(crate) fn ps_ref(&self) -> &PipelineState {
+        &self.ps
+    }
+
     /// Hotkey press: state guard, window policy, resource lifecycle.
     /// Runs on the Win32 hook thread — must be synchronous and non-blocking.
     pub(crate) fn on_press(&self) {
@@ -367,6 +374,12 @@ impl RecordingSession {
                     self.ps.window_controller().hide_floating();
                     return ReleaseAction::Done;
                 }
+                // P1 Esc-cancel: arm the cancel token right after entering
+                // Transcribing (sm_stop_recording succeeded). The pipeline
+                // body takes a snapshot via `cancel_token_snapshot()` so the
+                // Esc-cancel path can flip this bit from the hook thread.
+                let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.ps.set_cancel_token(cancel.clone());
                 perf.audio_samples = audio_data.len();
                 perf.audio_sample_rate = native_rate;
                 perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
@@ -379,6 +392,7 @@ impl RecordingSession {
                         perf,
                         t_press_for_e2e,
                         policy,
+                        cancel,
                     )
                     .await;
                 }))
@@ -409,6 +423,9 @@ impl RecordingSession {
                     self.ps.window_controller().hide_floating();
                     return ReleaseAction::Done;
                 }
+                // P1 Esc-cancel: same arming point as DeliverFast (above).
+                let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.ps.set_cancel_token(cancel.clone());
                 perf.audio_samples = audio_data.len();
                 perf.audio_sample_rate = native_rate;
                 perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
@@ -426,6 +443,7 @@ impl RecordingSession {
                         perf,
                         t_press_for_e2e,
                         policy,
+                        cancel,
                     )
                     .await;
                 }))
@@ -472,16 +490,25 @@ impl RecordingSession {
         if self.ps.clipboard().was_saved() {
             let _ = self.ps.clipboard().restore();
         }
+        // P1 Esc-cancel: token slot must always be cleared at pipeline exit,
+        // including the panic-recovery path. Leaving a stale token here would
+        // cause the *next* Esc press (or next pipeline) to see a tripped
+        // flag and short-circuit out of Transcribing before it even starts.
+        let _ = self.ps.take_cancel_token();
         self.ps.emitter().emit(
             "speech-error",
             serde_json::to_value("转录流程异常，已恢复").unwrap_or_default(),
         );
     }
 
+    // Note: Esc-cancel entry is the free function `cancel_active_pipeline`
+    // (defined below) — it must take &PipelineState, not &self, so the hook
+    // slot can hold an Arc<PipelineState> without holding the session.
+
     /// Full transcription → LLM → injection pipeline (classic modes + realtime
     /// fallthrough). `review` decides review-vs-direct (derived once from mode
     /// at dispatch time — no `review_before_paste` re-read here).
-    #[allow(clippy::too_many_arguments)] // 8 params; merging would obscure call site
+    #[allow(clippy::too_many_arguments)] // 9 params; merging would obscure call site
     pub(crate) async fn run_pipeline(
         &self,
         audio_for_save: Vec<f32>,
@@ -491,6 +518,7 @@ impl RecordingSession {
         mut perf: PerfMetrics,
         t_press_for_e2e: Instant,
         policy: SessionPolicy,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
     ) {
         info!(
             "Pipeline: starting (review={}, llm={}, samples={})",
@@ -506,6 +534,7 @@ impl RecordingSession {
             native_rate,
             resampled,
             &policy.save,
+            cancel.clone(),
         )
         .await;
 
@@ -516,6 +545,17 @@ impl RecordingSession {
         if transcription.is_empty() {
             info!("run_pipeline: empty transcription, resetting to idle");
             reset_to_idle(&self.ps);
+            let _ = self.ps.take_cancel_token();
+            return;
+        }
+
+        // -- Gate 2 (classic): after LLM correction, before delivery --
+        // LLM HTTP request is non-interruptible; cancel = drop the result
+        // and reset state without injecting.
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            info!(target: "cancel", "run_pipeline: gate 2 cancelled after LLM");
+            reset_to_idle(&self.ps);
+            let _ = self.ps.take_cancel_token();
             return;
         }
 
@@ -538,6 +578,16 @@ impl RecordingSession {
             final_text
         };
 
+        // -- Gate 3 (classic): after LLM punctuation, before delivery --
+        // Final abort point — if Esc lands during LLM/normalize, we exit
+        // without calling DeliveryController at all.
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            info!(target: "cancel", "run_pipeline: gate 3 cancelled before delivery");
+            reset_to_idle(&self.ps);
+            let _ = self.ps.take_cancel_token();
+            return;
+        }
+
         // -- Delivery (review vs direct decided once from mode) --
         if review {
             info!(
@@ -557,6 +607,7 @@ impl RecordingSession {
                     policy.llm_enabled,
                 )
                 .await;
+            let _ = self.ps.take_cancel_token();
             return;
         }
         info!(
@@ -576,10 +627,12 @@ impl RecordingSession {
                 policy.llm_enabled,
             )
             .await;
+        let _ = self.ps.take_cancel_token();
     }
 
     /// Fast path for RealtimeDirect mode: uses accumulated realtime text
     /// directly, optionally runs LLM, then injects. Skips Whisper entirely.
+    #[allow(clippy::too_many_arguments)] // 7 params; merging would obscure call site
     pub(crate) async fn run_realtime_fast_path(
         &self,
         accumulated: String,
@@ -588,6 +641,7 @@ impl RecordingSession {
         mut perf: PerfMetrics,
         t_press_for_e2e: Instant,
         policy: SessionPolicy,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
     ) {
         info!(
             "RealtimeFastPath: starting (llm={}, accumulated={} chars)",
@@ -626,6 +680,15 @@ impl RecordingSession {
             final_text
         };
 
+        // -- Gate 2' (fast path): after LLM, before delivery --
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            info!(target: "cancel", "run_realtime_fast_path: gate 2' cancelled after LLM");
+            reset_to_idle(&self.ps);
+            let _ = self.ps.take_cancel_token();
+            let _ = save_handle.await;
+            return;
+        }
+
         let save_result = match save_handle.await {
             Ok(v) => v,
             Err(e) => {
@@ -633,6 +696,17 @@ impl RecordingSession {
                 None
             }
         };
+
+        // -- Gate 3' (fast path): right before inject_direct --
+        // Critical: without this gate, a stale fast-path delivery could
+        // race past DeliveryController's entry guards and silently kill a
+        // *next* recording session that started during the LLM HTTP window.
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            info!(target: "cancel", "run_realtime_fast_path: gate 3' cancelled before inject");
+            reset_to_idle(&self.ps);
+            let _ = self.ps.take_cancel_token();
+            return;
+        }
 
         self.ps
             .delivery()
@@ -647,18 +721,52 @@ impl RecordingSession {
                 policy.llm_enabled,
             )
             .await;
+        let _ = self.ps.take_cancel_token();
     }
+}
+
+/// Esc-cancel entry, called from the hook's cancel slot. Returns whether a
+/// cancellation happened (`true` → hook swallows the Esc; `false` → Esc
+/// passes through to the focused app).
+///
+/// Atomicity: the state-machine check-and-transition is done under a single
+/// lock acquisition (`sm_cancel_transcribing_or_llm`), eliminating the
+/// read-then-transition TOCTOU window where the pipeline could advance to
+/// `Injecting` between the guard check and the reset.
+pub(crate) fn cancel_active_pipeline(ps: &PipelineState) -> bool {
+    if !ps.sm_cancel_transcribing_or_llm() {
+        // Not in a cancellable phase (Idle / Recording / Injecting /
+        // Reviewing / RecordOnly). Pass the Esc through so the focused app
+        // receives it — including the case where the pipeline raced ahead
+        // and finished delivery between the user's intent and our check.
+        return false;
+    }
+    // Flip the token so the in-flight Whisper call aborts. If the slot is
+    // empty (no active pipeline body yet — possible if Esc lands during the
+    // microsecond gap between sm_stop_recording and the future spawn),
+    // there's nothing to abort — the state-reset above already cancelled.
+    if let Some(token) = ps.take_cancel_token() {
+        token.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    ps.window_controller().hide_floating();
+    ps.emitter()
+        .emit("pipeline-cancelled", serde_json::Value::Null);
+    info!(target: "cancel", "pipeline cancelled via Esc");
+    true
 }
 
 /// Parallel save audio to disk + transcribe via speech engine.
 /// Returns (save_result, transcription_text). On transcription failure, emits
-/// error and returns an empty string.
+/// error and returns an empty string. On Esc-cancel during the Whisper call,
+/// returns an empty string WITHOUT emitting `speech-error` (the cancel path
+/// already emitted `pipeline-cancelled`).
 async fn transcribe_and_save(
     ps: &PipelineState,
     audio_for_save: Vec<f32>,
     native_rate: u32,
     resampled: Vec<f32>,
     save: &SaveConfig,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
 ) -> (Option<SaveResult>, String) {
     let save_config = save.clone();
     let sr_for_save = native_rate;
@@ -671,11 +779,33 @@ async fn transcribe_and_save(
     });
 
     let engine_ref = ps.engine();
-    let transcribe_handle =
-        tokio::task::spawn_blocking(move || engine_ref.transcribe_sync(&resampled));
+    // Defensive snapshot — guarantees the engine always sees a fresh token
+    // even if PipelineState's slot was cleared mid-flight (the snapshot
+    // accessor returns a fresh `false` token in that case, never panics).
+    // This is the engine-side handle; the gates above/below still read the
+    // caller's `cancel` for the early-return checks.
+    let cancel_for_engine = ps.cancel_token_snapshot();
+    let transcribe_handle = tokio::task::spawn_blocking(move || {
+        // P1 Esc-cancel: route through the cancelable variant so the abort
+        // callback fires when the token is flipped from the hook thread.
+        engine_ref.transcribe_sync_cancelable(&resampled, cancel_for_engine)
+    });
 
     let (save_result, transcription_result) = tokio::join!(save_handle, transcribe_handle);
     let save_result = save_result.unwrap_or(None);
+
+    // -- Gate 1 (classic): after Whisper returns, before emitting anything --
+    // Whisper's return value is unreliable after an abort callback fires
+    // (some paths return Ok with partial segments). The token is the single
+    // source of truth — if the user pressed Esc, discard the result and
+    // return empty WITHOUT emitting speech-error. `save_result` is preserved
+    // because the WAV has already been written to disk; dropping it would
+    // leave the JSON metadata file dangling forever.
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        info!(target: "cancel", "transcribe_and_save: gate 1 cancelled");
+        reset_to_idle(ps);
+        return (save_result, String::new());
+    }
 
     let transcription = match transcription_result {
         Ok(Ok(text)) => {

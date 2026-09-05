@@ -14,7 +14,7 @@ use crate::speech::SpeechEngine;
 use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Aggregated shared state for the hotkey pipeline.
 /// Eliminates the need to pass 8 individual `Arc` references to `make_hotkey_callback`.
@@ -95,6 +95,11 @@ pub struct PipelineState {
     /// Active record-only session (Some only while a record-only session is
     /// capturing). Private; access goes through set/take_record_only_session.
     record_only: Arc<Mutex<Option<crate::commands::record_only_session::ActiveRecordOnly>>>,
+    /// Cancellation token of the in-flight classic/fast-path delivery (Some
+    /// between `sm_stop_recording` and delivery completion). Set by the
+    /// release path, flipped by the Esc-cancel hook slot, consumed at every
+    /// pipeline exit. Private; access goes through set/take/snapshot.
+    cancel_token: Arc<Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>,
 }
 
 impl PipelineState {
@@ -143,6 +148,7 @@ impl PipelineState {
                 Self::AUDIO_BUFFER_CAPACITY,
             ))),
             record_only: Arc::new(Mutex::new(None)),
+            cancel_token: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -207,6 +213,7 @@ impl PipelineState {
                 Self::AUDIO_BUFFER_CAPACITY,
             ))),
             record_only: Arc::new(Mutex::new(None)),
+            cancel_token: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -351,6 +358,36 @@ impl PipelineState {
         &self,
     ) -> Option<crate::commands::record_only_session::ActiveRecordOnly> {
         crate::util::lock_mutex(&self.record_only, "record_only").and_then(|mut g| g.take())
+    }
+
+    // ========================================================================
+    // Cancellation-token slot (Esc cancel)
+    //
+    // Lifecycle: installed by the release path right after `sm_stop_recording`
+    // succeeds, flipped to `true` by `cancel_active_pipeline` (hook thread),
+    // consumed (`take`) at every pipeline exit so a stale token can never leak
+    // into the next session.
+    // ========================================================================
+
+    /// Install the cancellation token for the in-flight delivery.
+    pub(crate) fn set_cancel_token(&self, token: Arc<std::sync::atomic::AtomicBool>) {
+        if let Some(mut guard) = crate::util::lock_mutex(&self.cancel_token, "cancel_token") {
+            *guard = Some(token);
+        }
+    }
+
+    /// Take the cancellation token out of the slot (take-once).
+    pub(crate) fn take_cancel_token(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        crate::util::lock_mutex(&self.cancel_token, "cancel_token").and_then(|mut g| g.take())
+    }
+
+    /// Read-only handle on the current token without consuming the slot.
+    /// An empty slot yields a fresh, un-cancelled token (defensive fallback)
+    /// so pipeline code never has to branch on `Option`.
+    pub(crate) fn cancel_token_snapshot(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        crate::util::lock_mutex(&self.cancel_token, "cancel_token")
+            .and_then(|g| g.clone())
+            .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(false)))
     }
 
     // ========================================================================
@@ -509,6 +546,23 @@ impl PipelineState {
             Ok(()) => true,
             Err(e) => {
                 warn!("sm_finish_injecting failed: {e}");
+                false
+            }
+        }
+    }
+
+    /// Esc-cancel entrypoint verb: atomically check-and-transition from
+    /// Transcribing/LLMRefining to Idle. Returns true iff the state was
+    /// actually cancellable (caller may then flip the cancel token, hide
+    /// the floating window, emit `pipeline-cancelled`).
+    pub(crate) fn sm_cancel_transcribing_or_llm(&self) -> bool {
+        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
+            return false;
+        };
+        match s.cancel_transcribing_or_llm() {
+            Ok(()) => true,
+            Err(e) => {
+                debug!("sm_cancel_transcribing_or_llm declined: {e}");
                 false
             }
         }
@@ -723,6 +777,40 @@ mod sm_verb_tests {
         assert!(!ps.sm_start_record_only());
         ps.sm_reset();
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+    }
+
+    #[test]
+    fn cancel_token_slot_set_take_roundtrip() {
+        use std::sync::atomic::AtomicBool;
+        let ps = build_test_ps();
+        assert!(ps.take_cancel_token().is_none(), "slot starts empty");
+
+        let token = Arc::new(AtomicBool::new(false));
+        ps.set_cancel_token(token.clone());
+        let taken = ps.take_cancel_token();
+        assert!(taken.is_some());
+        let Some(taken) = taken else { return };
+        assert!(Arc::ptr_eq(&taken, &token), "same token comes back out");
+        assert!(ps.take_cancel_token().is_none(), "take-once semantics");
+    }
+
+    #[test]
+    fn cancel_token_snapshot_is_fresh_false_when_slot_empty() {
+        use std::sync::atomic::Ordering;
+        let ps = build_test_ps();
+        // Defensive fallback: an empty slot yields a fresh, un-cancelled token
+        // so callers never have to branch on Option.
+        let snap = ps.cancel_token_snapshot();
+        assert!(!snap.load(Ordering::Relaxed));
+        // With a token installed, the snapshot aliases it.
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        ps.set_cancel_token(token.clone());
+        let snap = ps.cancel_token_snapshot();
+        assert!(Arc::ptr_eq(&snap, &token));
+        token.store(true, Ordering::SeqCst);
+        assert!(snap.load(Ordering::Relaxed));
+        // Snapshot does NOT consume the slot.
+        assert!(ps.take_cancel_token().is_some());
     }
 
     #[test]

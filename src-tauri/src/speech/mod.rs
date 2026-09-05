@@ -70,6 +70,20 @@ pub trait SpeechEngine: Send + Sync + 'static {
         self.transcribe_sync(samples)
     }
 
+    /// Cancelable variant used by the classic pipeline (Esc cancel).
+    ///
+    /// Default implementation ignores the token and delegates to
+    /// `transcribe_sync` (mocks / Noop engine); `WhisperEngine` overrides it
+    /// with a whisper.cpp abort callback.
+    fn transcribe_sync_cancelable(
+        &self,
+        samples: &[f32],
+        cancel: Arc<AtomicBool>,
+    ) -> Result<String, AppError> {
+        let _ = cancel;
+        self.transcribe_sync(samples)
+    }
+
     /// Transcribe long-form audio into timestamped segments, with
     /// cancellation and progress reporting. Samples are 16kHz mono f32.
     ///
@@ -175,6 +189,18 @@ mod tests {
         if let Err(e) = result {
             assert!(e.to_string().contains(CANCELLED_MESSAGE));
         }
+    }
+
+    #[test]
+    fn transcribe_sync_cancelable_default_ignores_token() {
+        // The default trait impl delegates to `transcribe_sync` and ignores
+        // the token — engines that cannot abort mid-inference (mock / Noop)
+        // must still return their result rather than an error.
+        let engine = MockEngine::new("hello");
+        let cancel = Arc::new(AtomicBool::new(true));
+        let out = engine.transcribe_sync_cancelable(&[0.0f32; 160], cancel);
+        assert!(out.is_ok(), "default impl must delegate to transcribe_sync");
+        assert_eq!(out.unwrap_or_default(), "hello");
     }
 
     #[test]

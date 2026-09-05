@@ -235,6 +235,26 @@ impl StateMachine {
         self.tag = StateTag::Idle;
     }
 
+    /// Esc-cancel transition: only succeeds from Transcribing or LLMRefining
+    /// (the two pre-delivery phases). All other tags (Idle / Recording /
+    /// Injecting / Reviewing / RecordOnly) leave the state unchanged and
+    /// return `Err`. Used by `cancel_active_pipeline` to atomically
+    /// check-and-transition under the state-machine lock — preventing the
+    /// read-then-transition TOCTOU window where the pipeline could advance
+    /// to Injecting between the guard check and the reset.
+    pub fn cancel_transcribing_or_llm(&mut self) -> Result<(), TransitionError> {
+        match self.tag {
+            StateTag::Transcribing | StateTag::LLMRefining => {
+                self.tag = StateTag::Idle;
+                Ok(())
+            }
+            _ => Err(TransitionError {
+                from: self.state_name(),
+                to: "Idle (Esc cancel)".to_string(),
+            }),
+        }
+    }
+
     pub(crate) fn state_name(&self) -> String {
         match self.tag {
             StateTag::Idle => "Idle".to_string(),

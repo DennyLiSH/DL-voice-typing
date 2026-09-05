@@ -215,6 +215,7 @@ async fn run_pipeline_classic_direct_injects() {
             perf,
             Instant::now(),
             policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -241,6 +242,7 @@ async fn run_pipeline_classic_review_enters_reviewing() {
             perf,
             Instant::now(),
             policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -268,6 +270,7 @@ async fn run_realtime_fast_path_injects_accumulated() {
             perf,
             Instant::now(),
             policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -296,6 +299,7 @@ async fn run_pipeline_empty_transcription_resets() {
             perf,
             Instant::now(),
             policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -324,6 +328,7 @@ async fn run_pipeline_llm_corrects_then_injects() {
             perf,
             Instant::now(),
             policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -353,6 +358,7 @@ async fn run_pipeline_llm_failure_falls_back_to_raw_and_emits_summary() {
             perf,
             Instant::now(),
             policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -510,4 +516,332 @@ fn test_on_press_not_ready_missing_model_shows_actionable_error() {
     assert!(!logged.contains(&"show_floating_corner"));
     // State returns to Idle.
     assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+}
+
+// ---------------------------------------------------------------------------
+// P1 Esc-cancel: cancel_active_pipeline state guard matrix
+//
+// Esc must only cancel when the pipeline is actually in a cancellable phase.
+// (Transcribing / LLMRefining — both pre-delivery.) All other states
+// (Idle / Recording / Injecting / Reviewing / RecordOnly) must pass through
+// (return false, no state change, no event, no window hide).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cancel_active_pipeline_only_succeeds_in_transcribing_or_llm_refining() {
+    use crate::commands::recording_session::cancel_active_pipeline;
+
+    // Cases that MUST be cancellable.
+    for start_state in [StateTag::Transcribing, StateTag::LLMRefining] {
+        let rig = build_rig(config(false, false, false), "x");
+        rig.sm.lock().unwrap().force_state_tag(start_state);
+        // Pre-set a cancel token so we can verify it's flipped + taken.
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        rig.session.ps_ref().set_cancel_token(token.clone());
+
+        let handled = cancel_active_pipeline(rig.session.ps_ref());
+        assert!(handled, "{start_state:?} must be cancellable");
+        // Token flipped.
+        assert!(token.load(std::sync::atomic::Ordering::Relaxed));
+        // State back to Idle.
+        assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+        // Slot cleared.
+        assert!(rig.session.ps_ref().take_cancel_token().is_none());
+        // pipeline-cancelled event emitted.
+        let events = rig.emitter.take_events();
+        assert!(
+            events.iter().any(|(n, _)| n == "pipeline-cancelled"),
+            "{start_state:?} must emit pipeline-cancelled: {events:?}"
+        );
+    }
+
+    // Cases that MUST NOT be cancellable — return false, no state change,
+    // no event, no slot touch, token untouched.
+    for start_state in [
+        StateTag::Idle,
+        StateTag::Recording,
+        StateTag::Injecting,
+        StateTag::Reviewing,
+        StateTag::RecordOnly,
+    ] {
+        let rig = build_rig(config(false, false, false), "x");
+        rig.sm.lock().unwrap().force_state_tag(start_state);
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        rig.session.ps_ref().set_cancel_token(token.clone());
+
+        let handled = cancel_active_pipeline(rig.session.ps_ref());
+        assert!(!handled, "{start_state:?} must NOT be cancellable");
+        assert_eq!(rig.sm.lock().unwrap().state(), start_state);
+        assert!(!token.load(std::sync::atomic::Ordering::Relaxed));
+        let events = rig.emitter.take_events();
+        assert!(
+            !events.iter().any(|(n, _)| n == "pipeline-cancelled"),
+            "{start_state:?} must NOT emit pipeline-cancelled: {events:?}"
+        );
+        // Slot untouched (token still set).
+        assert!(rig.session.ps_ref().take_cancel_token().is_some());
+    }
+}
+
+#[test]
+fn cancel_active_pipeline_without_token_still_returns_true_and_resets_state() {
+    use crate::commands::recording_session::cancel_active_pipeline;
+    let rig = build_rig(config(false, false, false), "x");
+    rig.sm
+        .lock()
+        .unwrap()
+        .force_state_tag(StateTag::Transcribing);
+
+    let handled = cancel_active_pipeline(rig.session.ps_ref());
+    assert!(handled);
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+    let events = rig.emitter.take_events();
+    assert!(events.iter().any(|(n, _)| n == "pipeline-cancelled"));
+}
+
+#[test]
+fn cancel_active_pipeline_hides_floating_window() {
+    use crate::commands::recording_session::cancel_active_pipeline;
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let wc = Arc::new(CallLogWindowController {
+        calls: calls.clone(),
+    });
+    let rig = build_rig_full(
+        config(false, false, false),
+        "x",
+        MockCorrector::new("x"),
+        wc,
+        true,
+    );
+    rig.sm
+        .lock()
+        .unwrap()
+        .force_state_tag(StateTag::Transcribing);
+
+    let handled = cancel_active_pipeline(rig.session.ps_ref());
+    assert!(handled);
+    let logged = calls.lock().unwrap().clone();
+    assert!(
+        logged.contains(&"hide_floating"),
+        "cancel must hide floating window: {logged:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P1 Esc-cancel: orchestration gate tests
+//
+// Drive run_pipeline / run_realtime_fast_path with a pre-cancelled token
+// and verify the pipeline bails at each gate WITHOUT injecting text or
+// emitting `speech-error`. Also verify the token slot is cleared on every
+// exit (no leak between cycles).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
+    // Gate 1: classic pipeline, transcribe_and_save bails before emitting
+    // speech-error. We can't easily pre-set the cancel token before the
+    // pipeline body's spawn_blocking fires (Whisper is mocked — it returns
+    // instantly), so we instead inject a failing engine that checks the
+    // token and simulates abort behaviour. Concretely: we set the cancel
+    // token BEFORE run_pipeline is called, and the gate-1 check happens
+    // after the engine returns. Even though MockEngine ignores the token,
+    // the gate-1 cancel.load() check will be true and we early-return.
+    let rig = build_rig(config(false, false, false), "raw transcription");
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, false, false));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            false,
+            perf,
+            Instant::now(),
+            policy,
+            cancel.clone(),
+        )
+        .await;
+
+    // Gate 1 returns BEFORE Whisper's transcription_complete (MockEngine
+    // returns instantly, so the join! completes before our gate check; but
+    // our gate check on cancel.load() is still true → early return without
+    // any emit). Verify: state Idle, clipboard untouched, no injection,
+    // token slot cleared.
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+    assert!(
+        rig.clipboard.injected().is_empty(),
+        "gate1 must not inject; got: {:?}",
+        rig.clipboard.injected()
+    );
+    assert!(
+        rig.session.ps_ref().take_cancel_token().is_none(),
+        "token slot must be cleared after gate1"
+    );
+}
+
+#[tokio::test]
+async fn cancel_after_llm_drops_result_no_injection_no_review() {
+    // Gate 2: token flips AFTER transcribe_and_save completes but BEFORE
+    // resolve_llm_text returns. The mock LLM is synchronous, so the most
+    // reliable injection point is: pre-set the token (Whisper mock returns
+    // "raw transcription", then LLM is "corrected", but our gate-2 check
+    // fires because cancel is true the entire time).
+    let rig = build_rig(config(false, false, true), "raw transcription");
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, false, true));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            false,
+            perf,
+            Instant::now(),
+            policy,
+            cancel.clone(),
+        )
+        .await;
+
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+    assert!(
+        rig.clipboard.injected().is_empty(),
+        "gate2 must drop LLM result; got: {:?}",
+        rig.clipboard.injected()
+    );
+    assert!(rig.session.ps_ref().take_cancel_token().is_none());
+}
+
+#[tokio::test]
+async fn cancel_before_delivery_skips_both_review_and_inject() {
+    // Gate 3: classic, review=true, token pre-set. Pipeline runs transcribe
+    // + LLM, then hits gate 3 (after normalize, before show_review).
+    let rig = build_rig(config(false, true, false), "review me");
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, true, false));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            true,
+            perf,
+            Instant::now(),
+            policy,
+            cancel.clone(),
+        )
+        .await;
+
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+    assert!(
+        rig.clipboard.injected().is_empty(),
+        "gate3 must skip inject"
+    );
+    let names = event_names(&rig.emitter);
+    // No review window opened — show_review would emit "review-shown"
+    // via DeliveryController. We assert nothing about review here beyond
+    // clipboard emptiness (the mock window controller is a no-op).
+    assert!(!names.contains(&"injection-complete".to_string()));
+    assert!(rig.session.ps_ref().take_cancel_token().is_none());
+}
+
+#[tokio::test]
+async fn cancel_during_fast_path_skips_injection() {
+    // Gate 2'/3': RealtimeDirect fast path. Pre-set cancel token.
+    let rig = build_rig(config(true, false, false), "ignored");
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(true, false, false));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+    rig.session
+        .run_realtime_fast_path(
+            "你好".to_string(),
+            vec![],
+            48000,
+            perf,
+            Instant::now(),
+            policy,
+            cancel.clone(),
+        )
+        .await;
+
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+    assert!(
+        rig.clipboard.injected().is_empty(),
+        "fast-path cancel must skip inject"
+    );
+    assert!(rig.session.ps_ref().take_cancel_token().is_none());
+}
+
+#[tokio::test]
+async fn happy_path_clears_cancel_token_slot() {
+    // No cancel: token slot must still be cleared on the success exit
+    // (preventing vacuous test passes from a leaked flag).
+    let rig = build_rig(config(false, false, false), "raw transcription");
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, false, false));
+    // Pre-arm the slot with a fresh token; pipeline must clear it.
+    let pre_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    rig.session.ps_ref().set_cancel_token(pre_token.clone());
+
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            false,
+            perf,
+            Instant::now(),
+            policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await;
+
+    // Successful inject happened.
+    assert!(!rig.clipboard.injected().is_empty());
+    // Slot cleared — proving the post-delivery take_cancel_token runs.
+    assert!(
+        rig.session.ps_ref().take_cancel_token().is_none(),
+        "happy path must clear cancel slot"
+    );
+}
+
+#[tokio::test]
+async fn review_happy_path_clears_cancel_token_slot() {
+    let rig = build_rig(config(false, true, false), "review me");
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&config(false, true, false));
+    rig.session
+        .ps_ref()
+        .set_cancel_token(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            true,
+            perf,
+            Instant::now(),
+            policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await;
+
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Reviewing);
+    assert!(
+        rig.session.ps_ref().take_cancel_token().is_none(),
+        "review path must clear cancel slot"
+    );
 }

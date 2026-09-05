@@ -222,7 +222,10 @@ function showRecording() {
 function showProcessing() {
     // Placeholder text keeps the transcript area from going blank while the
     // final transcription runs (same textContent path as the error states).
-    transcriptText.textContent = '转录中…';
+    // Esc hint advertises the cancel affordance: Transcribing/LLMRefining
+    // are the two phases during which Esc is swallowed by the hook (see
+    // cancel_active_pipeline in recording_session.rs).
+    transcriptText.textContent = '转录中… 按 Esc 取消';
     transcriptText.classList.remove('error');
     transcriptText.classList.add('visible');
     // Let spring settle naturally before switching to CSS animation
@@ -273,6 +276,15 @@ listen('llm-refining', () => {
 });
 
 listen('injection-complete', () => {
+    hide();
+});
+
+listen('pipeline-cancelled', () => {
+    // Esc-cancel swallowed the keypress in the hook; the backend has already
+    // reset the state machine and hidden the floating window via the
+    // WindowController, but we hide() defensively in case the user pressed
+    // Esc during the LLMRefining phase (the cancel path goes through
+    // DeliveryController only when text is ready to deliver).
     hide();
 });
 

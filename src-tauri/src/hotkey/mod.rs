@@ -11,6 +11,11 @@ pub fn parse_key_code(key: &str) -> Option<u32> {
 /// Callback type for hotkey events.
 pub type HotkeyCallback = Box<dyn Fn(HotkeyEvent) + Send + Sync>;
 
+/// Callback type for the Esc-cancel dispatcher. Returns `true` when the
+/// cancellation actually happened (hook swallows the Esc); `false` when
+/// no active pipeline exists and the key should pass through.
+pub type CancelEscCallback = Box<dyn Fn() -> bool + Send + Sync>;
+
 /// Hotkey event types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
@@ -31,6 +36,12 @@ pub trait HotkeyManager: Send {
     /// events are dispatched by virtual key code.
     fn register_record_only(&mut self, key: &str, callback: HotkeyCallback)
     -> Result<(), AppError>;
+
+    /// Register the Esc-to-cancel dispatcher for the classic pipeline.
+    /// The callback returns whether a cancellation actually happened;
+    /// the hook swallows Esc only when the callback returns `true`.
+    /// Must be called after `register()` (so the hook is installed).
+    fn register_cancel_esc(&mut self, callback: CancelEscCallback) -> Result<(), AppError>;
 
     /// Unregister all hotkeys (primary + record-only) and remove the hook.
     fn unregister(&mut self) -> Result<(), AppError>;
