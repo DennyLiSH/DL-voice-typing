@@ -2,6 +2,7 @@ pub mod config_cmd;
 pub mod data_management_cmd;
 pub mod delivery_controller;
 pub mod download;
+pub mod error_history;
 pub mod hotkey_pipeline;
 pub mod llm_cmd;
 pub mod log_cmd;
@@ -81,6 +82,7 @@ pub use download::{
     DownloadState, ModelsResponse, cancel_download, delete_custom_model, download_whisper_model,
     get_whisper_models,
 };
+pub use error_history::get_last_errors;
 pub(crate) use hotkey_pipeline::make_hotkey_callback;
 pub use llm_cmd::test_llm_connection;
 pub use log_cmd::log_frontend_error;

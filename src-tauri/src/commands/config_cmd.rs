@@ -114,6 +114,20 @@ pub fn save_settings(
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => {
                 // Hotkey error — config is saved but hotkey didn't change.
+                // This emit bypasses the trait emitter, so record it into the
+                // error history directly. try_state (not state): this point
+                // runs after the config is already persisted, and a panic
+                // here would tell the user "save failed" when it hadn't.
+                if let Some(history) =
+                    app.try_state::<Arc<crate::commands::error_history::ErrorHistory>>()
+                {
+                    history.record("hotkey-error", &serde_json::json!(e));
+                } else {
+                    tracing::warn!(
+                        target: "error_history",
+                        "hotkey-error not recorded: ErrorHistory not managed"
+                    );
+                }
                 let _ = app.emit("hotkey-error", &e);
                 Err(CommandError::new("HOTKEY", e))
             }

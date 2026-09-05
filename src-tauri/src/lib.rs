@@ -70,6 +70,9 @@ pub fn run() {
             }
             let _engine = init_and_manage_engine(app.handle(), &config);
             create_overlay_windows(app)?;
+            // Managed BEFORE manage_pipeline_state — from_app's try_state must
+            // find it for the RecordingEmitter decorator on the first build.
+            app.manage(Arc::new(commands::error_history::ErrorHistory::new()));
             manage_pipeline_state(
                 app.handle(),
                 state_machine.clone(),
@@ -100,6 +103,7 @@ pub fn run() {
             commands::llm_cmd::test_llm_connection,
             commands::log_cmd::log_frontend_error,
             commands::perf_cmd::get_perf_history,
+            commands::error_history::get_last_errors,
             commands::data_management_cmd::list_saved_recordings,
             commands::data_management_cmd::delete_recording,
             commands::data_management_cmd::delete_recordings,

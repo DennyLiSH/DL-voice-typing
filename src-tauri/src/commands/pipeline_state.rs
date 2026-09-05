@@ -150,6 +150,25 @@ impl PipelineState {
     pub fn from_app(app: &tauri::AppHandle) -> Self {
         let window_controller = window_controller_from_app(app);
         let emitter: Arc<dyn EventEmitter> = Arc::new(TauriEventEmitter::new(app.clone()));
+        // Wrap the emitter with the error-history recorder when available.
+        // Assembled HERE (not in lib.rs) so config_cmd's rebuild path gets
+        // the decorator too — it creates its own TauriEventEmitter via this
+        // same function. The miss fallback (with warn) is a second line of
+        // defense; lib.rs manages ErrorHistory before the first from_app.
+        let emitter: Arc<dyn EventEmitter> =
+            match app.try_state::<Arc<crate::commands::error_history::ErrorHistory>>() {
+                Some(history) => Arc::new(crate::commands::error_history::RecordingEmitter::new(
+                    emitter,
+                    history.inner().clone(),
+                )),
+                None => {
+                    tracing::warn!(
+                        target: "error_history",
+                        "ErrorHistory not managed; emitter unrecorded"
+                    );
+                    emitter
+                }
+            };
         let review: Arc<dyn ReviewProvider> = Arc::new(TauriReviewProvider::new(app.clone()));
         let clipboard = app.state::<Arc<dyn ClipboardProvider>>().inner().clone();
         let perf_history = app.state::<Arc<PerfHistory>>().inner().clone();
