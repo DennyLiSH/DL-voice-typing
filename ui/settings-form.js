@@ -443,10 +443,18 @@ saveBtn.addEventListener('click', async () => {
         }
         updateDirtyState();
         setSaveStatus(saveMsg, saveMsgType);
-        setTimeout(() => {
-            saveStatus.textContent = '';
-        }, 1500);
+        if (saveMsg === '✓ 已保存') {
+            // Pure acknowledgement — auto-clear after 1.5s.
+            setTimeout(() => {
+                saveStatus.textContent = '';
+            }, 1500);
+        } else {
+            // Instructional message (restart hint / autostart failure) —
+            // must survive until the user's next interaction, not evaporate.
+            armClearStatusOnInteract();
+        }
     } catch (e) {
+        disarmClearStatusOnInteract();
         const msg = e?.message || '保存失败，请重试';
         setSaveStatus(`✗ ${msg}`, 'error');
         showError(msg);
@@ -456,6 +464,35 @@ saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = !isFormDirty();
     }
 });
+
+// One-shot listeners that clear an instructional save message on the next
+// user interaction (input OR click, whichever comes first). All arming
+// paths detach previous listeners first so a success→failure sequence can
+// never leave a stale listener clearing the error status.
+const contentArea = document.querySelector('.content-area');
+let detachClearListeners = null;
+
+function armClearStatusOnInteract() {
+    disarmClearStatusOnInteract();
+    if (!contentArea) return;
+    const clear = () => {
+        saveStatus.textContent = '';
+        disarmClearStatusOnInteract();
+    };
+    contentArea.addEventListener('input', clear, { once: true });
+    contentArea.addEventListener('click', clear, { once: true });
+    detachClearListeners = () => {
+        contentArea.removeEventListener('input', clear);
+        contentArea.removeEventListener('click', clear);
+    };
+}
+
+function disarmClearStatusOnInteract() {
+    if (detachClearListeners) {
+        detachClearListeners();
+        detachClearListeners = null;
+    }
+}
 
 function setSaveStatus(message, type) {
     saveStatus.textContent = message;

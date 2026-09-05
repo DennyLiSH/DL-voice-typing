@@ -23,7 +23,7 @@ let invokeMock;
 let listeners;
 
 const MINIMAL_DOM = `
-  <div id="container"></div>
+  <div id="container" class="content-area"></div>
   <div class="sidebar"></div>
   <div class="sidebar-item" data-page="general"></div>
   <div class="sidebar-item" data-page="help"></div>
@@ -361,5 +361,131 @@ describe('help page recent-errors section', () => {
         await loadWithErrors('fail', null);
         const list = document.getElementById('error-history-list');
         expect(list.querySelector('.hint').textContent).toBe('无法加载错误记录');
+    });
+});
+
+describe('save status clearing semantics', () => {
+    beforeEach(async () => {
+        // Fake timers AFTER loadFresh — its settle wait uses a real
+        // setTimeout that frozen timers would never fire.
+        await loadFresh();
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function makeDirty() {
+        setInputValue('api-url', 'https://api.example.com/v1');
+    }
+
+    function saveWith({ autostartAvailable = false, saveFails = false } = {}) {
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'save_settings' && saveFails) {
+                throw new Error('disk full');
+            }
+            if (cmd === 'is_autostart_available') return autostartAvailable;
+            return originalImpl(cmd, args);
+        });
+        clickSave();
+    }
+
+    it('restart-hint message survives 1.5s and clears on the next input', async () => {
+        makeDirty();
+        // Change the hotkey so the save message becomes instructional.
+        const hotkey = document.getElementById('hotkey');
+        hotkey.value = 'RightAlt';
+        hotkey.dispatchEvent(new Event('change'));
+
+        saveWith();
+        await vi.advanceTimersByTimeAsync(10);
+        expect(document.getElementById('save-status').textContent).toContain(
+            '重启应用后生效',
+        );
+
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(document.getElementById('save-status').textContent).toContain(
+            '重启应用后生效',
+        );
+
+        document
+            .querySelector('.content-area')
+            .dispatchEvent(new Event('input', { bubbles: true }));
+        expect(document.getElementById('save-status').textContent).toBe('');
+    });
+
+    it('baseline ✓ 已保存 still auto-clears after 1.5s', async () => {
+        makeDirty();
+        saveWith();
+        await vi.advanceTimersByTimeAsync(10);
+        expect(document.getElementById('save-status').textContent).toContain(
+            '已保存',
+        );
+
+        await vi.advanceTimersByTimeAsync(1600);
+        expect(document.getElementById('save-status').textContent).toBe('');
+    });
+
+    it('autostart-failure ⚠ message also survives until interaction', async () => {
+        makeDirty();
+        // wantAutostart=false (config autostart off) + available + disable
+        // throwing drives the ⚠ branch.
+        vi.stubGlobal('__TAURI__', {
+            ...window.__TAURI__,
+            autostart: {
+                enable: vi.fn(),
+                disable: vi.fn(async () => {
+                    throw new Error('denied');
+                }),
+            },
+        });
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'is_autostart_available') return true;
+            return originalImpl(cmd, args);
+        });
+        clickSave();
+        await vi.advanceTimersByTimeAsync(20);
+
+        const status = document.getElementById('save-status');
+        expect(status.textContent).toContain('开机自启同步失败');
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(status.textContent).toContain('开机自启同步失败');
+
+        document
+            .querySelector('.content-area')
+            .dispatchEvent(new Event('click', { bubbles: true }));
+        expect(status.textContent).toBe('');
+    });
+
+    it('a failed save after a successful one never has its error cleared by interaction', async () => {
+        makeDirty();
+        saveWith();
+        await vi.advanceTimersByTimeAsync(10);
+        expect(document.getElementById('save-status').textContent).toContain(
+            '已保存',
+        );
+
+        // Make dirty again, then fail the second save.
+        makeDirty();
+        saveWith({ saveFails: true });
+        await vi.advanceTimersByTimeAsync(10);
+        expect(document.getElementById('save-status').textContent).toContain(
+            'disk full',
+        );
+
+        // Baseline success auto-clear timer from save #1 already fired or
+        // was for a different message; the interaction must NOT clear the ✗.
+        document
+            .querySelector('.content-area')
+            .dispatchEvent(new Event('input', { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(10);
+        expect(document.getElementById('save-status').textContent).toContain(
+            'disk full',
+        );
     });
 });
