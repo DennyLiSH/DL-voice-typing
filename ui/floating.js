@@ -1,10 +1,10 @@
-import { INJECTION_ERROR_MSG } from './lib/errors.js';
 import {
     errorDisplayText,
     getColor,
     getShadow,
     remapRms,
 } from './floating-utils.js';
+import { INJECTION_ERROR_MSG } from './lib/errors.js';
 
 const { listen } = window.__TAURI__.event;
 
@@ -317,7 +317,8 @@ listen('record-only-finished', (event) => {
         indicator.style.background = '';
         indicator.style.boxShadow = '';
         indicator.classList.add('error');
-        transcriptText.textContent = '录音不完整已提前停止，已保存部分可在转录窗口查看';
+        transcriptText.textContent =
+            '录音不完整已提前停止，已保存部分可在转录窗口查看';
         transcriptText.classList.add('visible', 'error');
         hide(4500);
     } else {

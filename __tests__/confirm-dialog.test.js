@@ -6,8 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overlay = () => document.querySelector('.dialog-overlay');
 const dialog = () => document.querySelector('[role="alertdialog"]');
-const confirmBtn = () =>
-    dialog()?.querySelector('.btn-primary, .btn-danger');
+const confirmBtn = () => dialog()?.querySelector('.btn-primary, .btn-danger');
 const cancelBtn = () => dialog()?.querySelector('.btn-secondary');
 
 async function settled() {
@@ -72,9 +71,7 @@ describe('confirmDialog', () => {
 
         const p2 = confirmDialog({ title: 't', message: 'm' });
         await settled();
-        overlay().dispatchEvent(
-            new MouseEvent('click', { bubbles: true }),
-        );
+        overlay().dispatchEvent(new MouseEvent('click', { bubbles: true }));
         expect(await p2).toBe(false);
     });
 

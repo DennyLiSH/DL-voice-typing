@@ -38,7 +38,8 @@ function listHtmlFiles(dir) {
 
 // Matches an opening tag carrying a style attribute whose value contains a
 // display declaration, and extracts the element's id (if any).
-const INLINE_DISPLAY_RE = /<([a-z][a-z0-9-]*)\b([^>]*\bstyle\s*=\s*"[^"]*\bdisplay\b[^"]*"[^>]*)>/gi;
+const INLINE_DISPLAY_RE =
+    /<([a-z][a-z0-9-]*)\b([^>]*\bstyle\s*=\s*"[^"]*\bdisplay\b[^"]*"[^>]*)>/gi;
 
 function extractId(attrText) {
     const m = attrText.match(/\bid\s*=\s*"([^"]*)"/);

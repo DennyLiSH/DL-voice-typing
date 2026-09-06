@@ -131,7 +131,8 @@ function renderList() {
     const rows = Array.from(list.querySelectorAll('.rec-row'));
     const hasSelected = rows.some((r) => r.classList.contains('selected'));
     rows.forEach((row, i) => {
-        const isStop = row.classList.contains('selected') || (!hasSelected && i === 0);
+        const isStop =
+            row.classList.contains('selected') || (!hasSelected && i === 0);
         row.tabIndex = isStop ? 0 : -1;
     });
     const empty = $('rec-empty');
@@ -405,7 +406,10 @@ function setProgress(percent, stage) {
         fill.style.transform = `scaleX(${Math.min(100, Math.max(0, percent)) / 100})`;
     const wrap = $('progress-wrap');
     if (wrap)
-        wrap.setAttribute('aria-valuenow', String(Math.min(100, Math.max(0, percent))));
+        wrap.setAttribute(
+            'aria-valuenow',
+            String(Math.min(100, Math.max(0, percent))),
+        );
     const label = $('progress-label');
     if (label) {
         label.textContent =

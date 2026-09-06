@@ -6,6 +6,7 @@ vi.mock('../ui/lib/confirm-dialog.js', () => ({
     confirmDialog: vi.fn(async () => false),
     isDialogOpen: () => false,
 }));
+
 import {
     filterRecordOnly,
     findActiveSegmentIndex,
@@ -1022,9 +1023,9 @@ describe('recording list keyboard navigation', () => {
         await flush();
         await flush();
 
-        expect(
-            invokeMock.mock.calls.map((c) => c[0]),
-        ).toContain('get_recording_segments');
+        expect(invokeMock.mock.calls.map((c) => c[0])).toContain(
+            'get_recording_segments',
+        );
         const freshRows = document.querySelectorAll('.rec-row');
         expect(freshRows[1].getAttribute('aria-selected')).toBe('true');
         expect(freshRows[1].tabIndex).toBe(0);
@@ -1068,9 +1069,9 @@ describe('re-transcription edit-wipe confirmation', () => {
             message: '重新转录将清除当前所有编辑，确定继续？',
             danger: true,
         });
-        expect(
-            invokeMock.mock.calls.map((c) => c[0]),
-        ).not.toContain('transcribe_recording');
+        expect(invokeMock.mock.calls.map((c) => c[0])).not.toContain(
+            'transcribe_recording',
+        );
     });
 
     it('confirm=true proceeds to transcribe_recording', async () => {
@@ -1090,9 +1091,9 @@ describe('re-transcription edit-wipe confirmation', () => {
         document.getElementById('btn-transcribe').click();
         await flush();
 
-        expect(
-            invokeMock.mock.calls.map((c) => c[0]),
-        ).toContain('transcribe_recording');
+        expect(invokeMock.mock.calls.map((c) => c[0])).toContain(
+            'transcribe_recording',
+        );
     });
 });
 

@@ -146,7 +146,9 @@ describe('injection-error listener', () => {
     it('renders default fallback when payload is empty', () => {
         listeners['injection-error']({ payload: '' });
 
-        expect(get('error-msg').textContent).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
+        expect(get('error-msg').textContent).toBe(
+            '粘贴失败，本次文字未保存，原剪贴板已恢复',
+        );
     });
 
     // Regression guard for review.js:82 contract:

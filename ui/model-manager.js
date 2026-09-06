@@ -1,6 +1,6 @@
 import { call, rawInvoke, reportError } from './lib/api.js';
-import { notifyFormChange } from './lib/form-state.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
+import { notifyFormChange } from './lib/form-state.js';
 import { showError } from './lib/ui-utils.js';
 
 const { listen } = window.__TAURI__.event;

@@ -75,7 +75,7 @@ export function confirmDialog({
             overlay.remove();
             openCount = 0;
             // Focus restore (element may have been removed meanwhile).
-            if (previouslyFocused && previouslyFocused.isConnected) {
+            if (previouslyFocused?.isConnected) {
                 previouslyFocused.focus();
             }
             resolve(result);

@@ -9,16 +9,24 @@ describe('formatInjectionError', () => {
     });
 
     it('renders default fallback when payload is empty string', () => {
-        expect(formatInjectionError('')).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
+        expect(formatInjectionError('')).toBe(
+            '粘贴失败，本次文字未保存，原剪贴板已恢复',
+        );
     });
 
     it('renders default fallback when payload is non-string', () => {
-        expect(formatInjectionError(null)).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
-        expect(formatInjectionError(undefined)).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
+        expect(formatInjectionError(null)).toBe(
+            '粘贴失败，本次文字未保存，原剪贴板已恢复',
+        );
+        expect(formatInjectionError(undefined)).toBe(
+            '粘贴失败，本次文字未保存，原剪贴板已恢复',
+        );
         expect(formatInjectionError({ msg: 'x' })).toBe(
             '粘贴失败，本次文字未保存，原剪贴板已恢复',
         );
-        expect(formatInjectionError(42)).toBe('粘贴失败，本次文字未保存，原剪贴板已恢复');
+        expect(formatInjectionError(42)).toBe(
+            '粘贴失败，本次文字未保存，原剪贴板已恢复',
+        );
     });
 
     it('truncates payload longer than 500 chars', () => {
