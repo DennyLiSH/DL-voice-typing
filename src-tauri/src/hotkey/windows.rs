@@ -310,14 +310,10 @@ impl HotkeyManager for WindowsHotkeyManager {
         // ordering), the slot is functionally live as soon as the hook is up.
         // We do NOT ensure_hook() here — that would create a phantom hook
         // before any user-facing hotkey exists.
-        match HOOK_STATE.lock() {
-            Ok(mut state) => {
-                state.get_or_insert_with(HookState::default).cancel_esc = Some(Arc::from(callback));
-            }
-            Err(e) => {
-                tracing::warn!(target: "cancel", "cancel-esc slot not registered: HOOK_STATE poisoned ({e})");
-            }
-        }
+        let mut state = HOOK_STATE
+            .lock()
+            .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
+        state.get_or_insert_with(HookState::default).cancel_esc = Some(Arc::from(callback));
         Ok(())
     }
 

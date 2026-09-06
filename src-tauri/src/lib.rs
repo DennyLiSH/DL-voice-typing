@@ -457,9 +457,11 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
     // already be installed (above) so the dispatcher reaches the hook proc.
     {
         let ps_cancel = ps.clone();
-        let _ = hotkey_manager.register_cancel_esc(Box::new(move || {
+        if let Err(e) = hotkey_manager.register_cancel_esc(Box::new(move || {
             commands::recording_session::cancel_active_pipeline(&ps_cancel)
-        }));
+        })) {
+            warn!("failed to register cancel-esc slot: {e}");
+        }
     }
     if config.record_only_enabled {
         let callback = commands::record_only_session::make_record_only_callback(ps);
