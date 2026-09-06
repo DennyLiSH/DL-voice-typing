@@ -630,32 +630,36 @@ fn cancel_active_pipeline_hides_floating_window() {
 // ---------------------------------------------------------------------------
 // P1 Esc-cancel: orchestration gate tests
 //
-// Drive run_pipeline / run_realtime_fast_path with a pre-cancelled token
-// and verify the pipeline bails at each gate WITHOUT injecting text or
-// emitting `speech-error`. Also verify the token slot is cleared on every
-// exit (no leak between cycles).
+// Drive run_pipeline / run_realtime_fast_path with a cancelled token and
+// verify the pipeline bails at each gate WITHOUT injecting text or emitting
+// `speech-error`. Ownership contract: the hook thread (cancel_active_pipeline,
+// simulated by esc_cancel) resets the state machine, hides windows, and
+// drains the token slot BEFORE the gates fire — the gates themselves only
+// log and return. The restarted-session tests below pin why: a gate-side
+// reset would kill a NEW session started during the LLM/Whisper window.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
     // Gate 1: classic pipeline, transcribe_and_save bails before emitting
-    // speech-error. We can't easily pre-set the cancel token before the
-    // pipeline body's spawn_blocking fires (Whisper is mocked — it returns
-    // instantly), so we instead inject a failing engine that checks the
-    // token and simulates abort behaviour. Concretely: we set the cancel
-    // token BEFORE run_pipeline is called, and the gate-1 check happens
-    // after the engine returns. Even though MockEngine ignores the token,
-    // the gate-1 cancel.load() check will be true and we early-return.
+    // speech-error. Whisper is mocked and returns instantly, so we can't
+    // flip the token mid-call; instead the Esc lands while Whisper is
+    // "running" — cancel_active_pipeline fires BEFORE run_pipeline is
+    // invoked, resetting state to Idle, flipping + draining the token, and
+    // hiding the floating window. Gate 1 then log-and-returns without
+    // touching anything (ownership: the hook thread did the cleanup).
+    use crate::commands::recording_session::cancel_active_pipeline;
+
     let rig = build_rig(config(false, false, false), "raw transcription");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
     let policy = SessionPolicy::from_config(&config(false, false, false));
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
-    // actually proves the pipeline cleared it (not that the slot was never
-    // populated in the first place).
+    // Pre-arm the cancel slot so cancel_active_pipeline flips + drains this
+    // exact token (the same Arc run_pipeline captures below).
     rig.session.ps_ref().set_cancel_token(cancel.clone());
+    assert!(cancel_active_pipeline(rig.session.ps_ref()));
 
     rig.session
         .run_pipeline(
@@ -670,11 +674,10 @@ async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
         )
         .await;
 
-    // Gate 1 returns BEFORE Whisper's transcription_complete (MockEngine
-    // returns instantly, so the join! completes before our gate check; but
-    // our gate check on cancel.load() is still true → early return without
-    // any emit). Verify: state Idle, clipboard untouched, no injection,
-    // token slot cleared.
+    // Gate 1 returns BEFORE Whisper's transcription_complete emit — early
+    // return without any emit. Verify: state still Idle (reset by the hook
+    // thread, not the gate), clipboard untouched, no injection, token slot
+    // still drained.
     assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
     assert!(
         rig.clipboard.injected().is_empty(),
@@ -683,32 +686,30 @@ async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
     );
     assert!(
         rig.session.ps_ref().take_cancel_token().is_none(),
-        "token slot must be cleared after gate1"
+        "token slot must stay drained after gate1"
     );
 }
 
 #[tokio::test]
 async fn cancel_after_llm_drops_result_no_injection_no_review() {
-    // Gate 2: token flips on the `transcription-complete` emit — the exact
-    // pipeline point between gate 1 (which has already passed its load) and
-    // the gate 2 check. A preset-true token would exit at gate 1 and make
-    // this test vacuous for gate 2 (review finding: gates 2/3/3' were
-    // unreachable behind gate 1 with preset tokens).
+    // Gate 2: the hook-thread cancel runs on the `transcription-complete`
+    // emit — the exact pipeline point between gate 1 (which has already
+    // passed its load) and the gate 2 check. A preset-true token would exit
+    // at gate 1 and make this test vacuous for gate 2 (review finding:
+    // gates 2/3/3' were unreachable behind gate 1 with preset tokens).
     let rig = build_rig(config(false, false, true), "raw transcription");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
     let policy = SessionPolicy::from_config(&config(false, false, true));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
-    // actually proves the pipeline cleared it (not that the slot was never
-    // populated in the first place).
+    // Pre-arm the cancel slot so esc_cancel flips + drains this exact token.
     rig.session.ps_ref().set_cancel_token(cancel.clone());
     {
-        let cancel = cancel.clone();
+        let ps = rig.session.ps_ref().clone();
         rig.emitter.set_on_event(Box::new(move |event: &str| {
             if event == "transcription-complete" {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
+                esc_cancel(&ps);
             }
         }));
     }
@@ -750,25 +751,23 @@ async fn cancel_after_llm_drops_result_no_injection_no_review() {
 
 #[tokio::test]
 async fn cancel_before_delivery_skips_both_review_and_inject() {
-    // Gate 3: classic, review=true + llm=true. Token flips on the
-    // `llm-refining` emit (inside resolve_llm_text, i.e. AFTER gate 2 has
-    // passed its load and LLM work begins) so the next check — gate 3,
-    // after normalize, before show_review — is the one that trips.
+    // Gate 3: classic, review=true + llm=true. The hook-thread cancel runs
+    // on the `llm-refining` emit (inside resolve_llm_text, i.e. AFTER gate
+    // 2 has passed its load and LLM work begins) so the next check — gate
+    // 3, after normalize, before show_review — is the one that trips.
     let rig = build_rig(config(false, true, true), "review me");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
     let policy = SessionPolicy::from_config(&config(false, true, true));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
-    // actually proves the pipeline cleared it (not that the slot was never
-    // populated in the first place).
+    // Pre-arm the cancel slot so esc_cancel flips + drains this exact token.
     rig.session.ps_ref().set_cancel_token(cancel.clone());
     {
-        let cancel = cancel.clone();
+        let ps = rig.session.ps_ref().clone();
         rig.emitter.set_on_event(Box::new(move |event: &str| {
             if event == "llm-refining" {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
+                esc_cancel(&ps);
             }
         }));
     }
@@ -807,18 +806,18 @@ async fn cancel_before_delivery_skips_both_review_and_inject() {
 
 #[tokio::test]
 async fn cancel_during_fast_path_skips_injection() {
-    // Gate 2' (fast path): RealtimeDirect + LLM. Token flips on the
-    // `llm-refining` emit (resolve_llm_text starts AFTER the fast path's
-    // earlier steps) so the fast-path cancel gates — checked after LLM,
-    // before delivery — are what trip. A preset-true token would exit at
-    // gate 2' indistinguishably, hiding coverage gaps behind it.
+    // Gate 2' (fast path): RealtimeDirect + LLM. The hook-thread cancel
+    // runs on the `llm-refining` emit (resolve_llm_text starts AFTER the
+    // fast path's earlier steps) so the fast-path cancel gates — checked
+    // after LLM, before delivery — are what trip. A preset-true token
+    // would exit at gate 2' indistinguishably, hiding coverage gaps.
     //
     // COVERAGE SEMANTICS: gates 2' and 3' are adjacent, externally
-    // indistinguishable defences (same reset/no-inject effect; the only
-    // code between them is the save await, which emits no event). This
-    // test therefore locks the JOINT coverage "gate2' OR gate3' exists":
+    // indistinguishable defences (same no-inject effect; the only code
+    // between them is the save await, which emits no event). This test
+    // therefore locks the JOINT coverage "gate2' OR gate3' exists":
     // disabling either one alone stays green (the other catches it —
-    // verified manually), disabling BOTH goes red (the token flip reaches
+    // verified manually), disabling BOTH goes red (the cancel reaches
     // inject_direct). Splitting them requires a test hook inside the save
     // spawn_blocking closure; tracked in _Project/TODO.md.
     let rig = build_rig(config(true, false, true), "ignored");
@@ -827,15 +826,13 @@ async fn cancel_during_fast_path_skips_injection() {
     let policy = SessionPolicy::from_config(&config(true, false, true));
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Pre-arm the cancel slot so the post-test take_cancel_token assertion
-    // actually proves the pipeline cleared it (not that the slot was never
-    // populated in the first place).
+    // Pre-arm the cancel slot so esc_cancel flips + drains this exact token.
     rig.session.ps_ref().set_cancel_token(cancel.clone());
     {
-        let cancel = cancel.clone();
+        let ps = rig.session.ps_ref().clone();
         rig.emitter.set_on_event(Box::new(move |event: &str| {
             if event == "llm-refining" {
-                cancel.store(true, std::sync::atomic::Ordering::Release);
+                esc_cancel(&ps);
             }
         }));
     }
@@ -864,6 +861,217 @@ async fn cancel_during_fast_path_skips_injection() {
     );
     assert!(!names.contains(&"injection-complete".to_string()));
     assert!(rig.session.ps_ref().take_cancel_token().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// P0 regression (2026-09-06 review): Esc resets the pipeline on the hook
+// thread (cancel_active_pipeline → Idle), so the user can re-press and start
+// a NEW Recording session while the old pipeline body (LLM HTTP / Whisper)
+// is still in flight. When that body later hits a cancel gate it must NOT
+// touch the state machine, windows, or token slot again — those now belong
+// to the new session. A gate-side reset silently kills the second recording.
+// ---------------------------------------------------------------------------
+
+/// What the hook thread does on Esc (cancel_active_pipeline), minus the
+/// `pipeline-cancelled` emit — MockEmitter fires test hooks while holding
+/// its `on_event` lock, so re-entering `emit` from inside would deadlock.
+fn esc_cancel(ps: &crate::commands::pipeline_state::PipelineState) {
+    assert!(
+        ps.sm_cancel_transcribing_or_llm(),
+        "hook-thread cancel must succeed (pipeline is in a cancellable phase)"
+    );
+    if let Some(token) = ps.take_cancel_token() {
+        token.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    ps.window_controller().hide_floating();
+}
+
+/// `esc_cancel` plus the user immediately re-pressing the hotkey
+/// (Idle → Recording) — the P0 race precondition.
+fn esc_then_repress(
+    ps: &crate::commands::pipeline_state::PipelineState,
+    sm: &Arc<Mutex<StateMachine>>,
+) {
+    esc_cancel(ps);
+    sm.lock().unwrap().start_recording().unwrap();
+}
+
+fn hide_floating_count(calls: &Arc<Mutex<Vec<&'static str>>>) -> usize {
+    calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| **c == "hide_floating")
+        .count()
+}
+
+#[tokio::test]
+async fn cancel_gate_leaves_restarted_session_intact_classic() {
+    // Gate 3 (classic): token trips during the LLM phase, gate fires after
+    // normalize with a new Recording session already running.
+    let calls: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let wc = Arc::new(CallLogWindowController {
+        calls: calls.clone(),
+    });
+    let rig = build_rig_inner(
+        config(false, false, true),
+        "raw",
+        MockCorrector::new("corrected"),
+        wc,
+    );
+    to_transcribing(&rig.sm);
+    let ps = rig.session.ps_ref().clone();
+    let sm = rig.sm.clone();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    rig.session.ps_ref().set_cancel_token(cancel.clone());
+    {
+        let ps = ps.clone();
+        let sm = sm.clone();
+        rig.emitter.set_on_event(Box::new(move |event: &str| {
+            if event == "llm-refining" {
+                esc_then_repress(&ps, &sm);
+            }
+        }));
+    }
+
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            false,
+            PerfMetrics::new(0),
+            Instant::now(),
+            SessionPolicy::from_config(&config(false, false, true)),
+            cancel.clone(),
+        )
+        .await;
+
+    assert_eq!(
+        rig.sm.lock().unwrap().state(),
+        StateTag::Recording,
+        "gate must not reset a restarted session's state"
+    );
+    assert!(
+        rig.clipboard.injected().is_empty(),
+        "cancelled pipeline must not inject"
+    );
+    assert_eq!(
+        hide_floating_count(&calls),
+        1,
+        "only cancel_active_pipeline may hide the floating window; a second hide would kill the new session's UI"
+    );
+}
+
+#[tokio::test]
+async fn cancel_gate_leaves_restarted_session_intact_fast_path() {
+    // Gates 2'/3' (fast path): token trips during the LLM phase of
+    // run_realtime_fast_path, gate fires with a new Recording session
+    // already running.
+    let calls: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let wc = Arc::new(CallLogWindowController {
+        calls: calls.clone(),
+    });
+    let rig = build_rig_inner(
+        config(true, false, true),
+        "ignored",
+        MockCorrector::new("corrected"),
+        wc,
+    );
+    to_transcribing(&rig.sm);
+    let ps = rig.session.ps_ref().clone();
+    let sm = rig.sm.clone();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    rig.session.ps_ref().set_cancel_token(cancel.clone());
+    {
+        let ps = ps.clone();
+        let sm = sm.clone();
+        rig.emitter.set_on_event(Box::new(move |event: &str| {
+            if event == "llm-refining" {
+                esc_then_repress(&ps, &sm);
+            }
+        }));
+    }
+
+    rig.session
+        .run_realtime_fast_path(
+            "你好".to_string(),
+            vec![],
+            48000,
+            PerfMetrics::new(0),
+            Instant::now(),
+            SessionPolicy::from_config(&config(true, false, true)),
+            cancel.clone(),
+        )
+        .await;
+
+    assert_eq!(
+        rig.sm.lock().unwrap().state(),
+        StateTag::Recording,
+        "gate must not reset a restarted session's state"
+    );
+    assert!(
+        rig.clipboard.injected().is_empty(),
+        "cancelled fast path must not inject"
+    );
+    assert_eq!(
+        hide_floating_count(&calls),
+        1,
+        "only cancel_active_pipeline may hide the floating window"
+    );
+}
+
+#[tokio::test]
+async fn cancel_before_whisper_returns_leaves_restarted_session_intact() {
+    // Gate 1 + the empty-transcription branch: Esc lands while Whisper is
+    // still running (hook thread cancels + resets state), the user
+    // re-presses, and only THEN does the pipeline body observe the token.
+    // Gate 1 returns an empty transcription, and the empty-transcription
+    // branch must not "clean up" a state machine that no longer belongs to
+    // this pipeline.
+    use crate::commands::recording_session::cancel_active_pipeline;
+
+    let calls: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+    let wc = Arc::new(CallLogWindowController {
+        calls: calls.clone(),
+    });
+    let rig = build_rig_inner(
+        config(false, false, false),
+        "raw transcription",
+        MockCorrector::new("corrected"),
+        wc,
+    );
+    to_transcribing(&rig.sm);
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    rig.session.ps_ref().set_cancel_token(cancel.clone());
+
+    assert!(cancel_active_pipeline(rig.session.ps_ref()));
+    // User immediately re-presses before the pipeline body runs.
+    rig.sm.lock().unwrap().start_recording().unwrap();
+
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            false,
+            PerfMetrics::new(0),
+            Instant::now(),
+            SessionPolicy::from_config(&config(false, false, false)),
+            cancel.clone(),
+        )
+        .await;
+
+    assert_eq!(
+        rig.sm.lock().unwrap().state(),
+        StateTag::Recording,
+        "gate 1 + empty-transcription branch must not reset a restarted session"
+    );
+    assert!(
+        rig.clipboard.injected().is_empty(),
+        "cancelled pipeline must not inject"
+    );
+    assert_eq!(hide_floating_count(&calls), 1);
 }
 
 #[tokio::test]

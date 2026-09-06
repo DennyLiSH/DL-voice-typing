@@ -542,18 +542,24 @@ impl RecordingSession {
             .transcription_ms
             .or(Some(Instant::now().elapsed().as_millis() as u64));
 
-        if transcription.is_empty() {
-            info!("run_pipeline: empty transcription, resetting to idle");
-            reset_to_idle(&self.ps);
-            return;
-        }
-
         // -- Gate 2 (classic): after transcription returns, BEFORE the LLM
         // phase starts. LLM HTTP is non-interruptible once launched, so this
         // is the last cheap exit before it; a cancel that lands DURING LLM
-        // is caught by gate 3 below.
+        // is caught by gate 3 below. Checked before the empty-transcription
+        // branch: a gate-1 cancel returns an empty string, and that branch's
+        // reset must not fire for a cancelled pipeline.
+        //
+        // Gates never touch the state machine / windows / token slot. Esc
+        // already did all of that on the hook thread (cancel_active_pipeline),
+        // and by the time a gate fires the user may have re-pressed and
+        // started a NEW session — a gate-side reset would silently kill it.
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_pipeline: gate 2 cancelled before LLM");
+            return;
+        }
+
+        if transcription.is_empty() {
+            info!("run_pipeline: empty transcription, resetting to idle");
             reset_to_idle(&self.ps);
             return;
         }
@@ -579,10 +585,11 @@ impl RecordingSession {
 
         // -- Gate 3 (classic): after LLM punctuation, before delivery --
         // Final abort point — if Esc lands during LLM/normalize, we exit
-        // without calling DeliveryController at all.
+        // without calling DeliveryController at all. Log-and-return only:
+        // cleanup belongs to cancel_active_pipeline on the hook thread (see
+        // the gate-2 note above).
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_pipeline: gate 3 cancelled before delivery");
-            reset_to_idle(&self.ps);
             return;
         }
 
@@ -679,9 +686,11 @@ impl RecordingSession {
         };
 
         // -- Gate 2' (fast path): after LLM, before delivery --
+        // Log-and-return only (see the gate-2 note in run_pipeline); the
+        // save await still runs so the spawned data-saving task is not
+        // orphaned mid-write.
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_realtime_fast_path: gate 2' cancelled after LLM");
-            reset_to_idle(&self.ps);
             let _ = save_handle.await;
             return;
         }
@@ -698,9 +707,9 @@ impl RecordingSession {
         // Critical: without this gate, a stale fast-path delivery could
         // race past DeliveryController's entry guards and silently kill a
         // *next* recording session that started during the LLM HTTP window.
+        // Log-and-return only (see the gate-2 note in run_pipeline).
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_realtime_fast_path: gate 3' cancelled before inject");
-            reset_to_idle(&self.ps);
             return;
         }
 
@@ -796,10 +805,11 @@ async fn transcribe_and_save(
     // source of truth — if the user pressed Esc, discard the result and
     // return empty WITHOUT emitting speech-error. `save_result` is preserved
     // because the WAV has already been written to disk; dropping it would
-    // leave the JSON metadata file dangling forever.
+    // leave the JSON metadata file dangling forever. Log-and-return only —
+    // state/window cleanup belongs to cancel_active_pipeline on the hook
+    // thread (see the gate-2 note in run_pipeline).
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         info!(target: "cancel", "transcribe_and_save: gate 1 cancelled");
-        reset_to_idle(ps);
         return (save_result, String::new());
     }
 
