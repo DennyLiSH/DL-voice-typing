@@ -231,8 +231,16 @@ impl PendingDeletes {
     }
 }
 
+/// Outcome of a soft-delete batch: fully transitioned stem count, per-file
+/// failures, and the `(orig, pending)` pairs to register for undo.
+pub(crate) struct SoftDeleteOutcome {
+    pub(crate) moved: u32,
+    pub(crate) failed: Vec<FailedDelete>,
+    pub(crate) pairs: Vec<(PathBuf, PathBuf)>,
+}
+
 /// Move WAV+JSON pairs for each stem in `filenames` into `data_saving_path/.dl_pending/`.
-/// Returns `(moved_stems, failed, pairs)`. Per-stem atomicity: a failed rename
+/// Per-stem atomicity: a failed rename
 /// in the middle of a pair is rolled back so the stem ends up either fully
 /// moved or fully not-moved.
 ///
@@ -242,10 +250,7 @@ impl PendingDeletes {
 /// 3. After `create_dir_all(pending)`, canonicalize pending and assert it
 ///    still starts with `base_canonical` — `.dl_pending` swapped for a
 ///    junction (mklink /J, no admin) is rejected wholesale.
-pub(crate) fn soft_delete_files(
-    base: &Path,
-    filenames: &[String],
-) -> (u32, Vec<FailedDelete>, Vec<(PathBuf, PathBuf)>) {
+pub(crate) fn soft_delete_files(base: &Path, filenames: &[String]) -> SoftDeleteOutcome {
     let pending = base.join(PENDING_DIR);
     let base_canon = match base.canonicalize() {
         Ok(b) => b,
@@ -254,14 +259,14 @@ pub(crate) fn soft_delete_files(
             // so this is normally unreachable there — but direct callers
             // (tests, future code) deserve an honest per-file failure rather
             // than a silent (0 moved, 0 failed) result that reads as success.
-            return (
-                0,
-                vec![FailedDelete {
+            return SoftDeleteOutcome {
+                moved: 0,
+                failed: vec![FailedDelete {
                     filename: "<data dir>".to_string(),
                     error: format!("cannot canonicalize data dir: {e}"),
                 }],
-                Vec::new(),
-            );
+                pairs: Vec::new(),
+            };
         }
     };
     let mut moved: u32 = 0;
@@ -347,7 +352,11 @@ pub(crate) fn soft_delete_files(
             pairs.extend(pair_moved);
         }
     }
-    (moved, failed, pairs)
+    SoftDeleteOutcome {
+        moved,
+        failed,
+        pairs,
+    }
 }
 
 /// Startup sweep: any files left in `.dl_pending/` are from a crashed or
@@ -737,7 +746,11 @@ pub async fn soft_delete_recordings(
 
     let result = tokio::task::spawn_blocking(move || -> Result<SoftDeleteBatch, CommandError> {
         let base = resolve_base_existing(&path_str)?;
-        let (moved, failed, pairs) = soft_delete_files(&base, &filenames);
+        let SoftDeleteOutcome {
+            moved,
+            failed,
+            pairs,
+        } = soft_delete_files(&base, &filenames);
         // Only schedule a timer when there is something to undo.
         let id = if !pairs.is_empty() {
             pending_arc.schedule(pairs)
@@ -769,7 +782,6 @@ pub async fn soft_delete_recordings(
 /// eagerly when the restore intent itself failed).
 #[tauri::command]
 pub async fn restore_pending_delete(
-    _config_cache: tauri::State<'_, ConfigCache>,
     pending: tauri::State<'_, Arc<PendingDeletes>>,
     id: u64,
 ) -> Result<RestoreReport, CommandError> {

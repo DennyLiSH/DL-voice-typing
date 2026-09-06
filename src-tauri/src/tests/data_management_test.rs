@@ -3,8 +3,9 @@
 //! Lives in `src/tests/` to keep production source files free of `.unwrap()`.
 
 use crate::commands::data_management_cmd::{
-    FailedDelete, PendingDeletes, friendly_delete_error, friendly_io_error, is_valid_stem,
-    resolve_base, resolve_child, scan_and_collect, soft_delete_files, sweep_pending_dir,
+    FailedDelete, PendingDeletes, SoftDeleteOutcome, friendly_delete_error, friendly_io_error,
+    is_valid_stem, resolve_base, resolve_child, scan_and_collect, soft_delete_files,
+    sweep_pending_dir,
 };
 use crate::config::AppConfig;
 use std::fs;
@@ -363,7 +364,11 @@ fn soft_delete_moves_pair_to_pending_and_restores() {
     write_recording(&base, stem, Some("hello"));
 
     // Soft-delete via the testable core (returns pairs for restore).
-    let (moved, failed, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    let SoftDeleteOutcome {
+        moved,
+        failed,
+        pairs,
+    } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 1, "one stem moved (stem-counted, not file-counted)");
     assert!(failed.is_empty());
     assert_eq!(pairs.len(), 2, "wav + json pair");
@@ -402,7 +407,11 @@ fn soft_delete_rejects_invalid_stem_zero_io() {
         "short".to_string(),
         "".to_string(),
     ];
-    let (moved, failed, pairs) = soft_delete_files(&base, &bad);
+    let SoftDeleteOutcome {
+        moved,
+        failed,
+        pairs,
+    } = soft_delete_files(&base, &bad);
     assert_eq!(moved, 0);
     assert_eq!(failed.len(), bad.len(), "all rejected");
     for f in &failed {
@@ -418,7 +427,11 @@ fn soft_delete_missing_files_count_as_moved_without_io() {
     let base = fresh_tempdir();
     let stem = "2026-09-05_10-00-01";
     // No write_recording — files absent on disk.
-    let (moved, failed, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    let SoftDeleteOutcome {
+        moved,
+        failed,
+        pairs,
+    } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 1, "target state already reached");
     assert!(failed.is_empty());
     assert!(pairs.is_empty(), "no pairs to track");
@@ -431,7 +444,7 @@ fn finalize_after_window_removes_pending_and_clears_entry() {
     let stem = "2026-09-05_10-00-02";
     write_recording(&base, stem, Some("t"));
 
-    let (moved, _, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    let SoftDeleteOutcome { moved, pairs, .. } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 1);
     let pd = Arc::new(PendingDeletes::default());
     let id = pd.schedule(pairs);
@@ -469,7 +482,7 @@ fn restore_partial_failure_leaves_failed_pairs_for_sweep() {
     let stem = "2026-09-05_10-00-03";
     write_recording(&base, stem, Some("x"));
 
-    let (moved, _, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    let SoftDeleteOutcome { moved, pairs, .. } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 1);
     let pd = Arc::new(PendingDeletes::default());
     let id = pd.schedule(pairs);
@@ -548,7 +561,7 @@ fn schedule_stores_entry_and_timer_runs_finalize() {
     let base = fresh_tempdir();
     let stem = "2026-09-05_10-00-04";
     write_recording(&base, stem, Some("z"));
-    let (moved, _, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    let SoftDeleteOutcome { moved, pairs, .. } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 1);
 
     let pd: Arc<PendingDeletes> = Arc::new(PendingDeletes::default());
@@ -598,7 +611,11 @@ fn pending_junction_rejected_by_symlink_guard() {
     symlink_dir(&external_pending, &pending_link).expect("symlink_dir requires Developer Mode");
 
     // soft_delete_files: must reject the stem (junction escapes base).
-    let (moved, failed, pairs) = soft_delete_files(&base, &[stem.to_string()]);
+    let SoftDeleteOutcome {
+        moved,
+        failed,
+        pairs,
+    } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 0, "junction must block all renames");
     assert_eq!(failed.len(), 1, "junction reports one failure for the stem");
     assert_eq!(failed[0].filename, stem);
