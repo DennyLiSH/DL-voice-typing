@@ -441,7 +441,7 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
     // Stage 6 fix #2 — preserve load-path observability. The object-form
     // HotkeySpec accepts any u32 vk on load; warn here if vk_to_key_name
     // round-trip fails so the spec is a known "dead" hotkey.
-    if crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(config.hotkey.vk)).is_none() {
+    if !crate::hotkey::is_resolvable_vk(config.hotkey.vk) {
         warn!(
             "config hotkey vk={:#x} has no name representation; keydown will not match",
             config.hotkey.vk

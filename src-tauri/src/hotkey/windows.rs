@@ -91,19 +91,6 @@ impl HotkeySpec {
         parts.push(crate::hotkey::vk_to_key_name(self.vk));
         parts.join("+")
     }
-
-    /// True iff the vk is a Ctrl key (left or right). Used by the modifier
-    /// self-family exclusion so the default config (RightCtrl alone) still
-    /// matches when the user presses RightCtrl.
-    pub fn vk_is_ctrl(vk: u32) -> bool {
-        vk == 0xA2 || vk == 0xA3
-    }
-    pub fn vk_is_shift(vk: u32) -> bool {
-        vk == 0xA0 || vk == 0xA1
-    }
-    pub fn vk_is_alt(vk: u32) -> bool {
-        vk == 0xA4 || vk == 0xA5
-    }
 }
 
 type SlotCallback = Arc<dyn Fn(HotkeyEvent) + Send + Sync>;
@@ -261,7 +248,7 @@ impl HotkeyManager for WindowsHotkeyManager {
         // represent. We still register (the spec is syntactically valid),
         // but a warn line tells anyone reading the log that the spec is
         // effectively a "dead key" (keyup will fire, keydown will not match).
-        if crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(spec.vk)).is_none() {
+        if !crate::hotkey::is_resolvable_vk(spec.vk) {
             tracing::warn!(
                 target: "hotkey",
                 "register: spec vk={:#x} has no name representation; keydown will not match any displayable name",
@@ -284,7 +271,7 @@ impl HotkeyManager for WindowsHotkeyManager {
         spec: HotkeySpec,
         callback: HotkeyCallback,
     ) -> Result<(), AppError> {
-        if crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(spec.vk)).is_none() {
+        if !crate::hotkey::is_resolvable_vk(spec.vk) {
             tracing::warn!(
                 target: "hotkey",
                 "register_record_only: spec vk={:#x} has no name representation; keydown will not match",

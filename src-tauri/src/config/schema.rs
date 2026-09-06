@@ -437,18 +437,12 @@ impl AppConfig {
         // rejects arbitrary u32 values that the object-form Deserialize
         // would otherwise accept silently (then surprise the user with a
         // "dead" hotkey on first save).
-        if self.hotkey.vk == 0
-            || crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(self.hotkey.vk))
-                .is_none()
-        {
+        if self.hotkey.vk == 0 || !crate::hotkey::is_resolvable_vk(self.hotkey.vk) {
             let hotkey = &self.hotkey;
             return Err(AppError::Config(format!("invalid hotkey: {hotkey}")));
         }
         if self.record_only_hotkey.vk == 0
-            || crate::hotkey::from_key_name(&crate::hotkey::vk_to_key_name(
-                self.record_only_hotkey.vk,
-            ))
-            .is_none()
+            || !crate::hotkey::is_resolvable_vk(self.record_only_hotkey.vk)
         {
             let key = &self.record_only_hotkey;
             return Err(AppError::Config(format!(

@@ -96,6 +96,14 @@ pub fn vk_to_key_name(vk: u32) -> String {
     format!("VK{vk:#x}")
 }
 
+/// True iff the vk has a name representation the hook's keydown matching can
+/// use (`vk_to_key_name` round-trips back through `from_key_name`). An
+/// unresolvable vk (e.g. an arbitrary u32 accepted by object-form
+/// Deserialize) is a "dead" hotkey: keyup fires, keydown never matches.
+pub fn is_resolvable_vk(vk: u32) -> bool {
+    from_key_name(&vk_to_key_name(vk)).is_some()
+}
+
 /// Convert a lowercase name like "rightctrl" / "esc" / "f1" into Title Case:
 /// "RightCtrl" / "Esc" / "F1". Splits at the boundary between a modifier
 /// prefix ("right"/"left") and the key name ("ctrl"/"alt"/"shift"/"escape")
@@ -238,5 +246,14 @@ mod tests {
         assert_eq!(from_key_name(""), None);
         // Unknown vk -> "VK{vk:#x}" form.
         assert_eq!(vk_to_key_name(0xDEAD), "VK0xdead");
+    }
+
+    #[test]
+    fn is_resolvable_vk_matches_roundtrip_semantics() {
+        assert!(is_resolvable_vk(0xA3), "RightCtrl");
+        assert!(is_resolvable_vk(0x41), "letter A");
+        assert!(is_resolvable_vk(0x39), "digit 9");
+        // "VK0xdead" does not resolve back through from_key_name — dead key.
+        assert!(!is_resolvable_vk(0xDEAD));
     }
 }
