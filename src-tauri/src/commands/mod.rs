@@ -41,9 +41,17 @@ impl EventEmitter for TauriEventEmitter {
     }
 }
 
+type EventHook = Box<dyn Fn(&str) + Send + Sync>;
+
 /// Mock event emitter for testing. Records all emitted events.
 pub struct MockEmitter {
     events: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    /// Optional test hook fired on every emit AFTER the event is recorded.
+    /// Used by cancel-gate tests to flip the cancel token at a precise
+    /// pipeline point (e.g. on `transcription-complete`, which is emitted
+    /// between gate 1 and gate 2 — preset-true tokens exit at gate 1 and
+    /// make every downstream gate test vacuous).
+    on_event: std::sync::Mutex<Option<EventHook>>,
 }
 
 impl Default for MockEmitter {
@@ -57,6 +65,17 @@ impl MockEmitter {
     pub fn new() -> Self {
         Self {
             events: std::sync::Mutex::new(Vec::new()),
+            on_event: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Install a callback fired on every `emit` (after recording). The
+    /// callback receives the event name; filter inside it.
+    pub fn set_on_event(&self, cb: EventHook) {
+        if let Some(mut guard) =
+            crate::util::lock_mutex(&self.on_event, "MockEmitter::set_on_event")
+        {
+            *guard = Some(cb);
         }
     }
 
@@ -72,6 +91,14 @@ impl EventEmitter for MockEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         if let Some(mut guard) = crate::util::lock_mutex(&self.events, "MockEmitter::emit") {
             guard.push((event.to_string(), payload));
+        }
+        // Fired while holding the on_event lock (a DIFFERENT lock than
+        // `events`, so the callback may call take_events without
+        // deadlocking). Callbacks must not re-enter set_on_event.
+        if let Some(guard) = crate::util::lock_mutex(&self.on_event, "MockEmitter::emit_on_event") {
+            if let Some(cb) = guard.as_ref() {
+                cb(event);
+            }
         }
     }
 }

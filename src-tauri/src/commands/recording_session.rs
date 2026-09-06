@@ -549,11 +549,12 @@ impl RecordingSession {
             return;
         }
 
-        // -- Gate 2 (classic): after LLM correction, before delivery --
-        // LLM HTTP request is non-interruptible; cancel = drop the result
-        // and reset state without injecting.
+        // -- Gate 2 (classic): after transcription returns, BEFORE the LLM
+        // phase starts. LLM HTTP is non-interruptible once launched, so this
+        // is the last cheap exit before it; a cancel that lands DURING LLM
+        // is caught by gate 3 below.
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            info!(target: "cancel", "run_pipeline: gate 2 cancelled after LLM");
+            info!(target: "cancel", "run_pipeline: gate 2 cancelled before LLM");
             reset_to_idle(&self.ps);
             let _ = self.ps.take_cancel_token();
             return;

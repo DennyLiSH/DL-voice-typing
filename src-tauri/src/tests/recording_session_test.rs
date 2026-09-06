@@ -689,21 +689,29 @@ async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
 
 #[tokio::test]
 async fn cancel_after_llm_drops_result_no_injection_no_review() {
-    // Gate 2: token flips AFTER transcribe_and_save completes but BEFORE
-    // resolve_llm_text returns. The mock LLM is synchronous, so the most
-    // reliable injection point is: pre-set the token (Whisper mock returns
-    // "raw transcription", then LLM is "corrected", but our gate-2 check
-    // fires because cancel is true the entire time).
+    // Gate 2: token flips on the `transcription-complete` emit — the exact
+    // pipeline point between gate 1 (which has already passed its load) and
+    // the gate 2 check. A preset-true token would exit at gate 1 and make
+    // this test vacuous for gate 2 (review finding: gates 2/3/3' were
+    // unreachable behind gate 1 with preset tokens).
     let rig = build_rig(config(false, false, true), "raw transcription");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
     let policy = SessionPolicy::from_config(&config(false, false, true));
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Pre-arm the cancel slot so the post-test take_cancel_token assertion
     // actually proves the pipeline cleared it (not that the slot was never
     // populated in the first place).
     rig.session.ps_ref().set_cancel_token(cancel.clone());
+    {
+        let cancel = cancel.clone();
+        rig.emitter.set_on_event(Box::new(move |event: &str| {
+            if event == "transcription-complete" {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }));
+    }
 
     rig.session
         .run_pipeline(
@@ -725,22 +733,45 @@ async fn cancel_after_llm_drops_result_no_injection_no_review() {
         rig.clipboard.injected()
     );
     assert!(rig.session.ps_ref().take_cancel_token().is_none());
+    // Distinguishability: the pipeline reached the transcription-complete
+    // emit (past gate 1) but never entered the LLM phase (gate 2 fires
+    // BEFORE resolve_llm_text). If this test is moved behind gate 3 the
+    // llm-refining assertion below goes red.
+    let names = event_names(&rig.emitter);
+    assert!(
+        names.contains(&"transcription-complete".to_string()),
+        "gate2 test must reach transcription-complete; events: {names:?}"
+    );
+    assert!(
+        !names.contains(&"llm-refining".to_string()),
+        "gate2 fires before LLM starts; llm-refining leaked through: {names:?}"
+    );
 }
 
 #[tokio::test]
 async fn cancel_before_delivery_skips_both_review_and_inject() {
-    // Gate 3: classic, review=true, token pre-set. Pipeline runs transcribe
-    // + LLM, then hits gate 3 (after normalize, before show_review).
-    let rig = build_rig(config(false, true, false), "review me");
+    // Gate 3: classic, review=true + llm=true. Token flips on the
+    // `llm-refining` emit (inside resolve_llm_text, i.e. AFTER gate 2 has
+    // passed its load and LLM work begins) so the next check — gate 3,
+    // after normalize, before show_review — is the one that trips.
+    let rig = build_rig(config(false, true, true), "review me");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
-    let policy = SessionPolicy::from_config(&config(false, true, false));
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let policy = SessionPolicy::from_config(&config(false, true, true));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Pre-arm the cancel slot so the post-test take_cancel_token assertion
     // actually proves the pipeline cleared it (not that the slot was never
     // populated in the first place).
     rig.session.ps_ref().set_cancel_token(cancel.clone());
+    {
+        let cancel = cancel.clone();
+        rig.emitter.set_on_event(Box::new(move |event: &str| {
+            if event == "llm-refining" {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }));
+    }
 
     rig.session
         .run_pipeline(
@@ -765,22 +796,49 @@ async fn cancel_before_delivery_skips_both_review_and_inject() {
     // via DeliveryController. We assert nothing about review here beyond
     // clipboard emptiness (the mock window controller is a no-op).
     assert!(!names.contains(&"injection-complete".to_string()));
+    // Distinguishability from gate 2: LLM actually ran (llm-refining was
+    // emitted), so this test proves the post-LLM gate trips.
+    assert!(
+        names.contains(&"llm-refining".to_string()),
+        "gate3 test must reach the LLM phase; events: {names:?}"
+    );
     assert!(rig.session.ps_ref().take_cancel_token().is_none());
 }
 
 #[tokio::test]
 async fn cancel_during_fast_path_skips_injection() {
-    // Gate 2'/3': RealtimeDirect fast path. Pre-set cancel token.
-    let rig = build_rig(config(true, false, false), "ignored");
+    // Gate 2' (fast path): RealtimeDirect + LLM. Token flips on the
+    // `llm-refining` emit (resolve_llm_text starts AFTER the fast path's
+    // earlier steps) so the fast-path cancel gates — checked after LLM,
+    // before delivery — are what trip. A preset-true token would exit at
+    // gate 2' indistinguishably, hiding coverage gaps behind it.
+    //
+    // COVERAGE SEMANTICS: gates 2' and 3' are adjacent, externally
+    // indistinguishable defences (same reset/no-inject effect; the only
+    // code between them is the save await, which emits no event). This
+    // test therefore locks the JOINT coverage "gate2' OR gate3' exists":
+    // disabling either one alone stays green (the other catches it —
+    // verified manually), disabling BOTH goes red (the token flip reaches
+    // inject_direct). Splitting them requires a test hook inside the save
+    // spawn_blocking closure; tracked in _Project/TODO.md.
+    let rig = build_rig(config(true, false, true), "ignored");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
-    let policy = SessionPolicy::from_config(&config(true, false, false));
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let policy = SessionPolicy::from_config(&config(true, false, true));
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Pre-arm the cancel slot so the post-test take_cancel_token assertion
     // actually proves the pipeline cleared it (not that the slot was never
     // populated in the first place).
     rig.session.ps_ref().set_cancel_token(cancel.clone());
+    {
+        let cancel = cancel.clone();
+        rig.emitter.set_on_event(Box::new(move |event: &str| {
+            if event == "llm-refining" {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }));
+    }
 
     rig.session
         .run_realtime_fast_path(
@@ -799,6 +857,12 @@ async fn cancel_during_fast_path_skips_injection() {
         rig.clipboard.injected().is_empty(),
         "fast-path cancel must skip inject"
     );
+    let names = event_names(&rig.emitter);
+    assert!(
+        names.contains(&"llm-refining".to_string()),
+        "gate2' test must reach the LLM phase; events: {names:?}"
+    );
+    assert!(!names.contains(&"injection-complete".to_string()));
     assert!(rig.session.ps_ref().take_cancel_token().is_none());
 }
 
