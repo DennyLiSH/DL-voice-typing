@@ -1095,3 +1095,72 @@ describe('re-transcription edit-wipe confirmation', () => {
         ).toContain('transcribe_recording');
     });
 });
+
+// ---------------------------------------------------------------------------
+// Recording-row rendering consolidation (architecture review 候选 4):
+// buildListRow / renderBadges badge cluster + stem formatting equivalence.
+// buildListRow/renderBadges are module-private — driven via loadFresh + DOM.
+// ---------------------------------------------------------------------------
+
+describe('recording row badge cluster + stem formatting (consolidated)', () => {
+    beforeEach(() => {
+        document.body.innerHTML = '';
+    });
+
+    it('renders the dropped-blocks warning after the status badge in list rows', async () => {
+        await loadFresh((cmd) => {
+            if (cmd === 'list_saved_recordings') {
+                return Promise.resolve({
+                    items: [{ ...ITEM, dropped_blocks: 2 }],
+                    total: 1,
+                    total_bytes: 150,
+                    offset: 0,
+                    limit: 200,
+                    path_configured: true,
+                });
+            }
+            return defaultInvoke(cmd);
+        });
+        const meta = document.querySelector('.rec-row .rec-row-meta');
+        const badges = meta.querySelectorAll('span');
+        expect(badges.length).toBe(2);
+        expect(badges[0].className).toBe('badge badge-done');
+        expect(badges[0].textContent).toBe('已转录');
+        expect(badges[1].className).toBe('badge badge-warning');
+        expect(badges[1].textContent).toBe('音频不完整');
+    });
+
+    it('renders no warning badge when dropped_blocks is 0', async () => {
+        await loadFresh(defaultInvoke);
+        const meta = document.querySelector('.rec-row .rec-row-meta');
+        expect(meta.querySelectorAll('.badge-warning').length).toBe(0);
+        expect(meta.querySelectorAll('span').length).toBe(1);
+    });
+
+    it('renders the same badge cluster in the detail badges strip', async () => {
+        await loadFresh((cmd) => {
+            if (cmd === 'get_recording_segments') {
+                return Promise.resolve({ ...SEGS, dropped_blocks: 1 });
+            }
+            return defaultInvoke(cmd);
+        });
+        await selectFirstRecording();
+        const badges = document.querySelectorAll('#detail-badges span');
+        expect(badges.length).toBe(2);
+        expect(badges[0].className).toBe('badge badge-done');
+        expect(badges[1].className).toBe('badge badge-warning');
+        expect(badges[1].textContent).toBe('音频不完整');
+    });
+
+    it('formats stems as YYYY-MM-DD HH:MM:SS via formatStemForDisplay', async () => {
+        await loadFresh(defaultInvoke);
+        // List row timestamp.
+        const ts = document.querySelector('.rec-row-ts');
+        expect(ts.textContent).toBe('2026-08-18 10:00:00');
+        // Detail title (set on selection).
+        await selectFirstRecording();
+        expect(document.getElementById('detail-title').textContent).toBe(
+            '2026-08-18 10:00:00',
+        );
+    });
+});

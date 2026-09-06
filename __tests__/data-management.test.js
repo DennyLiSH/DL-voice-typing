@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
     buildExpandedMetadata,
     buildRecordingRow,
+    buildStatusBadges,
     computeOffsetAfterDeletion,
     deleteConfirmMessage,
     formatBytes,
@@ -516,5 +517,48 @@ describe('buildExpandedMetadata', () => {
         expect(lines.some((l) => l.textContent.startsWith('语言：'))).toBe(
             true,
         );
+    });
+});
+
+describe('buildStatusBadges', () => {
+    beforeEach(() => {
+        document.body.innerHTML = '';
+    });
+
+    it('renders a single status badge when dropped_blocks is 0', () => {
+        for (const [status, cls, text] of [
+            ['done', 'badge badge-done', '已转录'],
+            ['failed', 'badge badge-failed', '转录失败'],
+            ['pending', 'badge badge-pending', '待转录'],
+        ]) {
+            const spans = buildStatusBadges(status, 0);
+            expect(spans.length).toBe(1);
+            expect(spans[0].className).toBe(cls);
+            expect(spans[0].textContent).toBe(text);
+        }
+    });
+
+    it('appends the dropped-blocks warning badge when dropped_blocks > 0', () => {
+        const spans = buildStatusBadges('done', 3);
+        expect(spans.length).toBe(2);
+        // Order: status first, warning second.
+        expect(spans[0].className).toBe('badge badge-done');
+        expect(spans[0].textContent).toBe('已转录');
+        expect(spans[1].className).toBe('badge badge-warning');
+        expect(spans[1].textContent).toBe('音频不完整');
+    });
+
+    it('treats non-positive and non-numeric dropped_blocks as 0', () => {
+        expect(buildStatusBadges('done', -1).length).toBe(1);
+        expect(buildStatusBadges('done', undefined).length).toBe(1);
+        expect(buildStatusBadges('done', null).length).toBe(1);
+    });
+
+    it('builds via DOM API only (F1 guard: no innerHTML markup)', () => {
+        const spans = buildStatusBadges('failed', 2);
+        for (const span of spans) {
+            expect(span.children.length).toBe(0);
+            expect(span.innerHTML).toBe(span.textContent);
+        }
     });
 });

@@ -1,11 +1,16 @@
 /**
- * Pure helpers for the data management UI.
+ * Helpers for the data management UI (and the transcribe window's list).
  *
- * These functions are extracted from settings.js so they can be unit-tested
- * in isolation via vitest (see __tests__/data-management.test.js).
+ * Two zones live here:
+ *  - Pure functions (format/preview/pagination): same input → same output,
+ *    no DOM access, unit-testable via vitest in isolation.
+ *  - DOM builders (buildRecordingRow / buildExpandedMetadata /
+ *    buildStatusBadges): create elements via DOM API for their callers
+ *    (data-manager.js / transcribe.js), which own the imperative glue.
  *
- * Convention: every function here is pure — same input → same output, no DOM
- * access, no side effects. The imperative glue lives in settings.js.
+ * Per design-review constraint F1, DOM builders use createElement +
+ * textContent — never concatenate untrusted text into HTML. (The only
+ * innerHTML exception in ui/ is the static icon SVG constants.)
  */
 
 import { statusBadge } from './transcribe.js';
@@ -223,6 +228,33 @@ export function buildRecordingRow(entry, opts = {}) {
 }
 
 /**
+ * Build the status badge cluster shared by all recording-row surfaces:
+ * the transcription status badge, plus the "音频不完整" warning badge when
+ * dropped_blocks > 0. Single source of the cluster's class names, copy and
+ * ordering (status first, warning second) for transcribe.js's list row and
+ * detail badges, and buildExpandedMetadata's status line.
+ *
+ * @param {string} status - transcription_status ('done' | 'failed' | other)
+ * @param {number} droppedBlocks
+ * @returns {HTMLElement[]}
+ */
+export function buildStatusBadges(status, droppedBlocks) {
+    const spans = [];
+    const st = statusBadge(status);
+    const stSpan = document.createElement('span');
+    stSpan.className = st.className;
+    stSpan.textContent = st.text;
+    spans.push(stSpan);
+    if (Number(droppedBlocks) > 0) {
+        const warnSpan = document.createElement('span');
+        warnSpan.className = 'badge badge-warning';
+        warnSpan.textContent = '音频不完整';
+        spans.push(warnSpan);
+    }
+    return spans;
+}
+
+/**
  * Build the expanded metadata section (language / transcription / LLM / final text).
  *
  * @param {Object} entry
@@ -240,16 +272,11 @@ export function buildExpandedMetadata(entry) {
         lbl.textContent = '状态：';
         const val = document.createElement('span');
         val.className = 'data-row-meta-value';
-        const st = statusBadge(entry.transcription_status);
-        const stSpan = document.createElement('span');
-        stSpan.className = st.className;
-        stSpan.textContent = st.text;
-        val.appendChild(stSpan);
-        if (entry.dropped_blocks > 0) {
-            const warnSpan = document.createElement('span');
-            warnSpan.className = 'badge badge-warning';
-            warnSpan.textContent = '音频不完整';
-            val.appendChild(warnSpan);
+        for (const badge of buildStatusBadges(
+            entry.transcription_status,
+            entry.dropped_blocks,
+        )) {
+            val.appendChild(badge);
         }
         statusLine.appendChild(lbl);
         statusLine.appendChild(val);

@@ -22,6 +22,10 @@
 
 import { call, reportError } from './lib/api.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
+import {
+    buildStatusBadges,
+    formatStemForDisplay,
+} from './lib/data-management.js';
 import { attachAudio, loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
     filterRecordOnly,
@@ -32,7 +36,6 @@ import {
     mergeSegmentTexts,
     PHASE,
     shouldAutoScroll,
-    statusBadge,
     uiFlags,
 } from './lib/transcribe.js';
 
@@ -149,32 +152,21 @@ function buildListRow(item) {
 
     const ts = document.createElement('span');
     ts.className = 'rec-row-ts';
-    ts.textContent = formatStem(item.filename);
+    ts.textContent = formatStemForDisplay(item.filename);
     row.appendChild(ts);
 
     const meta = document.createElement('span');
     meta.className = 'rec-row-meta';
 
-    const badge = statusBadge(item.transcription_status);
-    const badgeEl = document.createElement('span');
-    badgeEl.className = badge.className;
-    badgeEl.textContent = badge.text;
-    meta.appendChild(badgeEl);
-
-    if (item.dropped_blocks > 0) {
-        const warn = document.createElement('span');
-        warn.className = 'badge badge-warning';
-        warn.textContent = '音频不完整';
-        meta.appendChild(warn);
+    for (const badge of buildStatusBadges(
+        item.transcription_status,
+        item.dropped_blocks,
+    )) {
+        meta.appendChild(badge);
     }
 
     row.appendChild(meta);
     return row;
-}
-
-function formatStem(stem) {
-    if (typeof stem !== 'string' || stem.length !== 19) return stem || '';
-    return `${stem.slice(0, 10)} ${stem.slice(11).replace(/-/g, ':')}`;
 }
 
 // --- Detail ----------------------------------------------------------------
@@ -215,7 +207,7 @@ async function selectRecording(filename) {
     if (detail) detail.hidden = false;
 
     const title = $('detail-title');
-    if (title) title.textContent = formatStem(filename);
+    if (title) title.textContent = formatStemForDisplay(filename);
 
     setPhase(PHASE.LOADING);
     try {
@@ -252,16 +244,8 @@ function renderBadges() {
     const wrap = $('detail-badges');
     if (!wrap) return;
     wrap.textContent = '';
-    const badge = statusBadge(state.status);
-    const el = document.createElement('span');
-    el.className = badge.className;
-    el.textContent = badge.text;
-    wrap.appendChild(el);
-    if (state.droppedBlocks > 0) {
-        const warn = document.createElement('span');
-        warn.className = 'badge badge-warning';
-        warn.textContent = '音频不完整';
-        wrap.appendChild(warn);
+    for (const badge of buildStatusBadges(state.status, state.droppedBlocks)) {
+        wrap.appendChild(badge);
     }
 }
 
