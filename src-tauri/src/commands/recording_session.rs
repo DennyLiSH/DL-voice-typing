@@ -545,7 +545,6 @@ impl RecordingSession {
         if transcription.is_empty() {
             info!("run_pipeline: empty transcription, resetting to idle");
             reset_to_idle(&self.ps);
-            let _ = self.ps.take_cancel_token();
             return;
         }
 
@@ -556,7 +555,6 @@ impl RecordingSession {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_pipeline: gate 2 cancelled before LLM");
             reset_to_idle(&self.ps);
-            let _ = self.ps.take_cancel_token();
             return;
         }
 
@@ -585,7 +583,6 @@ impl RecordingSession {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_pipeline: gate 3 cancelled before delivery");
             reset_to_idle(&self.ps);
-            let _ = self.ps.take_cancel_token();
             return;
         }
 
@@ -685,7 +682,6 @@ impl RecordingSession {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_realtime_fast_path: gate 2' cancelled after LLM");
             reset_to_idle(&self.ps);
-            let _ = self.ps.take_cancel_token();
             let _ = save_handle.await;
             return;
         }
@@ -705,7 +701,6 @@ impl RecordingSession {
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             info!(target: "cancel", "run_realtime_fast_path: gate 3' cancelled before inject");
             reset_to_idle(&self.ps);
-            let _ = self.ps.take_cancel_token();
             return;
         }
 
@@ -937,7 +932,12 @@ async fn resolve_llm_text(
     }
 }
 
-/// Reset state machine to Idle and hide floating window.
+/// Reset state machine to Idle and hide floating window. Also drains the
+/// cancel-token slot — every caller is a pipeline ABORT path (cancel gate,
+/// empty transcription, error), and a stale token would make the *next*
+/// session see a tripped flag and short-circuit out of Transcribing
+/// before it starts. Delivery-success exits take the token separately
+/// (they do not pass through here).
 fn reset_to_idle(ps: &PipelineState) {
     ps.sm_reset();
     ps.window_controller().hide_floating();
@@ -945,6 +945,7 @@ fn reset_to_idle(ps: &PipelineState) {
         ps.window_controller().hide_review();
         ps.review().set_shown_on_press(false);
     }
+    let _ = ps.take_cancel_token();
 }
 
 /// Replace ASCII comma/period with full-width Chinese equivalents when

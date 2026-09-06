@@ -190,7 +190,8 @@ export function populateMainKeySelects() {
     );
     for (const sel of sels) {
         if (!sel) continue;
-        sel.innerHTML = '';
+        // replaceChildren (no innerHTML) per the ui/ render-safety rule.
+        sel.replaceChildren();
         for (const name of MAIN_KEYS) {
             const opt = document.createElement('option');
             opt.value = name;

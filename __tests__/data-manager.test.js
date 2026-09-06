@@ -74,7 +74,7 @@ function defaultInvoke(cmd) {
         case 'soft_delete_recordings':
             return Promise.resolve({ id: 42, moved: 1, failed: [] });
         case 'restore_pending_delete':
-            return Promise.resolve(1);
+            return Promise.resolve({ restored: 1, failed: 0 });
         default:
             return Promise.resolve(null);
     }
@@ -251,5 +251,49 @@ describe('audio load failure badge (P1 fix: render-state driven)', () => {
             '音频加载失败',
         );
         expect(row.querySelector('.btn-play')).toBeNull();
+    });
+});
+
+describe('undo restore report (restore_pending_delete {restored, failed})', () => {
+    async function clickUndoWithReport(report) {
+        await loadFresh((cmd) => {
+            if (cmd === 'restore_pending_delete') {
+                return Promise.resolve(report);
+            }
+            return defaultInvoke(cmd);
+        });
+        mod.onDataPageEnter();
+        await flush();
+        await flush();
+        // Single-row delete → confirm dialog (danger) → soft-delete →
+        // pending toast → 撤销 click → restore report renders in the bar.
+        document
+            .querySelector('.btn-delete')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flush();
+        const confirmBtn = document.querySelector(
+            '.dialog-actions .btn-danger',
+        );
+        confirmBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flush();
+        await flush();
+        const undoBtn = document.getElementById('pending-toast-undo');
+        undoBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flush();
+        await flush();
+        return document.getElementById('data-error-bar');
+    }
+
+    it('full restore shows the neutral notice variant (not error red)', async () => {
+        const bar = await clickUndoWithReport({ restored: 2, failed: 0 });
+        expect(bar.textContent).toContain('已撤销删除，恢复 2 条');
+        expect(bar.classList.contains('notice')).toBe(true);
+    });
+
+    it('partial restore surfaces the failed count in the error bar', async () => {
+        const bar = await clickUndoWithReport({ restored: 1, failed: 1 });
+        expect(bar.textContent).toContain('恢复 1 条');
+        expect(bar.textContent).toContain('1 条恢复失败');
+        expect(bar.classList.contains('notice')).toBe(false);
     });
 });

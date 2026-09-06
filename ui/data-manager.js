@@ -263,23 +263,28 @@ function showDataError(msg) {
     const bar = $data('data-error-bar');
     if (bar) {
         bar.textContent = msg;
+        bar.classList.remove('notice');
+        bar.hidden = false;
+    }
+}
+
+/** Neutral (non-error) feedback in the same bar slot — success/partial
+ *  outcomes that still deserve an in-page message. */
+function showDataNotice(msg) {
+    const bar = $data('data-error-bar');
+    if (bar) {
+        bar.textContent = msg;
+        bar.classList.add('notice');
         bar.hidden = false;
     }
 }
 
 function hideDataError() {
     const bar = $data('data-error-bar');
-    if (bar) bar.hidden = true;
-}
-
-function cssEscape(s) {
-    if (
-        typeof window.CSS !== 'undefined' &&
-        typeof window.CSS.escape === 'function'
-    ) {
-        return window.CSS.escape(s);
+    if (bar) {
+        bar.classList.remove('notice');
+        bar.hidden = true;
     }
-    return String(s).replace(/["\\]/g, '\\$&');
 }
 
 // --- Event wiring ---
@@ -548,20 +553,36 @@ async function handleBatchDelete() {
  * @param {number} id - the soft-delete batch id returned by the backend
  */
 async function undoDelete(id) {
+    let report = null;
+    let failure = null;
     try {
-        const restored = await call('restore_pending_delete', { id });
-        showDataError(`已撤销删除，恢复 ${restored} 条。`);
+        report = await call('restore_pending_delete', { id });
     } catch (e) {
         const msg = typeof e === 'string' ? e : e?.message || '未知错误';
-        showDataError(`撤销失败：${msg}`);
+        failure = `撤销失败：${msg}`;
     }
     // Refresh regardless — failed restore leaves the files in pending,
     // successful restore brings them back; either way the list needs reload.
+    // NOTE: the status message renders AFTER the refresh, because a
+    // successful loadRecordingsPage calls hideDataError() and would wipe
+    // a message shown before it.
     try {
         await loadRecordingsPage(dataState.offset);
     } catch (_e) {
         // loadRecordingsPage already surfaces its own error-bar message;
         // swallowing here avoids a double error.
+    }
+    if (failure) {
+        showDataError(failure);
+    } else if (report && report.failed > 0) {
+        // report = { restored, failed }: a partial restore must be visible —
+        // failed pairs stay in pending until the next startup sweep.
+        showDataError(
+            `已撤销删除，恢复 ${report.restored} 条；${report.failed} 条恢复失败（已保留在待删除目录，重启后清理）。`,
+        );
+    } else {
+        const n = report?.restored ?? 0;
+        showDataNotice(`已撤销删除，恢复 ${n} 条。`);
     }
 }
 

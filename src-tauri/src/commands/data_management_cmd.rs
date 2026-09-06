@@ -119,9 +119,11 @@ impl Default for PendingDeletes {
     }
 }
 
-/// Report returned from `restore_with_id`. The command layer adapts this
-/// into a wire-friendly result.
-#[derive(Debug, Clone, Copy)]
+/// Report returned from `restore_with_id`. Serialized to the frontend so
+/// the undo toast can tell the user when a restore was PARTIAL (failed > 0
+/// means some pairs could not be moved back and stay in pending until the
+/// startup sweep removes them).
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct RestoreReport {
     pub restored: u32,
     pub failed: u32,
@@ -133,13 +135,27 @@ impl PendingDeletes {
     /// The returned id is the undo handle.
     pub(crate) fn schedule(self: &Arc<Self>, pairs: Vec<(PathBuf, PathBuf)>) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        if let Some(mut guard) = crate::util::lock_mutex(&self.inner, "PendingDeletes::schedule") {
-            guard.insert(
-                id,
-                PendingEntry {
-                    pairs: pairs.clone(),
-                },
-            );
+        match crate::util::lock_mutex(&self.inner, "PendingDeletes::schedule") {
+            Some(mut guard) => {
+                guard.insert(
+                    id,
+                    PendingEntry {
+                        pairs: pairs.clone(),
+                    },
+                );
+            }
+            // Lock poisoned: the entry is NOT registered, so the undo toast's
+            // 撤销 click will surface an unknown-id error and the pending
+            // files are left for the startup sweep. Log loudly rather than
+            // silently returning an unusable undo handle.
+            None => {
+                warn!(
+                    target: "data",
+                    id,
+                    files = pairs.len(),
+                    "PendingDeletes lock poisoned; batch registered WITHOUT undo (sweep will clean up)"
+                );
+            }
         }
         // Spawn the timer thread (detach — process exit kills it, which is
         // fine: startup sweep handles residuals).
@@ -233,7 +249,20 @@ pub(crate) fn soft_delete_files(
     let pending = base.join(PENDING_DIR);
     let base_canon = match base.canonicalize() {
         Ok(b) => b,
-        Err(_) => return (0, Vec::new(), Vec::new()), // unreachable in command path
+        Err(e) => {
+            // The command path pre-canonicalizes via resolve_base_existing,
+            // so this is normally unreachable there — but direct callers
+            // (tests, future code) deserve an honest per-file failure rather
+            // than a silent (0 moved, 0 failed) result that reads as success.
+            return (
+                0,
+                vec![FailedDelete {
+                    filename: "<data dir>".to_string(),
+                    error: format!("cannot canonicalize data dir: {e}"),
+                }],
+                Vec::new(),
+            );
+        }
     };
     let mut moved: u32 = 0;
     let mut failed: Vec<FailedDelete> = Vec::new();
@@ -337,7 +366,10 @@ pub fn sweep_pending_dir(config: &crate::config::schema::AppConfig) {
     }
     let base = match Path::new(&config.data_saving_path).canonicalize() {
         Ok(b) => b,
-        Err(_) => return,
+        Err(e) => {
+            warn!(target: "data", "sweep aborted: cannot canonicalize data_saving_path: {e}");
+            return;
+        }
     };
     let pending = base.join(PENDING_DIR);
     if !pending.exists() {
@@ -345,7 +377,10 @@ pub fn sweep_pending_dir(config: &crate::config::schema::AppConfig) {
     }
     let pc = match pending.canonicalize() {
         Ok(p) => p,
-        Err(_) => return,
+        Err(e) => {
+            warn!(target: "data", "sweep aborted: cannot canonicalize pending dir: {e}");
+            return;
+        }
     };
     if !pc.starts_with(&base) {
         warn!(target: "data", "pending dir escapes base (junction?); sweep aborted");
@@ -353,7 +388,10 @@ pub fn sweep_pending_dir(config: &crate::config::schema::AppConfig) {
     }
     let read_dir = match std::fs::read_dir(&pc) {
         Ok(rd) => rd,
-        Err(_) => return,
+        Err(e) => {
+            warn!(target: "data", "sweep aborted: cannot read pending dir: {e}");
+            return;
+        }
     };
     let mut removed: Vec<String> = Vec::new();
     for entry in read_dir.flatten() {
@@ -725,16 +763,17 @@ pub async fn soft_delete_recordings(
 }
 
 /// Restore a soft-delete batch by id. The frontend calls this from the
-/// undo-toast click. Returns the number of stems successfully restored
-/// (wav + json pairs; a missing source counts as not-restored but does
-/// not bubble an error — iteration 2 reversal, deviation #14).
+/// undo-toast click. Returns the full report (restored + failed) so a
+/// partial restore is user-visible: failed pairs stay in pending until
+/// the startup sweep removes them (deviation #14 — do NOT destroy them
+/// eagerly when the restore intent itself failed).
 #[tauri::command]
 pub async fn restore_pending_delete(
     _config_cache: tauri::State<'_, ConfigCache>,
     pending: tauri::State<'_, Arc<PendingDeletes>>,
     id: u64,
-) -> Result<u32, CommandError> {
-    pending.inner().restore_with_id(id).map(|r| r.restored)
+) -> Result<RestoreReport, CommandError> {
+    pending.inner().restore_with_id(id)
 }
 
 #[tauri::command]
