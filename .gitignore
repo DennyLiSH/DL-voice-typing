@@ -13,6 +13,8 @@ Desktop.ini
 # IDE
 .claude/
 .vscode/
+.pi/
+.zcode/
 .idea/
 *.swp
 *.swo
