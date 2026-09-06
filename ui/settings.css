@@ -169,6 +169,14 @@ label {
   color: var(--text-tertiary);
   margin: 0 var(--space-1);
 }
+/* Live combo label under the combo controls (spec: 预览文本 "Ctrl+Shift+A").
+ * Secondary text — it echoes the form state, it must not compete with the
+ * controls themselves. */
+.hotkey-preview {
+  margin-top: var(--space-2);
+  font-size: var(--font-label);
+  color: var(--text-secondary);
+}
 
 select, input[type="text"], input[type="password"] {
   width: 100%;
@@ -818,6 +826,17 @@ button:disabled {
 
 .pending-toast-undo:hover {
     background: rgba(var(--accent-rgb), 0.1);
+}
+
+/* Finalized state (countdown hit zero): the undo window is closed on the
+ * backend, so the affordance stays visible but inert. */
+.pending-toast-undo:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.pending-toast-undo:disabled:hover {
+    background: transparent;
 }
 
 .pending-toast-undo:focus-visible {

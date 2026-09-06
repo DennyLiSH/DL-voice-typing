@@ -35,6 +35,22 @@ export const MAIN_KEYS = [
     ...DIGIT_KEYS,
 ];
 
+// Mirror of the backend HotkeySpec defaults (config/schema.rs: RightCtrl /
+// RightAlt, no modifiers). Frozen so a shared reference can never be
+// mutated through one caller and leak into another combo's fallback.
+export const DEFAULT_PRIMARY_SPEC = Object.freeze({
+    ctrl: false,
+    shift: false,
+    alt: false,
+    vk: 0xa3,
+});
+export const DEFAULT_RECORD_ONLY_SPEC = Object.freeze({
+    ctrl: false,
+    shift: false,
+    alt: false,
+    vk: 0xa5,
+});
+
 /**
  * Canonical-name -> vk table. Mirrors NAMED_KEYS on the backend but only
  * stores canonical (Title-Case) entries — the frontend never emits
@@ -84,18 +100,27 @@ function nameToVk(name) {
 }
 
 /**
- * vk -> canonical name. Mirrors vk_to_key_name in
- * src-tauri/src/hotkey/mod.rs (Title-Case output, `VK0xNN` fallback for
- * unknown vk). Used by writeSpecToUI to find the matching <option>.
+ * vk -> canonical name, or undefined when the vk has no table entry.
+ * Single lookup shared by vkToName (display, with fallback) and
+ * writeSpecToUI (form reflection, needs the empty case).
  */
-function vkToName(vk) {
+function canonicalNameForVk(vk) {
     for (const [name, code] of NAME_TO_VK) {
         if (code === vk) return name;
     }
+    return undefined;
+}
+
+/**
+ * vk -> canonical name. Mirrors vk_to_key_name in
+ * src-tauri/src/hotkey/mod.rs (Title-Case output, `VK0xNN` fallback for
+ * unknown vk). Used by specLabel to render any spec.
+ */
+function vkToName(vk) {
     // Backend uses `format!("VK{vk:#x}")` which yields `VK0xdead`
     // (lowercase hex with explicit `0x` prefix). Mirror that exactly so
     // the label string is byte-identical to the backend display().
-    return `VK0x${vk.toString(16)}`;
+    return canonicalNameForVk(vk) ?? `VK0x${vk.toString(16)}`;
 }
 
 /**
@@ -167,14 +192,7 @@ export function writeSpecToUI(prefix, spec) {
     // Direct table lookup: if vk has no canonical name, we must NOT guess
     // — leave the select empty so the user sees `VK0xNN` in specLabel
     // and the spec round-trips out unchanged.
-    let knownName = null;
-    for (const [name, code] of NAME_TO_VK) {
-        if (code === spec.vk) {
-            knownName = name;
-            break;
-        }
-    }
-    sel.value = knownName ?? '';
+    sel.value = canonicalNameForVk(spec.vk) ?? '';
 }
 
 /**

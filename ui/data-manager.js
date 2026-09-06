@@ -432,6 +432,16 @@ function wireDataListEvents() {
     }
 }
 
+/** Shared soft-delete feedback: show the undo toast when anything moved. */
+function showUndoToast(result) {
+    if (result.moved > 0) {
+        showPendingToast({
+            moved: result.moved,
+            onUndo: () => undoDelete(result.id),
+        });
+    }
+}
+
 async function handleSingleDelete(filename) {
     const ok = await confirmDialog({
         title: '删除录音',
@@ -445,12 +455,7 @@ async function handleSingleDelete(filename) {
         const result = await call('soft_delete_recordings', {
             filenames: [filename],
         });
-        if (result.moved > 0) {
-            showPendingToast({
-                moved: result.moved,
-                onUndo: () => undoDelete(result.id),
-            });
-        }
+        showUndoToast(result);
         // Clear audio state if it was this row (constraint #10a).
         if (dataState.audioPlayerRowId === filename) {
             releaseAudio();
@@ -497,12 +502,7 @@ async function handleBatchDelete() {
     const filenames = Array.from(dataState.selectedFiles);
     try {
         const result = await call('soft_delete_recordings', { filenames });
-        if (result.moved > 0) {
-            showPendingToast({
-                moved: result.moved,
-                onUndo: () => undoDelete(result.id),
-            });
-        }
+        showUndoToast(result);
         dataState.selectedFiles.clear();
         // Clear audio if it was a selected row.
         if (

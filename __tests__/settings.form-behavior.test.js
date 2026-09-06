@@ -41,6 +41,7 @@ const MINIMAL_DOM = `
       <option value="F9">F9</option>
     </select>
   </div>
+  <div id="hotkey-preview" aria-live="polite"></div>
   <select id="whisper-model"><option value="base"></option></select>
   <div id="model-status-text"></div>
   <button id="btn-download-model"></button>
@@ -78,6 +79,7 @@ const MINIMAL_DOM = `
       <option value="F9">F9</option>
     </select>
   </div>
+  <div id="record-only-hotkey-preview" aria-live="polite"></div>
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
   <div id="data-error-bar"></div>
@@ -176,6 +178,32 @@ describe('settings save flow dirty-state recalculation', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+    });
+
+    it('hotkey preview renders the loaded spec and follows combo edits', () => {
+        // Spec: 预览文本 "Ctrl+Shift+A" — live label under the combo
+        // controls, initialized from the loaded config.
+        const preview = document.getElementById('hotkey-preview');
+        const roPreview = document.getElementById('record-only-hotkey-preview');
+        expect(preview.textContent).toBe('当前组合：RightCtrl');
+        expect(roPreview.textContent).toBe('当前组合：RightAlt');
+
+        // Toggling modifiers + main key updates the label live.
+        const ctrl = document.getElementById('hotkey-ctrl');
+        ctrl.checked = true;
+        ctrl.dispatchEvent(new Event('change'));
+        const sel = document.getElementById('hotkey');
+        sel.value = 'F9';
+        sel.dispatchEvent(new Event('change'));
+        expect(preview.textContent).toBe('当前组合：Ctrl+F9');
+    });
+
+    it('hotkey preview shows 未选择主键 when the main-key select is empty', () => {
+        const preview = document.getElementById('hotkey-preview');
+        const sel = document.getElementById('hotkey');
+        sel.value = '';
+        sel.dispatchEvent(new Event('change'));
+        expect(preview.textContent).toBe('未选择主键');
     });
 
     it('edits during the autostart await window keep the form dirty (race fix)', async () => {

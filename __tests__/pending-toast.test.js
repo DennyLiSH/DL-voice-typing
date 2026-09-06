@@ -47,12 +47,26 @@ describe('pending toast lifecycle', () => {
         expect(getToastEl()).toBeNull();
     });
 
-    it('advancing timers past 5s destroys the toast and does NOT invoke onUndo', () => {
+    it('countdown hitting zero shows 已永久删除 with disabled undo, then auto-dismisses', () => {
         const onUndo = vi.fn();
-        showPendingToast({ moved: 1, onUndo });
-        // The countdown ticks once per second; advancing by 5s emits 5 ticks
-        // then triggers the destroy at remaining=0 (see tick()).
+        showPendingToast({ moved: 2, onUndo });
+        // The countdown ticks once per second; at remaining=0 the toast
+        // enters the finalized state (spec: 倒计时归零触发"已永久删除"状态,
+        // toast 替换文案) instead of vanishing — the user sees the deletion
+        // became permanent.
         vi.advanceTimersByTime(5000);
+        const toast = getToastEl();
+        expect(toast).not.toBeNull();
+        const text = toast.querySelector('#pending-toast-text');
+        const undo = toast.querySelector('#pending-toast-undo');
+        expect(text.textContent).toBe('已永久删除 2 条');
+        // The backend entry is taken-once by the finalize timer — a late
+        // undo click must be impossible (disabled + guarded).
+        expect(undo.disabled).toBe(true);
+        undo.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        expect(onUndo).not.toHaveBeenCalled();
+        // The finalized state auto-dismisses 2s later.
+        vi.advanceTimersByTime(2000);
         expect(getToastEl()).toBeNull();
         expect(onUndo).not.toHaveBeenCalled();
     });

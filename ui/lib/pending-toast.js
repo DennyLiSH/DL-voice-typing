@@ -6,6 +6,13 @@
  * keeps counting independently — its slot is taken on completion either
  * way, so a stale click on a vanished toast cannot resurrect it).
  *
+ * Lifecycle: hidden → countdown (5..1s) → finalized (归零文案) → hidden.
+ * At countdown zero the toast does NOT vanish: the text switches to
+ * 「已永久删除 N 条」and the undo button is disabled (the backend entry is
+ * taken-once by the finalize timer — a late undo click would only surface
+ * an expired error). The finalized state auto-dismisses 2s later. Keeping
+ * the button (disabled) instead of removing it preserves focus.
+ *
  * All DOM construction goes through `createElement` + `textContent` —
  * never `innerHTML` (project-wide convention; the only innerHTML exception
  * is the icon SVG `ui/data-manager.js` constants).
@@ -14,10 +21,13 @@
 let toastEl = null;
 let countdownTimer = null;
 let remaining = 0;
+let movedCount = 0;
+let finalized = false;
 let onUndoRef = null;
 
 const TOTAL_SECONDS = 5;
 const TICK_MS = 1000;
+const DISMISS_MS = 2000;
 
 /**
  * Show the undo toast. If one is already alive, replace it (the new batch's
@@ -31,19 +41,20 @@ const TICK_MS = 1000;
 export function showPendingToast({ moved, onUndo }) {
     destroyPendingToast();
     remaining = TOTAL_SECONDS;
+    movedCount = moved;
+    finalized = false;
     onUndoRef = onUndo;
 
     const root = document.createElement('div');
     root.id = 'pending-toast';
     root.className = 'pending-toast';
-    root.dataset.moved = String(moved);
     root.setAttribute('role', 'status');
     root.setAttribute('aria-live', 'polite');
 
     const text = document.createElement('span');
     text.id = 'pending-toast-text';
     text.className = 'pending-toast-text';
-    setText(text, moved, remaining);
+    setText(text, movedCount, remaining);
 
     const undoBtn = document.createElement('button');
     undoBtn.type = 'button';
@@ -51,6 +62,7 @@ export function showPendingToast({ moved, onUndo }) {
     undoBtn.className = 'pending-toast-undo';
     undoBtn.textContent = '撤销';
     undoBtn.addEventListener('click', () => {
+        if (finalized) return;
         const cb = onUndoRef;
         destroyPendingToast();
         if (typeof cb === 'function') cb();
@@ -70,7 +82,10 @@ export function showPendingToast({ moved, onUndo }) {
  */
 export function destroyPendingToast() {
     if (countdownTimer !== null) {
+        // The slot holds either the countdown interval or the finalized
+        // dismiss timeout — clear both (ids share a pool per HTML spec).
         clearInterval(countdownTimer);
+        clearTimeout(countdownTimer);
         countdownTimer = null;
     }
     if (toastEl?.isConnected) {
@@ -78,27 +93,30 @@ export function destroyPendingToast() {
     }
     toastEl = null;
     onUndoRef = null;
+    movedCount = 0;
     remaining = 0;
+    finalized = false;
 }
 
 function tick() {
     remaining -= 1;
     if (!toastEl) return;
-    const text = toastEl.querySelector('#pending-toast-text');
     if (remaining <= 0) {
-        destroyPendingToast();
+        enterFinalized();
         return;
     }
-    if (text) setText(text, currentMoved(), remaining);
+    const text = toastEl.querySelector('#pending-toast-text');
+    if (text) setText(text, movedCount, remaining);
 }
 
-function currentMoved() {
-    // The moved count is captured at show-time and never changes during the
-    // countdown (subsequent batches replace the toast entirely). The
-    // backward channel through the toast element is not needed — read from
-    // the live text by parsing is unnecessary; we just keep `moved` on the
-    // element via dataset.
-    return toastEl ? Number(toastEl.dataset.moved) || 0 : 0;
+function enterFinalized() {
+    finalized = true;
+    const text = toastEl.querySelector('#pending-toast-text');
+    if (text) text.textContent = `已永久删除 ${movedCount} 条`;
+    const undo = toastEl.querySelector('#pending-toast-undo');
+    if (undo) undo.disabled = true;
+    clearInterval(countdownTimer);
+    countdownTimer = setTimeout(destroyPendingToast, DISMISS_MS);
 }
 
 function setText(el, moved, secsLeft) {

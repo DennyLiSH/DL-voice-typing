@@ -748,24 +748,17 @@ mod tests {
             !esc_should_swallow(true, true, false),
             "callback declined (idle) -> pass through"
         );
+        // "not keydown" covers both keyup AND WM_SYSKEYDOWN routing: the
+        // hook proc only dispatches plain WM_KEYDOWN to the cancel slot —
+        // Alt+Esc is a system window-cycle shortcut and must pass through.
         assert!(
             !esc_should_swallow(true, false, true),
-            "keyup always passes"
+            "keyup / syskeydown always passes"
         );
         assert!(
             !esc_should_swallow(false, true, true),
             "no slot -> pass through"
         );
-    }
-
-    #[test]
-    fn esc_is_not_syskeydown_alias() {
-        // WM_SYSKEYDOWN must NOT trigger swallow: Alt+Esc is a system window
-        // cycle shortcut, swallowing it would block that system operation.
-        // The hook proc guards this by checking w_param == WM_KEYDOWN before
-        // dispatching to cancel_cb; here we only verify the swallow decision
-        // logic itself is "plain keydown only".
-        assert!(!esc_should_swallow(true, false, true));
     }
 
     // ---- P2 modifier state table matching (default RightCtrl = regression target) ----

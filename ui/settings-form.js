@@ -1,7 +1,14 @@
 import { call } from './lib/api.js';
 import { MASKED_MARKER } from './lib/api-key-mask.js';
 import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
-import { sameSpec, specFromUI, writeSpecToUI } from './lib/hotkeys.js';
+import {
+    DEFAULT_PRIMARY_SPEC,
+    DEFAULT_RECORD_ONLY_SPEC,
+    sameSpec,
+    specFromUI,
+    specLabel,
+    writeSpecToUI,
+} from './lib/hotkeys.js';
 import {
     hasCredentialInUrl,
     isConfigDirty,
@@ -85,10 +92,8 @@ const FIELDS = [
         key: 'hotkey',
         get: () => specFromUI('hotkey'),
         set: (v) => {
-            writeSpecToUI(
-                'hotkey',
-                v ?? { ctrl: false, shift: false, alt: false, vk: 0xa3 },
-            );
+            writeSpecToUI('hotkey', v ?? DEFAULT_PRIMARY_SPEC);
+            updateHotkeyPreview('hotkey');
         },
     },
     { key: 'whisper_model', get: getSelectedModel, set: setSelectedModel },
@@ -198,10 +203,8 @@ const FIELDS = [
         key: 'record_only_hotkey',
         get: () => specFromUI('record-only-hotkey'),
         set: (v) => {
-            writeSpecToUI(
-                'record-only-hotkey',
-                v ?? { ctrl: false, shift: false, alt: false, vk: 0xa5 },
-            );
+            writeSpecToUI('record-only-hotkey', v ?? DEFAULT_RECORD_ONLY_SPEC);
+            updateHotkeyPreview('record-only-hotkey');
         },
     },
 ];
@@ -398,16 +401,37 @@ modelInput.addEventListener('input', updateDirtyState);
 
 // Hotkey combo controls: 3 modifier checkboxes + main-key <select> for each
 // of the two combos. The form fetches the spec via specFromUI(); any of
-// these 8 inputs being toggled must mark the form dirty.
+// these 8 inputs being toggled must mark the form dirty AND refresh the
+// live preview label (spec: 预览文本 "Ctrl+Shift+A").
 for (const prefix of ['hotkey', 'record-only-hotkey']) {
     document
         .getElementById(prefix)
-        .addEventListener('change', updateDirtyState);
+        .addEventListener('change', onHotkeyComboChange);
     for (const mod of ['ctrl', 'shift', 'alt']) {
         document
             .getElementById(`${prefix}-${mod}`)
-            .addEventListener('change', updateDirtyState);
+            .addEventListener('change', onHotkeyComboChange);
     }
+}
+
+function onHotkeyComboChange() {
+    updateDirtyState();
+    for (const prefix of ['hotkey', 'record-only-hotkey']) {
+        updateHotkeyPreview(prefix);
+    }
+}
+
+/**
+ * Render the live combo label under the form controls. An empty main-key
+ * select (unknown vk from a prior config) reads as 未选择主键 rather than
+ * a misleading "VK0x0" — the dirty/save validation flags it separately.
+ */
+function updateHotkeyPreview(prefix) {
+    const el = document.getElementById(`${prefix}-preview`);
+    if (!el) return;
+    const spec = specFromUI(prefix);
+    el.textContent =
+        spec.vk === 0 ? '未选择主键' : `当前组合：${specLabel(spec)}`;
 }
 
 // Show the plaintext-persistence warning when the URL embeds credential-like
