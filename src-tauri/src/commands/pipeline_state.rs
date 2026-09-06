@@ -126,7 +126,6 @@ impl PipelineState {
             emitter.clone(),
             window_controller.clone(),
             clipboard.clone(),
-            review.clone(),
             perf_history.clone(),
         ));
         Self {
@@ -182,7 +181,6 @@ impl PipelineState {
             emitter.clone(),
             window_controller.clone(),
             clipboard.clone(),
-            review.clone(),
             perf_history.clone(),
         ));
         Self {

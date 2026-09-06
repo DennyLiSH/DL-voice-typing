@@ -65,9 +65,6 @@ pub(crate) struct DeliveryController {
     emitter: Arc<dyn EventEmitter>,
     window_controller: Arc<dyn WindowController>,
     clipboard: Arc<dyn ClipboardProvider>,
-    /// Swappable review handle: `Mutex` enables the cfg(test)
-    /// `swap_delivery_review` for differentiation testing of the trait seam.
-    review: Mutex<Arc<dyn crate::commands::review_provider::ReviewProvider>>,
     perf_history: Arc<crate::perf::PerfHistory>,
     context: Mutex<DeliveryContext>,
 }
@@ -153,14 +150,12 @@ impl DeliveryController {
         emitter: Arc<dyn EventEmitter>,
         window_controller: Arc<dyn WindowController>,
         clipboard: Arc<dyn ClipboardProvider>,
-        review: Arc<dyn crate::commands::review_provider::ReviewProvider>,
         perf_history: Arc<crate::perf::PerfHistory>,
     ) -> Self {
         Self {
             emitter,
             window_controller,
             clipboard,
-            review: Mutex::new(review),
             perf_history,
             context: Mutex::new(DeliveryContext::new()),
         }
@@ -188,9 +183,6 @@ impl DeliveryController {
         t_press_for_e2e: Instant,
         llm_transition: bool,
     ) {
-        #[cfg(not(test))]
-        self.assert_review_insync(ps);
-
         let transitioned = if llm_transition {
             ps.sm_llm_to_injecting()
         } else {
@@ -238,9 +230,6 @@ impl DeliveryController {
         t_press_for_e2e: Instant,
         llm_transition: bool,
     ) {
-        #[cfg(not(test))]
-        self.assert_review_insync(ps);
-
         info!(
             "show_review: ENTER ({} chars, llm_transition={})",
             final_text.len(),
@@ -270,13 +259,13 @@ impl DeliveryController {
         }
 
         // Store text for the review window to fetch on load.
-        self.review().store_text(final_text.clone());
+        ps.review().store_text(final_text.clone());
         debug!(
             "show_review: stored pending text ({} chars)",
             final_text.len()
         );
 
-        let was_shown_on_press = self.review().was_shown_on_press();
+        let was_shown_on_press = ps.review().was_shown_on_press();
 
         if was_shown_on_press {
             info!(
@@ -285,7 +274,7 @@ impl DeliveryController {
             );
 
             // Migrate foreground ownership from PendingReview to DeliveryController.
-            if let Some(hwnd) = self.review().take_foreground() {
+            if let Some(hwnd) = ps.review().take_foreground() {
                 self.store_foreground(hwnd);
             }
 
@@ -336,8 +325,8 @@ impl DeliveryController {
         }
 
         // Classic review path: capture foreground, then show the window.
-        self.review().save_foreground();
-        if let Some(hwnd) = self.review().take_foreground() {
+        ps.review().save_foreground();
+        if let Some(hwnd) = ps.review().take_foreground() {
             self.store_foreground(hwnd);
         }
 
@@ -381,9 +370,6 @@ impl DeliveryController {
     /// clipboard, advances the state machine, hides the floating window, and
     /// migrates the foreground handle into our context.
     pub(crate) fn realtime_review_handoff(&self, ps: &PipelineState, accumulated: Option<String>) {
-        #[cfg(not(test))]
-        self.assert_review_insync(ps);
-
         info!(
             "realtime_review_handoff: accumulated={} chars",
             accumulated.as_ref().map(|s| s.len()).unwrap_or(0)
@@ -398,10 +384,10 @@ impl DeliveryController {
         self.window_controller.hide_floating();
 
         if let Some(text) = accumulated {
-            self.review().store_text(text);
+            ps.review().store_text(text);
         }
 
-        if let Some(hwnd) = self.review().take_foreground() {
+        if let Some(hwnd) = ps.review().take_foreground() {
             self.store_foreground(hwnd);
         }
     }
@@ -412,9 +398,6 @@ impl DeliveryController {
         ps: &PipelineState,
         text: String,
     ) -> Result<(), CommandError> {
-        #[cfg(not(test))]
-        self.assert_review_insync(ps);
-
         info!("confirm_review: start ({} chars)", text.len());
 
         match ps.sm_state() {
@@ -451,9 +434,6 @@ impl DeliveryController {
 
     /// Cancel the review and return to idle.
     pub(crate) async fn cancel_review(&self, ps: &PipelineState) -> Result<(), CommandError> {
-        #[cfg(not(test))]
-        self.assert_review_insync(ps);
-
         info!("cancel_review: start");
 
         match ps.sm_state() {
@@ -684,7 +664,7 @@ impl DeliveryController {
                     self.window_controller.hide_review();
                 }
                 self.window_controller.hide_floating();
-                self.review().set_shown_on_press(false);
+                ps.review().set_shown_on_press(false);
                 match self.update_json_deliver(review_data.as_ref(), &final_text) {
                     Ok(()) => {}
                     Err(e) => {
@@ -701,7 +681,7 @@ impl DeliveryController {
                 }
                 self.window_controller.hide_floating();
                 self.window_controller.hide_review();
-                self.review().set_shown_on_press(false);
+                ps.review().set_shown_on_press(false);
                 match self.update_json_cancel(review_data.as_ref()) {
                     Ok(()) => {}
                     Err(e) => {
@@ -716,42 +696,10 @@ impl DeliveryController {
                 // TOCTOU handling (warn + continue).
                 ps.stop_recording_resources_graceful();
                 ps.sm_reset();
-                self.cleanup_review_ui().await;
+                self.cleanup_review_ui(ps).await;
             }
         }
         debug!(target: "delivery", "finish({site_label}): done");
-    }
-
-    /// Clone the current review provider handle (lock + Arc clone).
-    /// All session-frequency call sites route through here so the cfg(test)
-    /// swap is observable everywhere. Lock-poisoned → fail loudly (error log
-    /// then panic; written as an explicit match instead of `.expect` per
-    /// denny-rules 2.3): unreachable in practice — the critical section is a
-    /// plain Arc clone — but a silent no-op fallback would mask the first
-    /// real poison cause.
-    fn review(&self) -> Arc<dyn crate::commands::review_provider::ReviewProvider> {
-        match crate::util::lock_mutex(&self.review, "delivery_review") {
-            Some(g) => g.clone(),
-            None => {
-                error!(target: "delivery", "delivery_review lock poisoned — failing loudly");
-                panic!("delivery_review lock poisoned");
-            }
-        }
-    }
-
-    /// Production-only differentiation guard: the delivery-side review handle
-    /// must be the same object as the PipelineState slot. Differentiation
-    /// tests deliberately swap the delivery handle, so this compiles out
-    /// under cfg(test).
-    #[cfg(not(test))]
-    fn assert_review_insync(&self, ps: &PipelineState) {
-        if !Arc::ptr_eq(&self.review(), &ps.review()) {
-            error!(
-                target: "delivery",
-                "delivery review handle diverged from PipelineState"
-            );
-            debug_assert!(false, "delivery review handle diverged from PipelineState");
-        }
     }
 
     /// Restore clipboard only if save_and_inject (or save alone) was called this
@@ -942,24 +890,9 @@ impl DeliveryController {
         (hwnd, data, perf, t_press)
     }
 
-    async fn cleanup_review_ui(&self) {
+    async fn cleanup_review_ui(&self, ps: &PipelineState) {
         self.window_controller.hide_floating();
         self.window_controller.hide_review();
-        self.review().set_shown_on_press(false);
-    }
-}
-
-#[cfg(test)]
-impl DeliveryController {
-    /// Test-only: swap the review provider, returning the previous handle.
-    /// Enables differentiation testing (mock_A vs mock_B) of the trait seam:
-    /// prove behavior routes through self.review(), not ps.review().
-    pub(crate) fn swap_delivery_review(
-        &self,
-        new: Arc<dyn crate::commands::review_provider::ReviewProvider>,
-    ) -> Arc<dyn crate::commands::review_provider::ReviewProvider> {
-        let mut guard = crate::util::lock_mutex(&self.review, "delivery_review")
-            .expect("swap_delivery_review: delivery_review lock poisoned");
-        std::mem::replace(&mut *guard, new)
+        ps.review().set_shown_on_press(false);
     }
 }
