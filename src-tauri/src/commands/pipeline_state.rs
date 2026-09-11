@@ -601,6 +601,32 @@ impl PipelineState {
     }
 }
 
+/// RAII owner of pipeline-exit token hygiene (deep-module move: the
+/// "every exit path must drain" invariant leaves caller discipline and
+/// becomes type-enforced). Create at the top of a delivery future body;
+/// `Drop` drains the slot so ANY exit — return, early gate, panic
+/// unwind — clears the token. Replaces the hand-placed
+/// `let _ = ps.take_cancel_token()` drains.
+///
+/// Invariant (7f0cbf0): this guard NEVER touches the state machine or
+/// windows — that cleanup belongs solely to `cancel_active_pipeline`
+/// on the hook thread. Draining the slot is slot hygiene, not cleanup.
+pub(crate) struct CancelGuard<'a> {
+    ps: &'a PipelineState,
+}
+
+impl<'a> CancelGuard<'a> {
+    pub(crate) fn new(ps: &'a PipelineState) -> Self {
+        Self { ps }
+    }
+}
+
+impl Drop for CancelGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.ps.take_cancel_token();
+    }
+}
+
 #[cfg(test)]
 impl PipelineState {
     /// Test-only: snapshot of all components for building variant
@@ -790,6 +816,57 @@ mod sm_verb_tests {
         let Some(taken) = taken else { return };
         assert!(Arc::ptr_eq(&taken, &token), "same token comes back out");
         assert!(ps.take_cancel_token().is_none(), "take-once semantics");
+    }
+
+    #[test]
+    fn cancel_guard_drop_drains_token_slot() {
+        use std::sync::atomic::AtomicBool;
+        let ps = build_test_ps();
+        ps.set_cancel_token(Arc::new(AtomicBool::new(false)));
+        {
+            let _guard = CancelGuard::new(&ps);
+            // Slot still holds the token while the guard is alive.
+            assert!(
+                !ps.cancel_token_snapshot()
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            );
+        }
+        // Drop ran — slot drained without any hand-placed take.
+        assert!(
+            ps.take_cancel_token().is_none(),
+            "guard drop must drain the slot"
+        );
+    }
+
+    #[test]
+    fn cancel_guard_drop_drains_token_slot_on_panic_unwind() {
+        use std::sync::atomic::AtomicBool;
+        // Central guarantee of the RAII guard: the slot must be drained on
+        // ANY exit path — normal scope exit, early return, AND panic unwind.
+        // Without this, a panic inside a delivery future would leak a stale
+        // cancel token that the next session's `set_cancel_token` does NOT
+        // overwrite until recording starts (sm_stop_recording returns),
+        // giving a stale token a window where it could cancel unrelated work.
+        let ps = build_test_ps();
+        ps.set_cancel_token(Arc::new(AtomicBool::new(false)));
+
+        // AssertUnwindSafe: CancelGuard holds `&PipelineState`, and the
+        // closure's panic would otherwise be rejected as carrying a
+        // !UnwindSafe borrow. The raw pointer dance is the standard idiom.
+        let ps_for_panic: *const PipelineState = &ps;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = CancelGuard::new(unsafe { &*ps_for_panic });
+            panic!("test panic — guard drop must still drain the slot");
+        }));
+        assert!(
+            result.is_err(),
+            "panic must have propagated out of catch_unwind"
+        );
+        // The guard's Drop ran during stack unwinding — slot must be drained.
+        assert!(
+            ps.take_cancel_token().is_none(),
+            "guard drop must drain on panic unwind"
+        );
     }
 
     #[test]

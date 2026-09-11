@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
-use super::pipeline_state::PipelineState;
+use super::pipeline_state::{CancelGuard, PipelineState};
 
 /// User-facing payload for the `llm-error` event. The floating window is
 /// 160x60px of text space — it gets this fixed Chinese summary while the
@@ -490,10 +490,12 @@ impl RecordingSession {
         if self.ps.clipboard().was_saved() {
             let _ = self.ps.clipboard().restore();
         }
-        // P1 Esc-cancel: token slot must always be cleared at pipeline exit,
-        // including the panic-recovery path. Leaving a stale token here would
-        // cause the *next* Esc press (or next pipeline) to see a tripped
-        // flag and short-circuit out of Transcribing before it even starts.
+        // Defense-in-depth: the CancelGuard drains during unwind before
+        // recover runs, making this a no-op today. Kept as a second lock
+        // of the invariant against future refactors moving/delaying guard
+        // creation. The arming-to-spawn gap lives on the hook FFI thread
+        // where a panic is process-fatal — no drain can help there; the
+        // next session's set_cancel_token overwrite is the recovery.
         let _ = self.ps.take_cancel_token();
         self.ps.emitter().emit(
             "speech-error",
@@ -526,6 +528,7 @@ impl RecordingSession {
             policy.llm_enabled,
             resampled.len()
         );
+        let _cancel_guard = CancelGuard::new(&self.ps);
 
         // -- Save audio and transcribe in parallel --
         let (save_result, transcription) = transcribe_and_save(
@@ -612,7 +615,6 @@ impl RecordingSession {
                     policy.llm_enabled,
                 )
                 .await;
-            let _ = self.ps.take_cancel_token();
             return;
         }
         info!(
@@ -632,7 +634,6 @@ impl RecordingSession {
                 policy.llm_enabled,
             )
             .await;
-        let _ = self.ps.take_cancel_token();
     }
 
     /// Fast path for RealtimeDirect mode: uses accumulated realtime text
@@ -653,6 +654,7 @@ impl RecordingSession {
             policy.llm_enabled,
             accumulated.len()
         );
+        let _cancel_guard = CancelGuard::new(&self.ps);
 
         // Save audio in background for training data.
         let save_config = policy.save.clone();
@@ -726,7 +728,6 @@ impl RecordingSession {
                 policy.llm_enabled,
             )
             .await;
-        let _ = self.ps.take_cancel_token();
     }
 }
 
@@ -942,12 +943,14 @@ async fn resolve_llm_text(
     }
 }
 
-/// Reset state machine to Idle and hide floating window. Also drains the
-/// cancel-token slot — every caller is a pipeline ABORT path (cancel gate,
-/// empty transcription, error), and a stale token would make the *next*
-/// session see a tripped flag and short-circuit out of Transcribing
-/// before it starts. Delivery-success exits take the token separately
-/// (they do not pass through here).
+/// Reset state machine to Idle and hide floating window. The cancel-token
+/// slot is drained by the `CancelGuard` in the delivery future body; the
+/// callers inside those futures (the empty-branch and transcribe-error
+/// paths) sit in the guard's scope. The on_press not-ready path runs
+/// OUTSIDE any guard — safe by construction: the slot is empty there
+/// (no delivery was armed, since the cancel token is only set after
+/// `sm_stop_recording`, not at press-time), and a stale token would be
+/// overwritten by the next session's set_cancel_token anyway.
 fn reset_to_idle(ps: &PipelineState) {
     ps.sm_reset();
     ps.window_controller().hide_floating();
@@ -955,7 +958,6 @@ fn reset_to_idle(ps: &PipelineState) {
         ps.window_controller().hide_review();
         ps.review().set_shown_on_press(false);
     }
-    let _ = ps.take_cancel_token();
 }
 
 /// Replace ASCII comma/period with full-width Chinese equivalents when
