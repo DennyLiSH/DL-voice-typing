@@ -125,11 +125,11 @@ export function previewText(entry) {
 export function buildRecordingRow(entry, opts = {}) {
     const row = document.createElement('div');
     row.className = 'data-row';
-    // Keyboard-reachable expand affordance: the row itself acts as a button
-    // (tabindex stop; Enter/Space toggle handled by data-manager's delegated
-    // keydown). The chevron ::after (settings.css) is the visual cue.
+    // Row no longer carries its own tabIndex: the roving list controller
+    // owns the single-tab-stop model (listNav.sync() sets -1 on every row,
+    // 0 on exactly one). Pre-migration this row was tabIndex=0 itself, which
+    // made every row a tab stop — inconsistent with the transcribe window.
     row.setAttribute('role', 'listitem');
-    row.tabIndex = 0;
     row.setAttribute('aria-expanded', String(Boolean(opts.expanded)));
     row.dataset.filename = entry.filename;
     if (opts.selected) row.classList.add('selected');

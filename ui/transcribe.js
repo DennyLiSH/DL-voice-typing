@@ -26,7 +26,8 @@ import {
     buildStatusBadges,
     formatStemForDisplay,
 } from './lib/data-management.js';
-import { attachAudio, loadRecordings, releaseAudio } from './lib/recordings.js';
+import { createAudioSlot, createRovingList } from './lib/recording-list.js';
+import { loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
     filterRecordOnly,
     findActiveSegmentIndex,
@@ -61,6 +62,22 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// --- List controllers -----------------------------------------------------
+//
+// createRovingList owns the keyboard model (Arrow keys move focus,
+// Enter/Space activate — see lib/recording-list.js for DR-2.2/2.3). The
+// list rows are rebuilt on every renderList(), so we call sync() at the
+// tail to re-apply tabindex against the freshly-rendered nodes.
+//
+// createAudioSlot wraps the one-at-a-time audio fetch+attach lifecycle:
+// identity guard (element !== el + isConnected) + caller isStale predicate
+// keep stale responses from ever attaching. The transcribe window has no
+// persistent failure UI (toast on first error is enough — the row's
+// status badge covers subsequent edits), so onFail is omitted and fetch
+// errors propagate to the outer catch in selectRecording.
+let listNav = null;
+let audioSlot = null;
 
 // --- Toast -----------------------------------------------------------------
 
@@ -126,15 +143,10 @@ function renderList() {
     for (const item of state.items) {
         list.appendChild(buildListRow(item));
     }
-    // Roving tabindex (same model as the settings sidebar): exactly one row
-    // is the tab stop — the selected row, else the first.
-    const rows = Array.from(list.querySelectorAll('.rec-row'));
-    const hasSelected = rows.some((r) => r.classList.contains('selected'));
-    rows.forEach((row, i) => {
-        const isStop =
-            row.classList.contains('selected') || (!hasSelected && i === 0);
-        row.tabIndex = isStop ? 0 : -1;
-    });
+    // Re-apply roving tabindex against the freshly rendered nodes. The
+    // controller owns the model; rows themselves carry no tabIndex here —
+    // listNav.sync() is the single source of truth (DR-2.3).
+    if (listNav) listNav.sync();
     const empty = $('rec-empty');
     if (empty) empty.hidden = state.items.length > 0;
 }
@@ -212,9 +224,14 @@ async function selectRecording(filename) {
 
     setPhase(PHASE.LOADING);
     try {
-        const [segs, bytes] = await Promise.all([
+        const [segs] = await Promise.all([
             call('get_recording_segments', { filename }),
-            call('read_recording_audio', { filename }),
+            // audioSlot owns the fetch + identity guard (DR-1.2). On success
+            // it calls attachAudio internally; on failure it rethrows so the
+            // outer catch folds it into the existing toast path (no onFail).
+            audioSlot.bind(audioEl(), filename, {
+                isStale: () => state.selected !== filename,
+            }),
         ]);
         // Stale guard: selection cleared/changed while loading.
         if (state.selected !== filename) return;
@@ -222,7 +239,6 @@ async function selectRecording(filename) {
         state.durationMs = segs.duration_ms || 0;
         state.status = segs.transcription_status || 'pending';
         state.droppedBlocks = segs.dropped_blocks || 0;
-        attachAudio(audioEl(), bytes);
         renderDetail();
     } catch (e) {
         if (state.selected !== filename) return;
@@ -545,27 +561,21 @@ function wireEvents() {
             const filename = row.dataset.filename;
             if (filename) selectRecording(filename);
         });
-        // Keyboard navigation (mirrors the settings sidebar's roving model):
-        // ArrowUp/Down move focus through rows; Enter/Space activate.
-        list.addEventListener('keydown', (e) => {
-            const row = e.target.closest?.('.rec-row');
-            if (!row) return;
-            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                const rows = Array.from(list.querySelectorAll('.rec-row'));
-                if (rows.length === 0) return;
-                const idx = rows.indexOf(row);
-                const next =
-                    e.key === 'ArrowDown'
-                        ? (idx + 1) % rows.length
-                        : (idx - 1 + rows.length) % rows.length;
-                rows[next].focus();
-            } else if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                if (row.classList.contains('disabled')) return;
-                const filename = row.dataset.filename;
-                if (filename) selectRecording(filename);
-            }
+        // Roving keyboard model lives in the controller; we only tell it
+        // what to do on activate. Phase-locked rows render with .disabled
+        // (renderList), which is exactly `state.phase !== PHASE.IDLE` —
+        // the controller's onActivate gate is equivalent.
+        listNav = createRovingList({
+            container: list,
+            rowSelector: '.rec-row',
+            onActivate: (filename) => {
+                if (state.phase !== PHASE.IDLE) return;
+                selectRecording(filename);
+            },
+        });
+        audioSlot = createAudioSlot({
+            fetchBytes: (filename) =>
+                call('read_recording_audio', { filename }),
         });
     }
 

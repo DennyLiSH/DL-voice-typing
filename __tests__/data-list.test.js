@@ -179,10 +179,13 @@ describe('Data list — render contract', () => {
         // inner controls for focus. The 4th-round review (P2: expand was
         // mouse-only) evolved the contract: the row itself is the expand
         // control — one list-level tab stop + Enter/Space activation,
-        // tracked by aria-expanded.
+        // tracked by aria-expanded. After 2026-09-11 the roving list
+        // controller (ui/lib/recording-list.js) owns the single tabIndex
+        // — the builder just hands the role + aria contract to the row.
         const row = buildRecordingRow(sampleEntries[0]);
-        expect(row.tabIndex).toBe(0);
+        expect(row.getAttribute('role')).toBe('listitem');
         expect(row.getAttribute('aria-expanded')).toBe('false');
+        expect(row.dataset.filename).toBeTruthy();
     });
 
     it('expanded row appends metadata with four lines', () => {
@@ -232,11 +235,14 @@ describe('Data list — state machine (constraint coverage)', () => {
         expect(sm.audioPlayerRowId).toBeNull();
     });
 
-    it('constraint #4/F4 (evolved 2026-09-04): row is the expand tab stop', () => {
+    it('constraint #4/F4 (evolved 2026-09-04): row is the keyboard-reachable expand affordance', () => {
         const row = buildRecordingRow(sampleEntries[0]);
-        // The row is now the keyboard-reachable expand control (one tab
-        // stop); inner controls keep their own native focusability.
-        expect(row.tabIndex).toBe(0);
+        // Post-2026-09-11: the row's expand affordance is the role +
+        // aria-expanded contract + filename dataset; the roving list
+        // controller sets the single tabIndex (see __tests__/recording-list.test.js).
+        // Inner controls keep their own native focusability.
+        expect(row.getAttribute('role')).toBe('listitem');
+        expect(row.getAttribute('aria-expanded')).toBe('false');
         const cb = row.querySelector('.data-row-cb');
         const play = row.querySelector('.btn-play');
         const del = row.querySelector('.btn-delete');
@@ -479,9 +485,13 @@ describe('Data list — vi mocks sanity', () => {
 });
 
 describe('Data list — keyboard expand affordance (2026-09-04)', () => {
-    it('rows expose tabindex + aria-expanded driven by opts.expanded', () => {
+    it('rows expose aria-expanded driven by opts.expanded (tabIndex is controller-owned)', () => {
+        // Post-2026-09-11: tabIndex is no longer set by the builder — the
+        // roving list controller (ui/lib/recording-list.js) is the single
+        // owner of the one-tab-stop contract (verified in
+        // __tests__/recording-list.test.js). The builder only sets the
+        // role + aria-expanded contract.
         const collapsed = buildRecordingRow(sampleEntries[0], {});
-        expect(collapsed.tabIndex).toBe(0);
         expect(collapsed.getAttribute('aria-expanded')).toBe('false');
 
         const expanded = buildRecordingRow(sampleEntries[0], {

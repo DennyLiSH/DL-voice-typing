@@ -14,11 +14,8 @@ import {
     showPendingToast,
     unbindFinalizeListener,
 } from './lib/pending-toast.js';
-import {
-    attachAudio,
-    loadRecordings,
-    releaseAudio as releaseAudioElement,
-} from './lib/recordings.js';
+import { createAudioSlot, createRovingList } from './lib/recording-list.js';
+import { loadRecordings } from './lib/recordings.js';
 
 // ============================================================
 // Data management — saved recordings list
@@ -34,11 +31,11 @@ const dataState = {
     selectedFiles: new Set(),
     expandedRowId: null,
     audioPlayerRowId: null,
-    audioElement: null,
-    // Rows whose audio failed to load (rendered as a persistent badge by
-    // buildRecordingRow — the old DOM-patch badge was destroyed by the
-    // renderDataList rebuild before it could ever paint).
-    audioFailedFiles: new Set(),
+    // Rows whose audio failed to load live on audioSlot.failedFiles —
+    // a render-state Set that survives renderDataList rebuilds (the old
+    // DOM-patch badge was destroyed by the rebuild before it could ever
+    // paint, d903b9e fix territory). DR-6: persistence across renders is
+    // load-bearing — the badge replaces the play button on the next render.
     isLoading: false,
     lastReqId: 0,
     searchDebounceTimer: null,
@@ -50,17 +47,44 @@ function $data(id) {
     return document.getElementById(id);
 }
 
+// List / audio controllers — created lazily in onDataPageEnter and torn
+// down in onDataPageLeave. `let` (not const) so the init-time assignment
+// works; if init never ran, onDataPageLeave's optional-chaining skips the
+// destroy() call.
+let listNav = null;
+let audioSlot = null;
+
 /**
  * Release the current audio player: element-level cleanup (pause, revoke
- * blob URL, clear src) plus player state reset.
- *
- * Centralizes the cleanup that was previously duplicated at 5 sites
- * (toggle collapse, toggle switch, onAudioError, single-delete, batch-delete).
+ * blob URL, clear src) plus player state reset. Centralizes the cleanup
+ * that was previously duplicated at 5 sites (toggle collapse, toggle
+ * switch, onAudioError, single-delete, batch-delete). All 6 call sites
+ * MUST go through this helper — direct audio element access would leak
+ * blob URLs (审查 S5-3/S5-F3).
  */
 function releaseAudio() {
-    releaseAudioElement(dataState.audioElement);
-    dataState.audioElement = null;
+    if (audioSlot) audioSlot.release();
     dataState.audioPlayerRowId = null;
+}
+
+/**
+ * Audio error handler — shared between the DOM `error` event (decode
+ * failure on an attached audio element) and the audioSlot's fetch-failure
+ * onFail (network/disk failure). Both paths converge here:
+ *   1. Guard: only the active player row can fail (decoded by both the
+ *      element identity and the audioPlayerRowId match).
+ *   2. Mark the filename in the slot's failedFiles Set so the next render
+ *      paints the persistent badge (the old DOM-patch badge was destroyed
+ *      by the rebuild before it could paint — d903b9e).
+ *   3. Release + re-render. The releaseAudio() call is what terminates the
+ *      fetch-failure loop (审查 S5-F1): without it, renderDataList would
+ *      re-bind and the slot would re-fetch — a livelock + log flood.
+ */
+function onAudioError(filename) {
+    if (dataState.audioPlayerRowId !== filename) return;
+    if (audioSlot) audioSlot.failedFiles.add(filename);
+    releaseAudio();
+    renderDataList();
 }
 
 export function onDataPageEnter() {
@@ -70,6 +94,31 @@ export function onDataPageEnter() {
     // once. Pairs with the unbind in onDataPageLeave so we never pile up
     // duplicate listeners across page navigation.
     bindFinalizeListener();
+    // Wire controllers after DOM is known to exist (the page's content
+    // area is hidden when other sidebar pages are active, so the list
+    // element might not be queryable yet). Done once per page entry.
+    const list = $data('data-list');
+    if (list && !listNav) {
+        listNav = createRovingList({
+            container: list,
+            rowSelector: '.data-row',
+            onActivate: (filename) => {
+                dataState.expandedRowId =
+                    dataState.expandedRowId === filename ? null : filename;
+                renderDataList();
+            },
+        });
+        audioSlot = createAudioSlot({
+            fetchBytes: (filename) =>
+                call('read_recording_audio', { filename }),
+            // onFail (not raw renderDataList) — it releases the player row
+            // via releaseAudio(), which is the loop terminator for a
+            // persistently failing fetch: without clearing audioPlayerRowId,
+            // renderDataList would rebuild the row, re-bind, re-fetch, and
+            // log-spam forever (审查 S5-F1).
+            onFail: (filename) => onAudioError(filename),
+        });
+    }
     loadRecordingsPage(0);
 }
 
@@ -80,6 +129,10 @@ export function onDataPageLeave() {
     releaseAudio();
     destroyPendingToast();
     unbindFinalizeListener();
+    if (listNav) {
+        listNav.destroy();
+        listNav = null;
+    }
 }
 
 function resetDataListState() {
@@ -121,7 +174,7 @@ async function loadRecordingsPage(offset) {
         dataState.items = resp.items;
         // Fresh data: reset per-page transient failure states (the refresh
         // button is the retry path for audio-load failures).
-        dataState.audioFailedFiles.clear();
+        if (audioSlot) audioSlot.failedFiles.clear();
         renderDataList();
         renderStats(resp.total, resp.total_bytes);
         renderPagination();
@@ -147,17 +200,19 @@ function renderDataList() {
     if (!list) return;
     // Release the old player element before it is discarded, so its blob URL
     // is revoked rather than leaked (element-level only — an active player
-    // row is re-assembled below and reassigns dataState.audioElement).
-    releaseAudioElement(dataState.audioElement);
-    dataState.audioElement = null;
+    // row is re-assembled below and reassigned via audioSlot.bind).
+    if (audioSlot) audioSlot.release();
     list.innerHTML = '';
     for (const entry of dataState.items) {
         const isSelected = dataState.selectedFiles.has(entry.filename);
         const isExpanded = dataState.expandedRowId === entry.filename;
+        const audioFailed = audioSlot
+            ? audioSlot.failedFiles.has(entry.filename)
+            : false;
         const row = buildRecordingRow(entry, {
             selected: isSelected,
             expanded: isExpanded,
-            audioFailed: dataState.audioFailedFiles.has(entry.filename),
+            audioFailed,
         });
         list.appendChild(row);
         if (isExpanded) {
@@ -174,44 +229,22 @@ function renderDataList() {
             // matches the transcribe window's behavior (no surprise audio
             // when a row is expanded).
             audio.autoplay = false;
-            // The actual src will be set by attachAudioSrc() once the bytes arrive.
             playerWrap.appendChild(audio);
             list.appendChild(playerWrap);
-            dataState.audioElement = audio;
             audio.addEventListener('error', () => onAudioError(entry.filename));
             audio.addEventListener('ended', () => {
                 // Auto-cleanup is optional; keep player visible until user closes.
             });
-            // Fetch bytes asynchronously.
-            attachAudioSrc(audio, entry.filename);
+            // Fetch bytes asynchronously through the shared slot (identity
+            // guard + caller isStale predicate live in the controller).
+            audioSlot.bind(audio, entry.filename, {
+                isStale: () => dataState.audioPlayerRowId !== entry.filename,
+            });
         }
     }
+    // Re-apply roving tabindex against the freshly rendered rows.
+    if (listNav) listNav.sync();
     updateBatchBar();
-}
-
-async function attachAudioSrc(audioEl, filename) {
-    try {
-        const bytes = await call('read_recording_audio', { filename });
-        // Identity guard: the row may have been re-rendered (element replaced
-        // or detached) while the fetch was in flight. Attaching a blob URL to
-        // an orphan element would leak it — nobody can reach it for revoke.
-        if (dataState.audioElement !== audioEl || !audioEl.isConnected) return;
-        attachAudio(audioEl, bytes);
-        dataState.audioFailedFiles.delete(filename);
-    } catch (_e) {
-        // Mark this row's audio as failed.
-        onAudioError(filename);
-    }
-}
-
-function onAudioError(filename) {
-    if (dataState.audioPlayerRowId !== filename) return;
-    // Record the failure in render state (NOT a DOM patch — the list rebuild
-    // below would destroy a patched badge before it could ever paint, which
-    // is exactly the dead-code bug this replaces).
-    dataState.audioFailedFiles.add(filename);
-    releaseAudio();
-    renderDataList();
 }
 
 function renderStats(total, totalBytes) {
@@ -375,23 +408,6 @@ function wireDataListEvents() {
             }
 
             // Row body click → toggle expand (single-row expand, constraint implied)
-            if (dataState.expandedRowId === filename) {
-                dataState.expandedRowId = null;
-            } else {
-                dataState.expandedRowId = filename;
-            }
-            renderDataList();
-        });
-
-        // Keyboard activation for row expand (mirrors the click path; the
-        // native controls inside the row keep their own key handling).
-        list.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            const row = e.target.closest('.data-row');
-            if (!row || row !== e.target) return; // only the row itself
-            e.preventDefault();
-            const filename = row.dataset.filename;
-            if (!filename) return;
             if (dataState.expandedRowId === filename) {
                 dataState.expandedRowId = null;
             } else {

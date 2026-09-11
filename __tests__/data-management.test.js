@@ -246,9 +246,13 @@ describe('buildRecordingRow', () => {
         ).toBe(false);
     });
 
-    it('row carries the expand tab stop (F4 evolved 2026-09-04: keyboard-reachable expand)', () => {
+    it('row carries the expand affordance (F4 evolved 2026-09-04: keyboard-reachable expand)', () => {
         const row = buildRecordingRow(baseEntry);
-        expect(row.tabIndex).toBe(0);
+        // Row no longer owns its own tabIndex — the roving list
+        // controller (ui/lib/recording-list.js) sets tabIndex on exactly
+        // one row at a time. The row itself carries the role + aria-
+        // expanded contract; tabIndex is the controller's responsibility.
+        expect(row.getAttribute('role')).toBe('listitem');
         expect(row.getAttribute('aria-expanded')).toBe('false');
     });
 
