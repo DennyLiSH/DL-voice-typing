@@ -230,6 +230,83 @@ fn esc_should_swallow(has_slot: bool, is_keydown: bool, cancel_handled: bool) ->
     has_slot && is_keydown && cancel_handled
 }
 
+/// Decoded keyboard event — the hook proc's only job is translating
+/// KBDLLHOOKSTRUCT/w_param into this, so routing is testable without Win32.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeyEvent {
+    vk: u32,
+    is_keydown: bool,
+    /// WM_SYSKEYDOWN/UP (Alt-combined system events). Esc-cancel only
+    /// intercepts plain keydown — Alt+Esc is the window-cycle shortcut.
+    is_sys: bool,
+}
+
+/// What the hook proc should do after `route_event` decides. BOTH callback
+/// arms execute OUTSIDE the HOOK_STATE lock (the pre-existing
+/// "lock released — call outside" convention): the hook thread must never
+/// run user callbacks — which may dispatch window calls (hide_floating)
+/// or emit events — while holding the lock, or a settings-page hotkey
+/// change waiting on HOOK_STATE plus the LowLevelHooksTimeout budget
+/// turns into an ABBA deadlock / silent hook removal (审查 S5-1)。
+enum HookAction {
+    /// Esc-cancel candidate: call the cancel callback outside the lock;
+    /// swallow iff it returned true, otherwise fall through to slot
+    /// dispatch (the proc performs a second locked pass).
+    EscCancel(CancelSlot),
+    /// Fire a slot callback with the event (outside the lock).
+    Fire(SlotCallback, HotkeyEvent),
+    /// No slot matched — pass through to the next hook / focused app.
+    Pass,
+}
+
+/// Pure routing decision for one key event, in the hook's canonical order:
+///   1. Esc cancel — plain keydown only, BEFORE the slot table so cancel
+///      is independent of which hotkeys are registered (test pins this:
+///      EscCancel wins even when a slot spec also matches Esc);
+///   2. slot dispatch — modifiers update + spec match (keyup matches on
+///      vk alone, see find_callback).
+///
+/// `SlotCallback` / `CancelSlot` are the existing type aliases at
+/// windows.rs:96-97 (`Arc<dyn Fn(HotkeyEvent)…>` / `Arc<dyn Fn() -> bool…>`)
+/// — the trait's boxed `HotkeyCallback` params are wrapped into them at
+/// register time (`Arc::from(callback)`), same as today.
+fn route_event(hs: &mut HookState, ev: KeyEvent) -> HookAction {
+    const VK_ESCAPE: u32 = 0x1B;
+    if ev.vk == VK_ESCAPE && ev.is_keydown && !ev.is_sys {
+        if let Some(cb) = hs.cancel_esc.clone() {
+            return HookAction::EscCancel(cb);
+        }
+    }
+    if let Some(cb) = dispatch_key_event(hs, ev.vk, ev.is_keydown) {
+        return HookAction::Fire(
+            cb,
+            if ev.is_keydown {
+                HotkeyEvent::Pressed
+            } else {
+                HotkeyEvent::Released
+            },
+        );
+    }
+    HookAction::Pass
+}
+
+/// Map a Win32 w_param message id to a KeyEvent shape. Non-key messages
+/// (e.g. WM_CHAR already filtered earlier) yield None.
+fn decode_key_event(w_param: u32, vk: u32) -> Option<KeyEvent> {
+    let (is_keydown, is_sys) = match w_param {
+        WM_KEYDOWN => (true, false),
+        WM_SYSKEYDOWN => (true, true),
+        WM_KEYUP => (false, false),
+        WM_SYSKEYUP => (false, true),
+        _ => return None,
+    };
+    Some(KeyEvent {
+        vk,
+        is_keydown,
+        is_sys,
+    })
+}
+
 /// Windows global keyboard hook implementation.
 pub struct WindowsHotkeyManager {
     hook: Option<HHOOK>,
@@ -243,27 +320,7 @@ impl WindowsHotkeyManager {
 
 impl HotkeyManager for WindowsHotkeyManager {
     fn register(&mut self, spec: HotkeySpec, callback: HotkeyCallback) -> Result<(), AppError> {
-        // Stage 6 fix #2 — preserve load-path observability when an
-        // arbitrary object-form vk arrives that the key-name table cannot
-        // represent. We still register (the spec is syntactically valid),
-        // but a warn line tells anyone reading the log that the spec is
-        // effectively a "dead key" (keyup will fire, keydown will not match).
-        if !crate::hotkey::is_resolvable_vk(spec.vk) {
-            tracing::warn!(
-                target: "hotkey",
-                "register: spec vk={:#x} has no name representation; keydown will not match any displayable name",
-                spec.vk
-            );
-        }
-
-        self.ensure_hook()?;
-        let mut state = HOOK_STATE
-            .lock()
-            .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
-        let hook_state = state.get_or_insert_with(HookState::default);
-        validate_no_conflict(spec, hook_state, SlotKind::Primary)?;
-        hook_state.primary = Some((spec, Arc::from(callback)));
-        Ok(())
+        self.register_spec_slot(spec, callback, SlotKind::Primary)
     }
 
     fn register_record_only(
@@ -271,22 +328,7 @@ impl HotkeyManager for WindowsHotkeyManager {
         spec: HotkeySpec,
         callback: HotkeyCallback,
     ) -> Result<(), AppError> {
-        if !crate::hotkey::is_resolvable_vk(spec.vk) {
-            tracing::warn!(
-                target: "hotkey",
-                "register_record_only: spec vk={:#x} has no name representation; keydown will not match",
-                spec.vk
-            );
-        }
-
-        self.ensure_hook()?;
-        let mut state = HOOK_STATE
-            .lock()
-            .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
-        let hook_state = state.get_or_insert_with(HookState::default);
-        validate_no_conflict(spec, hook_state, SlotKind::RecordOnly)?;
-        hook_state.record_only = Some((spec, Arc::from(callback)));
-        Ok(())
+        self.register_spec_slot(spec, callback, SlotKind::RecordOnly)
     }
 
     fn register_cancel_esc(&mut self, callback: CancelEscCallback) -> Result<(), AppError> {
@@ -316,50 +358,11 @@ impl HotkeyManager for WindowsHotkeyManager {
     }
 
     fn unregister_primary(&mut self) -> Result<(), AppError> {
-        // Take ONLY the primary slot; record_only + cancel_esc remain live.
-        // Hook removal is decided by the THREE-slot emptiness test:
-        // cancel_esc and record_only are still active after this call,
-        // so the hook must stay installed.
-        let needs_unhook = {
-            let mut state = HOOK_STATE
-                .lock()
-                .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
-            match state.as_mut() {
-                Some(hs) => {
-                    hs.primary = None;
-                    all_slots_empty(hs)
-                }
-                None => false,
-            }
-        };
-        if needs_unhook {
-            self.remove_hook()?;
-        }
-        Ok(())
+        self.clear_spec_slot(SlotKind::Primary)
     }
 
     fn unregister_record_only(&mut self) -> Result<(), AppError> {
-        // Note: `*state = None` is INTENTIONALLY NOT used here.
-        // cancel_esc is now a live slot, so the prior "clear the entire
-        // state when both primary + record_only are empty" short-circuit
-        // would silently nuke cancel_esc. The hook-removal decision must
-        // be driven by `all_slots_empty(hs)` — i.e. cancel_esc counts.
-        let needs_unhook = {
-            let mut state = HOOK_STATE
-                .lock()
-                .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
-            match state.as_mut() {
-                Some(hs) => {
-                    hs.record_only = None;
-                    all_slots_empty(hs)
-                }
-                None => false,
-            }
-        };
-        if needs_unhook {
-            self.remove_hook()?;
-        }
-        Ok(())
+        self.clear_spec_slot(SlotKind::RecordOnly)
     }
 
     fn is_registered(&self) -> bool {
@@ -390,6 +393,59 @@ impl WindowsHotkeyManager {
                 UnhookWindowsHookEx(hook)
                     .map_err(|e| AppError::Hotkey(format!("failed to unhook: {e}")))?;
             }
+        }
+        Ok(())
+    }
+
+    /// Shared register body for the two spec slots (primary / record-only):
+    /// dead-key warn -> ensure hook -> cross-slot conflict check -> install.
+    /// `register_cancel_esc` stays separate (no spec, no hook install).
+    fn register_spec_slot(
+        &mut self,
+        spec: HotkeySpec,
+        callback: HotkeyCallback,
+        slot: SlotKind,
+    ) -> Result<(), AppError> {
+        if !crate::hotkey::is_resolvable_vk(spec.vk) {
+            tracing::warn!(
+                target: "hotkey",
+                "register {slot:?}: spec vk={:#x} has no name representation; keydown will not match any displayable name",
+                spec.vk
+            );
+        }
+        self.ensure_hook()?;
+        let mut state = HOOK_STATE
+            .lock()
+            .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
+        let hook_state = state.get_or_insert_with(HookState::default);
+        validate_no_conflict(spec, hook_state, slot)?;
+        match slot {
+            SlotKind::Primary => hook_state.primary = Some((spec, Arc::from(callback))),
+            SlotKind::RecordOnly => hook_state.record_only = Some((spec, Arc::from(callback))),
+        }
+        Ok(())
+    }
+
+    /// Shared unregister body: clear one spec slot, unhook only when all
+    /// three slots are empty (cancel_esc counts).
+    fn clear_spec_slot(&mut self, slot: SlotKind) -> Result<(), AppError> {
+        let needs_unhook = {
+            let mut state = HOOK_STATE
+                .lock()
+                .map_err(|e| AppError::Hotkey(format!("global state lock poisoned: {e}")))?;
+            match state.as_mut() {
+                Some(hs) => {
+                    match slot {
+                        SlotKind::Primary => hs.primary = None,
+                        SlotKind::RecordOnly => hs.record_only = None,
+                    }
+                    all_slots_empty(hs)
+                }
+                None => false,
+            }
+        };
+        if needs_unhook {
+            self.remove_hook()?;
         }
         Ok(())
     }
@@ -449,58 +505,48 @@ unsafe extern "system" fn keyboard_hook_proc(
             return unsafe { CallNextHookEx(None, n_code, w_param, l_param) };
         }
 
-        // P1 Esc-cancel: intercept plain Esc key-down only (NOT WM_SYSKEYDOWN —
-        // Alt+Esc is the system window-cycle shortcut). Dispatched before the
-        // regular slot table so the cancel path is independent of which hotkey
-        // the user registered as primary/record-only.
-        const VK_ESCAPE: u32 = 0x1B;
-        if vk == VK_ESCAPE && w_param.0 as u32 == WM_KEYDOWN {
-            let (has_slot, cb) = {
-                let state = HOOK_STATE.lock();
-                match state {
-                    Ok(guard) => {
-                        let hs = guard.as_ref();
-                        let slot = hs.and_then(|s| s.cancel_esc.clone());
-                        (slot.is_some(), slot)
-                    }
-                    Err(_) => (false, None),
-                }
-            };
-            if let Some(cb) = cb {
-                // Lock released — call outside (same convention as slot dispatch).
-                let handled = cb();
-                if esc_should_swallow(has_slot, true, handled) {
-                    // SAFETY: swallow this Esc — the focused app must not receive
-                    // the same key-press that just cancelled its transcription.
-                    return LRESULT(1);
-                }
-            }
-        }
-
-        // Determine event type from w_param.
-        let event = match w_param.0 as u32 {
-            WM_KEYDOWN | WM_SYSKEYDOWN => Some((HotkeyEvent::Pressed, true)),
-            WM_KEYUP | WM_SYSKEYUP => Some((HotkeyEvent::Released, false)),
-            _ => None,
-        };
-
-        if let Some((event, is_keydown)) = event {
-            // Compute the matching slot's callback. Update the per-process
-            // modifier state table (accumulated in HookState across events)
-            // inside the lock, then snapshot the matched callback out so we
-            // can release the lock before the user callback runs
-            // (deadlock-safe; matches prior convention).
-            let callback = {
+        if let Some(ev) = decode_key_event(w_param.0 as u32, vk) {
+            // Routing decision under the lock; EVERY callback invocation
+            // happens after release (deadlock-safe; the prior convention —
+            // the cancel path used to do this inline, now both arms do).
+            let action = {
                 let mut state = HOOK_STATE.lock();
                 match state.as_mut() {
-                    Ok(guard) => guard
-                        .as_mut()
-                        .and_then(|hs| dispatch_key_event(hs, vk, is_keydown)),
+                    Ok(guard) => guard.as_mut().map(|hs| route_event(hs, ev)),
                     Err(_) => None,
                 }
             };
-            if let Some(cb) = callback {
-                cb(event);
+            match action {
+                Some(HookAction::EscCancel(cb)) => {
+                    // Lock released — call outside (pre-existing convention:
+                    // user callbacks may dispatch window calls / emit events).
+                    let has_slot = true;
+                    let handled = cb();
+                    if esc_should_swallow(has_slot, true, handled) {
+                        // SAFETY: swallow this Esc — the focused app must not
+                        // receive the same key-press that just cancelled its
+                        // transcription.
+                        return LRESULT(1);
+                    }
+                    // Cancel didn't happen (no active pipeline): fall through
+                    // to slot dispatch via a second locked pass — a user
+                    // hotkey registered on Esc must still fire. Esc is not a
+                    // modifier, so the first pass updated no modifier state.
+                    let action = {
+                        let mut state = HOOK_STATE.lock();
+                        match state.as_mut() {
+                            Ok(guard) => guard
+                                .as_mut()
+                                .and_then(|hs| dispatch_key_event(hs, ev.vk, ev.is_keydown)),
+                            Err(_) => None,
+                        }
+                    };
+                    if let Some(cb) = action {
+                        cb(HotkeyEvent::Pressed);
+                    }
+                }
+                Some(HookAction::Fire(cb, event)) => cb(event),
+                _ => {}
             }
         }
     }
@@ -1074,5 +1120,116 @@ mod tests {
         // All three None -> empty.
         let hs = HookState::default();
         assert!(all_slots_empty(&hs));
+    }
+
+    // ---- Step 3.1: route_event pure router contract ----
+    //
+    // Esc-cancel ordering and WM_SYSKEYDOWN exclusion become testable
+    // interface instead of inline glue in the hook proc. The proc now
+    // shrinks to decode+dispatch; these tests pin the routing decision
+    // shape that the proc depends on.
+
+    #[test]
+    fn route_event_esc_cancels_before_slot_table() {
+        let mut hs = HookState {
+            cancel_esc: Some(Arc::new(|| true)),
+            ..Default::default()
+        };
+        // Primary slot ALSO registered on Esc — cancel routing must win:
+        // route_event returns EscCancel (the cancel branch runs BEFORE the
+        // slot table), never Fire(primary).
+        hs.primary = Some((
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0x1B,
+            },
+            Arc::new(|_| {}),
+        ));
+        let action = route_event(
+            &mut hs,
+            KeyEvent {
+                vk: 0x1B,
+                is_keydown: true,
+                is_sys: false,
+            },
+        );
+        assert!(matches!(action, HookAction::EscCancel(_)));
+    }
+
+    #[test]
+    fn esc_not_handled_falls_back_to_slot_dispatch() {
+        // The hook proc calls the cancel callback OUTSIDE the lock; when it
+        // returns false (no active pipeline) the proc re-enters slot
+        // dispatch. This test pins the fallback: after an EscCancel route,
+        // dispatch_key_event still matches a primary slot registered on Esc.
+        let mut hs = HookState {
+            cancel_esc: Some(Arc::new(|| false)),
+            ..Default::default()
+        };
+        hs.primary = Some((
+            HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0x1B,
+            },
+            Arc::new(|_| {}),
+        ));
+        let action = route_event(
+            &mut hs,
+            KeyEvent {
+                vk: 0x1B,
+                is_keydown: true,
+                is_sys: false,
+            },
+        );
+        assert!(matches!(action, HookAction::EscCancel(_)));
+        let cb = dispatch_key_event(&mut hs, 0x1B, true); // proc's 2nd pass
+        assert!(
+            cb.is_some(),
+            "Esc-down must still match the primary spec after a non-handled cancel"
+        );
+    }
+
+    #[test]
+    fn route_event_excludes_syskeydown_from_esc_cancel() {
+        let mut hs = HookState {
+            cancel_esc: Some(Arc::new(|| true)),
+            ..Default::default()
+        };
+        // Alt+Esc (WM_SYSKEYDOWN) is the window-cycle shortcut — never a
+        // cancel candidate; with no slot matching it, routing is Pass.
+        let action = route_event(
+            &mut hs,
+            KeyEvent {
+                vk: 0x1B,
+                is_keydown: true,
+                is_sys: true,
+            },
+        );
+        assert!(matches!(action, HookAction::Pass));
+    }
+
+    #[test]
+    fn decode_key_event_maps_windows_messages() {
+        assert_eq!(
+            decode_key_event(WM_KEYDOWN, 0x41),
+            Some(KeyEvent {
+                vk: 0x41,
+                is_keydown: true,
+                is_sys: false
+            })
+        );
+        assert_eq!(
+            decode_key_event(WM_SYSKEYUP, 0x41),
+            Some(KeyEvent {
+                vk: 0x41,
+                is_keydown: false,
+                is_sys: true
+            })
+        );
+        assert_eq!(decode_key_event(0xdead_u32, 0x41), None);
     }
 }
