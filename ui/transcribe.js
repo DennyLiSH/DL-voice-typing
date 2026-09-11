@@ -397,7 +397,7 @@ async function startTranscription() {
     try {
         await call('transcribe_recording', {
             filename: state.selected,
-            use_llm: Boolean($('chk-llm')?.checked),
+            useLlm: Boolean($('chk-llm')?.checked),
         });
         // Outcome arrives via transcription-* events.
     } catch (e) {

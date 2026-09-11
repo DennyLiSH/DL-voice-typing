@@ -440,13 +440,19 @@ fn inject_error_to_command(e: InjectError) -> CommandError {
 // WAV + path helpers
 // ---------------------------------------------------------------------------
 
-/// Base directory for recordings (config data_saving_path).
+/// Base directory for recordings. MUST be canonicalized: `resolve_child`
+/// compares the canonicalized child (which carries the `\\?\` verbatim
+/// prefix on Windows) with `starts_with(base)` — a raw-string base never
+/// matches, so every existing file would be rejected as "path escapes".
 fn recordings_base_dir(ps: &PipelineState) -> Result<PathBuf, CommandError> {
     let cfg = ps.config_cache().read_cached();
     if cfg.data_saving_path.trim().is_empty() {
         return Err(CommandError::validation("未设置数据保存路径"));
     }
-    Ok(PathBuf::from(&cfg.data_saving_path))
+    match crate::commands::data_management_cmd::resolve_base(&cfg.data_saving_path)? {
+        Some(base) => Ok(base),
+        None => Err(CommandError::validation("数据保存路径不存在")),
+    }
 }
 
 /// Read a 16kHz mono 16-bit PCM WAV into f32 samples, validating the header.
