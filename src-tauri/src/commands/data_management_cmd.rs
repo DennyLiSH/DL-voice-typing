@@ -290,16 +290,8 @@ pub(crate) fn soft_delete_files(base: &Path, filenames: &[String]) -> SoftDelete
         // gives no privilege over the source — both sides are user-
         // owned).
         if let Err(e) = std::fs::create_dir_all(&pending)
-            .and_then(|_| pending.canonicalize())
-            .and_then(|pc| {
-                if pc.starts_with(&base_canon) {
-                    Ok(())
-                } else {
-                    Err(std::io::Error::other(
-                        "pending dir escapes base (junction?)",
-                    ))
-                }
-            })
+            .and_then(|_| ensure_inside(&base_canon, &pending))
+            .map(|_| ())
         {
             failed.push(FailedDelete {
                 filename: filename.clone(),
@@ -384,17 +376,13 @@ pub fn sweep_pending_dir(config: &crate::config::schema::AppConfig) {
     if !pending.exists() {
         return;
     }
-    let pc = match pending.canonicalize() {
+    let pc = match ensure_inside(&base, &pending) {
         Ok(p) => p,
         Err(e) => {
-            warn!(target: "data", "sweep aborted: cannot canonicalize pending dir: {e}");
+            warn!(target: "data", "sweep aborted: pending dir check failed: {e}");
             return;
         }
     };
-    if !pc.starts_with(&base) {
-        warn!(target: "data", "pending dir escapes base (junction?); sweep aborted");
-        return;
-    }
     let read_dir = match std::fs::read_dir(&pc) {
         Ok(rd) => rd,
         Err(e) => {
@@ -452,6 +440,27 @@ fn enum_field<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
             None
         }
     }
+}
+
+/// Canonicalize `candidate` and verify it still lives under `base`.
+/// **Contract: `base` must ALREADY be canonicalized** — on Windows,
+/// canonicalize() yields `\\?\` verbatim prefixes and Path::starts_with
+/// compares by component, so a verbatim child never starts_with a
+/// plain-form base. Rejects directory swaps (junction/symlink) that would
+/// let a resolved path escape the data dir. Single sentinel for the two
+/// former inline variants (soft_delete_files pending check,
+/// sweep_pending_dir). Escapes surface as `io::ErrorKind::Other`; a
+/// missing candidate surfaces as the canonicalize error itself (usually
+/// `NotFound`) so callers can distinguish "not there" from "escaped".
+pub(crate) fn ensure_inside(base: &Path, candidate: &Path) -> Result<PathBuf, std::io::Error> {
+    let canon = candidate.canonicalize()?;
+    if !canon.starts_with(base) {
+        return Err(std::io::Error::other(format!(
+            "{} escapes base (junction?)",
+            candidate.display()
+        )));
+    }
+    Ok(canon)
 }
 
 /// Validate that `filename` is a `YYYY-MM-DD_HH-MM-SS` stem and contains no

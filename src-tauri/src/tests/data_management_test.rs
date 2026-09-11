@@ -3,9 +3,9 @@
 //! Lives in `src/tests/` to keep production source files free of `.unwrap()`.
 
 use crate::commands::data_management_cmd::{
-    FailedDelete, PendingDeletes, SoftDeleteOutcome, friendly_delete_error, friendly_io_error,
-    is_valid_stem, resolve_base, resolve_child, scan_and_collect, soft_delete_files,
-    sweep_pending_dir,
+    FailedDelete, PendingDeletes, SoftDeleteOutcome, ensure_inside, friendly_delete_error,
+    friendly_io_error, is_valid_stem, resolve_base, resolve_child, scan_and_collect,
+    soft_delete_files, sweep_pending_dir,
 };
 use crate::config::AppConfig;
 use std::fs;
@@ -643,4 +643,33 @@ fn pending_junction_rejected_by_symlink_guard() {
 
     let _ = fs::remove_dir_all(&base);
     let _ = fs::remove_dir_all(&external);
+}
+
+// ===========================================================================
+// ensure_inside sentinel (P3 候选 8) — single junction-defense variant
+// ===========================================================================
+
+#[test]
+fn ensure_inside_accepts_child_and_rejects_escape() {
+    // ensure_inside requires an ALREADY-CANONICALIZED base (see doc):
+    // on Windows canonicalize() yields `\\?\` verbatim prefixes, and
+    // Path::starts_with compares by component — a verbatim child never
+    // starts_with a plain-form base. fresh_tempdir() returns the plain
+    // form, so canonicalize here first (same as the canonicalize precedents
+    // in test_resolve_child_no_traversal_for_valid_stem / ..._symlink_escape).
+    let base = fresh_tempdir().canonicalize().unwrap();
+    let inside = base.join("a.wav");
+    std::fs::write(&inside, b"x").unwrap();
+    assert!(ensure_inside(&base, &inside).is_ok());
+
+    let other = fresh_tempdir().canonicalize().unwrap(); // unrelated dir
+    let r = ensure_inside(&base, &other);
+    assert!(r.is_err(), "a path outside base must be rejected");
+    // Missing candidate surfaces as the canonicalize error (NotFound),
+    // NOT as an escape.
+    let missing = ensure_inside(&base, &base.join("missing.wav"));
+    assert!(missing.unwrap_err().kind() == std::io::ErrorKind::NotFound);
+
+    let _ = fs::remove_dir_all(&base);
+    let _ = fs::remove_dir_all(&other);
 }
