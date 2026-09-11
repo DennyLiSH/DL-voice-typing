@@ -13,6 +13,24 @@
 // means the user only ever round-trips one canonical name. Backend aliases
 // (rctrl/lctrl/...) are accepted on parse for backward compatibility but
 // the UI never emits them.
+//
+// Display vs selectable: specLabel uses the full backend NAMED_KEYS
+// canonical domain (so e.g. an `escape` config loaded from a hand-edited
+// file renders as "Escape", not "VK0x1b"). The combo-form <select> only
+// offers MAIN_KEYS = display - SELECT_EXCLUDED, since some displayable
+// keys (Escape) are reserved as pipeline-cancel triggers and must not be
+// selectable as record triggers. writeSpecToUI leaves the select empty
+// for display-only vk (no matching <option>), so the unknown-vk
+// round-trip invariant is preserved.
+
+// Display-only entries: renderable by specLabel (mirrors the backend
+// vk_to_key_name domain) but deliberately NOT selectable in the combo
+// form. Escape is the pipeline-cancel key (the hook routes Esc before
+// the slot table), so offering it as a record trigger is a footgun.
+const DISPLAY_ONLY_KEYS = [{ name: 'Escape', vk: 0x1b }];
+
+/** Keys present in the display table but excluded from the <select>. */
+export const SELECT_EXCLUDED = DISPLAY_ONLY_KEYS.map((e) => e.name);
 
 const MODIFIER_KEYS = [
     'RightCtrl',
@@ -58,7 +76,7 @@ export const DEFAULT_RECORD_ONLY_SPEC = Object.freeze({
  * MAIN_KEYS string via nameToVk below, not stored here.
  */
 const NAME_TO_VK = new Map();
-for (const name of MAIN_KEYS) {
+for (const name of [...MAIN_KEYS, ...DISPLAY_ONLY_KEYS.map((e) => e.name)]) {
     let vk;
     if (name.length === 1) {
         const ch = name.charCodeAt(0);
@@ -87,6 +105,9 @@ for (const name of MAIN_KEYS) {
             case 'LeftShift':
                 vk = 0xa0;
                 break;
+            case 'Escape':
+                vk = 0x1b;
+                break;
             default:
                 throw new Error(`Unmapped MAIN_KEYS entry: ${name}`);
         }
@@ -95,7 +116,7 @@ for (const name of MAIN_KEYS) {
 }
 
 /** Canonical name -> vk. Returns undefined for unknown names. */
-function nameToVk(name) {
+export function nameToVk(name) {
     return NAME_TO_VK.get(name);
 }
 
