@@ -567,73 +567,22 @@ impl RecordingSession {
             return;
         }
 
-        // -- LLM Correction (optional) --
-        perf.llm_enabled = policy.llm_enabled;
-        let final_text = if policy.llm_enabled {
-            resolve_llm_text(&self.ps, &policy, &transcription, &mut perf)
-                .await
-                .unwrap_or_else(|e| {
-                    warn!("run_pipeline: LLM correction failed: {e}");
-                    transcription.clone()
-                })
-        } else {
-            transcription.clone()
-        };
-
-        let final_text = if policy.language == Language::Zh {
-            normalize_chinese_punctuation(&final_text)
-        } else {
-            final_text
-        };
-
-        // -- Gate 3 (classic): after LLM punctuation, before delivery --
-        // Final abort point — if Esc lands during LLM/normalize, we exit
-        // without calling DeliveryController at all. Log-and-return only:
-        // cleanup belongs to cancel_active_pipeline on the hook thread (see
-        // the gate-2 note above).
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            info!(target: "cancel", "run_pipeline: gate 3 cancelled before delivery");
-            return;
-        }
-
-        // -- Delivery (review vs direct decided once from mode) --
-        if review {
-            info!(
-                "run_pipeline: handing off to DeliveryController::show_review ({} chars)",
-                final_text.len()
-            );
-            self.ps
-                .delivery()
-                .show_review(
-                    &self.ps,
-                    final_text,
-                    transcription,
-                    save_result,
-                    &policy,
-                    perf,
-                    t_press_for_e2e,
-                    policy.llm_enabled,
-                )
-                .await;
-            return;
-        }
-        info!(
-            "run_pipeline: handing off to DeliveryController::inject_direct ({} chars)",
-            final_text.len()
-        );
-        self.ps
-            .delivery()
-            .inject_direct(
-                &self.ps,
-                final_text,
-                transcription,
-                save_result,
-                &policy,
-                &mut perf,
-                t_press_for_e2e,
-                policy.llm_enabled,
-            )
-            .await;
+        refine_and_deliver(
+            &self.ps,
+            transcription,
+            SaveForDelivery::Resolved(save_result),
+            if review {
+                DeliveryRoute::Review
+            } else {
+                DeliveryRoute::Direct
+            },
+            &policy,
+            perf,
+            t_press_for_e2e,
+            &cancel,
+            "gate 3",
+        )
+        .await;
     }
 
     /// Fast path for RealtimeDirect mode: uses accumulated realtime text
@@ -644,7 +593,7 @@ impl RecordingSession {
         accumulated: String,
         audio_data: Vec<f32>,
         native_rate: u32,
-        mut perf: PerfMetrics,
+        perf: PerfMetrics,
         t_press_for_e2e: Instant,
         policy: SessionPolicy,
         cancel: Arc<std::sync::atomic::AtomicBool>,
@@ -669,65 +618,18 @@ impl RecordingSession {
         });
 
         let transcription = accumulated.clone();
-        perf.llm_enabled = policy.llm_enabled;
-        let final_text = if policy.llm_enabled {
-            resolve_llm_text(&self.ps, &policy, &transcription, &mut perf)
-                .await
-                .unwrap_or_else(|e| {
-                    warn!("run_realtime_fast_path: LLM correction failed: {e}");
-                    transcription.clone()
-                })
-        } else {
-            transcription.clone()
-        };
-
-        let final_text = if policy.language == Language::Zh {
-            normalize_chinese_punctuation(&final_text)
-        } else {
-            final_text
-        };
-
-        // -- Gate 2' (fast path): after LLM, before delivery --
-        // Log-and-return only (see the gate-2 note in run_pipeline); the
-        // save await still runs so the spawned data-saving task is not
-        // orphaned mid-write.
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            info!(target: "cancel", "run_realtime_fast_path: gate 2' cancelled after LLM");
-            let _ = save_handle.await;
-            return;
-        }
-
-        let save_result = match save_handle.await {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("run_realtime_fast_path: save task failed: {e}");
-                None
-            }
-        };
-
-        // -- Gate 3' (fast path): right before inject_direct --
-        // Critical: without this gate, a stale fast-path delivery could
-        // race past DeliveryController's entry guards and silently kill a
-        // *next* recording session that started during the LLM HTTP window.
-        // Log-and-return only (see the gate-2 note in run_pipeline).
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            info!(target: "cancel", "run_realtime_fast_path: gate 3' cancelled before inject");
-            return;
-        }
-
-        self.ps
-            .delivery()
-            .inject_direct(
-                &self.ps,
-                final_text,
-                transcription,
-                save_result,
-                &policy,
-                &mut perf,
-                t_press_for_e2e,
-                policy.llm_enabled,
-            )
-            .await;
+        refine_and_deliver(
+            &self.ps,
+            transcription,
+            SaveForDelivery::Background(save_handle),
+            DeliveryRoute::Direct,
+            &policy,
+            perf,
+            t_press_for_e2e,
+            &cancel,
+            "gate 3'",
+        )
+        .await;
     }
 }
 
@@ -939,6 +841,115 @@ async fn resolve_llm_text(
                 serde_json::to_value(LLM_ERROR_USER_MSG).unwrap_or_default(),
             );
             Ok(transcription.to_string())
+        }
+    }
+}
+
+/// Where the delivery's data-saving result comes from. Classic resolves
+/// it inside transcribe_and_save (already awaited); the fast path
+/// overlaps it with LLM via spawn_blocking and the tail awaits it.
+enum SaveForDelivery {
+    Resolved(Option<crate::data_saving::SaveResult>),
+    Background(tokio::task::JoinHandle<Option<crate::data_saving::SaveResult>>),
+}
+
+/// Which DeliveryController entry the tail hands off to.
+enum DeliveryRoute {
+    Review,
+    Direct,
+}
+
+/// Shared delivery tail: LLM refine -> punctuation normalize -> resolve
+/// save -> final cancel gate -> DeliveryController handoff. The ~40-line
+/// tail previously lived twice (run_pipeline / run_realtime_fast_path)
+/// with cross-referencing gate-number comments; it is now one function.
+///
+/// The final gate is log-and-return ONLY: cleanup belongs to
+/// cancel_active_pipeline on the hook thread, and a gate-side reset
+/// would kill a NEW session started while this one was in flight
+/// (7f0cbf0). `gate_label` distinguishes call sites in logs.
+#[allow(clippy::too_many_arguments)] // 9 args; merging would obscure call site
+async fn refine_and_deliver(
+    ps: &PipelineState,
+    transcription: String,
+    save: SaveForDelivery,
+    route: DeliveryRoute,
+    policy: &SessionPolicy,
+    mut perf: PerfMetrics,
+    t_press_for_e2e: Instant,
+    cancel: &Arc<std::sync::atomic::AtomicBool>,
+    gate_label: &'static str,
+) {
+    perf.llm_enabled = policy.llm_enabled;
+    let final_text = if policy.llm_enabled {
+        resolve_llm_text(ps, policy, &transcription, &mut perf)
+            .await
+            .unwrap_or_else(|e| {
+                warn!("refine_and_deliver: LLM correction failed: {e}");
+                transcription.clone()
+            })
+    } else {
+        transcription.clone()
+    };
+
+    let final_text = if policy.language == Language::Zh {
+        normalize_chinese_punctuation(&final_text)
+    } else {
+        final_text
+    };
+
+    let save_result = match save {
+        SaveForDelivery::Resolved(v) => v,
+        SaveForDelivery::Background(handle) => match handle.await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("refine_and_deliver: save task failed: {e}");
+                None
+            }
+        },
+    };
+
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        info!(target: "cancel", "refine_and_deliver: {gate_label} cancelled before delivery");
+        return;
+    }
+
+    match route {
+        DeliveryRoute::Review => {
+            info!(
+                "refine_and_deliver: DeliveryController::show_review ({} chars)",
+                final_text.len()
+            );
+            ps.delivery()
+                .show_review(
+                    ps,
+                    final_text,
+                    transcription,
+                    save_result,
+                    policy,
+                    perf,
+                    t_press_for_e2e,
+                    policy.llm_enabled,
+                )
+                .await;
+        }
+        DeliveryRoute::Direct => {
+            info!(
+                "refine_and_deliver: DeliveryController::inject_direct ({} chars)",
+                final_text.len()
+            );
+            ps.delivery()
+                .inject_direct(
+                    ps,
+                    final_text,
+                    transcription,
+                    save_result,
+                    policy,
+                    &mut perf,
+                    t_press_for_e2e,
+                    policy.llm_enabled,
+                )
+                .await;
         }
     }
 }
