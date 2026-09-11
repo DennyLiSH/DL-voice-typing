@@ -88,6 +88,10 @@ pub struct SoftDeleteBatch {
     pub id: u64,
     pub moved: u32,
     pub failed: Vec<FailedDelete>,
+    /// Undo window length in seconds — single source for the frontend
+    /// toast countdown (the confirm-copy number flows through the frontend
+    /// mirror constant + contract test instead).
+    pub undo_window_secs: u64,
 }
 
 /// Per-batch undo state. One entry per soft-delete batch.
@@ -97,6 +101,11 @@ pub(crate) struct PendingEntry {
     /// before insertion, so they are guaranteed to live under the user's
     /// `data_saving_path`.
     pub(crate) pairs: Vec<(PathBuf, PathBuf)>,
+    /// Fires (from the finalize path ONLY, on whichever thread finalizes)
+    /// when this batch is permanently deleted. A restore consumes the
+    /// entry first and never fires it — a restored batch must not be
+    /// reported as permanently deleted.
+    pub(crate) on_finalize: Option<Arc<dyn Fn(u64) + Send + Sync>>,
 }
 
 /// Process-wide registry of pending soft-delete batches. The 5-second
@@ -133,7 +142,15 @@ impl PendingDeletes {
     /// Schedule a soft-delete batch: insert the entry, spawn a detached
     /// `std::thread` that sleeps `UNDO_WINDOW_SECS` and then finalizes.
     /// The returned id is the undo handle.
-    pub(crate) fn schedule(self: &Arc<Self>, pairs: Vec<(PathBuf, PathBuf)>) -> u64 {
+    ///
+    /// `on_finalize` fires (from whichever thread finalizes) only when the
+    /// finalize path actually consumed the entry — restore wins the take-once
+    /// race and never fires it.
+    pub(crate) fn schedule_with_finalize(
+        self: &Arc<Self>,
+        pairs: Vec<(PathBuf, PathBuf)>,
+        on_finalize: Option<Arc<dyn Fn(u64) + Send + Sync>>,
+    ) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         match crate::util::lock_mutex(&self.inner, "PendingDeletes::schedule") {
             Some(mut guard) => {
@@ -141,6 +158,7 @@ impl PendingDeletes {
                     id,
                     PendingEntry {
                         pairs: pairs.clone(),
+                        on_finalize: on_finalize.clone(),
                     },
                 );
             }
@@ -177,17 +195,31 @@ impl PendingDeletes {
     }
 
     /// Test-only / internal finalize: take-once remove the entry; if we
-    /// got it, remove the pending files (best-effort). The unlock-before-IO
-    /// pattern keeps the lock window microseconds; subsequent restores
-    /// can race through `take_entry` returning `None`.
-    pub(crate) fn finalize_by_id(&self, id: u64) {
+    /// got it, remove the pending files (best-effort), fire the
+    /// `on_finalize` callback if registered, and return `true`. Returns
+    /// `false` when the entry was already consumed by restore (the
+    /// take-once invariant). The unlock-before-IO pattern keeps the lock
+    /// window microseconds; subsequent restores can race through
+    /// `take_entry` returning `None`.
+    pub(crate) fn finalize_by_id(&self, id: u64) -> bool {
         let Some(entry) = self.take_entry(id) else {
-            return;
+            return false;
         };
         for (_orig, pending) in &entry.pairs {
-            let _ = std::fs::remove_file(pending);
+            if let Err(e) = std::fs::remove_file(pending) {
+                warn!(
+                    target: "data",
+                    id,
+                    path = %pending.display(),
+                    "pending finalize remove failed (startup sweep will retry): {e}"
+                );
+            }
         }
         info!(target: "data", id, files = entry.pairs.len(), "pending finalize");
+        if let Some(cb) = &entry.on_finalize {
+            cb(id);
+        }
+        true
     }
 
     /// Test-only entry check (used by `schedule_stores_entry_and_timer_runs_finalize`).
@@ -745,6 +777,7 @@ pub(crate) fn scan_and_collect(
 pub async fn soft_delete_recordings(
     config_cache: tauri::State<'_, ConfigCache>,
     pending: tauri::State<'_, Arc<PendingDeletes>>,
+    pipeline: tauri::State<'_, crate::commands::pipeline_state::PipelineState>,
     filenames: Vec<String>,
 ) -> Result<SoftDeleteBatch, CommandError> {
     let config = config_cache.read_cached();
@@ -752,6 +785,12 @@ pub async fn soft_delete_recordings(
     // Clone the Arc out of the State reference before crossing into
     // spawn_blocking (State's borrow cannot move into a 'static closure).
     let pending_arc: Arc<PendingDeletes> = pending.inner().clone();
+    // Snapshot the emitter in command scope so the spawn_blocking closure
+    // captures it by move (pipeline State's borrow cannot cross into a
+    // 'static closure). The emitter is an owned Arc<dyn EventEmitter>
+    // (Send + Sync), safe to ship into the detached finalize thread via
+    // the `on_finalize` closure.
+    let emitter = pipeline.emitter();
 
     let result = tokio::task::spawn_blocking(move || -> Result<SoftDeleteBatch, CommandError> {
         let base = resolve_base_existing(&path_str)?;
@@ -762,7 +801,21 @@ pub async fn soft_delete_recordings(
         } = soft_delete_files(&base, &filenames);
         // Only schedule a timer when there is something to undo.
         let id = if !pairs.is_empty() {
-            pending_arc.schedule(pairs)
+            // The finalize thread emits `pending-deletes-finalized` so the
+            // toast can render backend truth instead of guessing via its
+            // own setInterval (which drifts under throttled background
+            // tabs). The callback fires only when finalize actually
+            // consumed the entry — restore wins the race and skips.
+            let emitter_for_cb = emitter.clone();
+            pending_arc.schedule_with_finalize(
+                pairs,
+                Some(Arc::new(move |batch_id| {
+                    emitter_for_cb.emit(
+                        "pending-deletes-finalized",
+                        serde_json::json!({ "id": batch_id }),
+                    );
+                })),
+            )
         } else {
             0
         };
@@ -771,7 +824,12 @@ pub async fn soft_delete_recordings(
             id, moved, failed_count = failed.len(),
             "soft_delete_recordings completed"
         );
-        Ok(SoftDeleteBatch { id, moved, failed })
+        Ok(SoftDeleteBatch {
+            id,
+            moved,
+            failed,
+            undo_window_secs: UNDO_WINDOW_SECS,
+        })
     })
     .await;
 

@@ -6,7 +6,20 @@
  * keeps counting independently — its slot is taken on completion either
  * way, so a stale click on a vanished toast cannot resurrect it).
  *
- * Lifecycle: hidden → countdown (5..1s) → finalized (归零文案) → hidden.
+ * Lifecycle: hidden → countdown (counts down as a decorative approximation)
+ *                  → finalized (backend event OR local countdown zero —
+ *                     first to arrive wins; events are the single source of
+ *                     truth for the window's actual close)
+ *                  → hidden (auto-dismisses 2s after finalized).
+ *
+ * The backend emits `pending-deletes-finalized` from the finalize thread
+ * once the undo window actually closes — that event (matched against the
+ * current batch id) is what flips the toast into its finalized state. The
+ * countdown is purely cosmetic; if the tab is background-throttled, the
+ * visible number may lag the real window by a beat, but the toast still
+ * enters its finalized state at the right moment because the event drives
+ * it.
+ *
  * At countdown zero the toast does NOT vanish: the text switches to
  * 「已永久删除 N 条」and the undo button is disabled (the backend entry is
  * taken-once by the finalize timer — a late undo click would only surface
@@ -24,8 +37,9 @@ let remaining = 0;
 let movedCount = 0;
 let finalized = false;
 let onUndoRef = null;
+let currentBatchId = null;
+let unlistenFinalize = null;
 
-const TOTAL_SECONDS = 5;
 const TICK_MS = 1000;
 const DISMISS_MS = 2000;
 
@@ -35,12 +49,18 @@ const DISMISS_MS = 2000;
  *
  * @param {Object} opts
  * @param {number} opts.moved - count of successfully moved stems
+ * @param {number|null} [opts.id=null] - batch id (used to match the backend
+ *   finalize event). If omitted, the toast cannot be driven by the event
+ *   and falls back to the local countdown.
+ * @param {number} [opts.undoSecs=5] - countdown length in seconds (purely
+ *   decorative — backend event drives the finalized transition)
  * @param {Function} opts.onUndo - called when the user clicks 撤销; the
  *   toast is destroyed before the callback fires.
  */
-export function showPendingToast({ moved, onUndo }) {
+export function showPendingToast({ moved, id = null, undoSecs = 5, onUndo }) {
     destroyPendingToast();
-    remaining = TOTAL_SECONDS;
+    currentBatchId = id ?? null;
+    remaining = undoSecs;
     movedCount = moved;
     finalized = false;
     onUndoRef = onUndo;
@@ -96,6 +116,41 @@ export function destroyPendingToast() {
     movedCount = 0;
     remaining = 0;
     finalized = false;
+    currentBatchId = null;
+}
+
+/**
+ * Idempotent: install the listener for `pending-deletes-finalized` once.
+ * Subsequent calls are no-ops until `unbindFinalizeListener` runs.
+ * Tauri 2's `event.listen` returns `Promise<UnlistenFn>` — the Promise is
+ * stored and awaited at unbind time.
+ */
+export function bindFinalizeListener() {
+    if (unlistenFinalize) return;
+    const listen = window.__TAURI__?.event?.listen;
+    if (!listen) return;
+    unlistenFinalize = listen('pending-deletes-finalized', (e) => {
+        const id = e?.payload?.id;
+        if (toastEl && id != null && id === currentBatchId) {
+            enterFinalized();
+        }
+    });
+}
+
+/**
+ * Await the stored unlisten Promise (Tauri 2 pattern), then reset the slot.
+ * Safe to call when nothing is bound (no-op).
+ */
+export async function unbindFinalizeListener() {
+    if (unlistenFinalize) {
+        try {
+            const unlisten = await unlistenFinalize;
+            if (typeof unlisten === 'function') unlisten();
+        } catch (_e) {
+            // Window already gone — listen()'s promise may reject on teardown.
+        }
+        unlistenFinalize = null;
+    }
 }
 
 function tick() {
@@ -110,6 +165,10 @@ function tick() {
 }
 
 function enterFinalized() {
+    // Idempotent: the backend event and the local countdown are racy
+    // peers — first to arrive wins. Subsequent calls are no-ops so the
+    // 2-second dismiss timeout is set exactly once.
+    if (finalized || !toastEl) return;
     finalized = true;
     const text = toastEl.querySelector('#pending-toast-text');
     if (text) text.textContent = `已永久删除 ${movedCount} 条`;

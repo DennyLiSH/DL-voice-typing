@@ -374,7 +374,17 @@ export function computeOffsetAfterDeletion(
  */
 export function deleteConfirmMessage(count) {
     if (count === 1) {
-        return '确定删除这条录音？删除后 5 秒内可撤销，应用退出则无法撤销。';
+        return `确定删除这条录音？删除后 ${UNDO_WINDOW_SECS} 秒内可撤销，应用退出则无法撤销。`;
     }
-    return `确定删除选中的 ${count} 条录音？删除后 5 秒内可撤销，应用退出则无法撤销。`;
+    return `确定删除选中的 ${count} 条录音？删除后 ${UNDO_WINDOW_SECS} 秒内可撤销，应用退出则无法撤销。`;
 }
+
+/**
+ * Mirror of the backend `UNDO_WINDOW_SECS` constant in
+ * `src-tauri/src/commands/data_management_cmd.rs`. The toast countdown is
+ * driven by the backend `pending-deletes-finalized` event — this number
+ * only flows through the confirm copy. The contract test
+ * `__tests__/undo-window-contract.test.js` guards against silent drift
+ * between the two sides.
+ */
+export const UNDO_WINDOW_SECS = 5;

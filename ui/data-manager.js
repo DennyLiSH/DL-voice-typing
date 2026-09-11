@@ -8,7 +8,12 @@ import {
     formatBytes,
     getPageRange,
 } from './lib/data-management.js';
-import { destroyPendingToast, showPendingToast } from './lib/pending-toast.js';
+import {
+    bindFinalizeListener,
+    destroyPendingToast,
+    showPendingToast,
+    unbindFinalizeListener,
+} from './lib/pending-toast.js';
 import {
     attachAudio,
     loadRecordings,
@@ -61,6 +66,10 @@ function releaseAudio() {
 export function onDataPageEnter() {
     // Reset all state on entry (constraint #1 from design review).
     resetDataListState();
+    // Idempotent: installs the pending-deletes-finalized listener at most
+    // once. Pairs with the unbind in onDataPageLeave so we never pile up
+    // duplicate listeners across page navigation.
+    bindFinalizeListener();
     loadRecordingsPage(0);
 }
 
@@ -70,6 +79,7 @@ export function onDataPageLeave() {
     // backend timer keeps running and finalizes naturally).
     releaseAudio();
     destroyPendingToast();
+    unbindFinalizeListener();
 }
 
 function resetDataListState() {
@@ -437,6 +447,8 @@ function showUndoToast(result) {
     if (result.moved > 0) {
         showPendingToast({
             moved: result.moved,
+            id: result.id,
+            undoSecs: result.undo_window_secs,
             onUndo: () => undoDelete(result.id),
         });
     }

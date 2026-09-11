@@ -382,7 +382,7 @@ fn soft_delete_moves_pair_to_pending_and_restores() {
 
     // Restore via PendingDeletes.take_entry — same shape as the command path.
     let pd = Arc::new(PendingDeletes::default());
-    let id = pd.schedule(pairs);
+    let id = pd.schedule_with_finalize(pairs, None);
     let entry = pd.take_entry(id).expect("entry exists pre-window");
     let mut restored = 0;
     for (orig, src) in &entry.pairs {
@@ -447,7 +447,7 @@ fn finalize_after_window_removes_pending_and_clears_entry() {
     let SoftDeleteOutcome { moved, pairs, .. } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 1);
     let pd = Arc::new(PendingDeletes::default());
-    let id = pd.schedule(pairs);
+    let id = pd.schedule_with_finalize(pairs, None);
 
     // Simulate "5s passed, user did not undo" by driving finalize_by_id directly.
     pd.finalize_by_id(id);
@@ -463,6 +463,35 @@ fn finalize_after_window_removes_pending_and_clears_entry() {
     );
 
     let _ = fs::remove_dir_all(&base);
+}
+
+/// Verify the finalize callback fires ONLY when the entry was actually
+/// consumed by the finalize path (not when restore won the take-once race).
+/// This is the contract for the `pending-deletes-finalized` event that the
+/// frontend toast listens to: a restored batch must never be reported as
+/// permanently deleted.
+#[test]
+fn finalize_callback_fires_only_when_entry_existed() {
+    let pd = Arc::new(PendingDeletes::default());
+    let fired = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let f2 = fired.clone();
+    let id = pd.schedule_with_finalize(
+        vec![(PathBuf::from("a.wav"), PathBuf::from("b.wav"))],
+        Some(Arc::new(move |id| f2.lock().unwrap().push(id))),
+    );
+    // Restore wins the race → finalize path sees no entry → no callback.
+    let _ = pd.restore_with_id(id).unwrap();
+    pd.finalize_by_id(id);
+    assert!(fired.lock().unwrap().is_empty());
+
+    // Second batch: finalize wins → callback fires with the id.
+    let f3 = fired.clone();
+    let id2 = pd.schedule_with_finalize(
+        vec![(PathBuf::from("c.wav"), PathBuf::from("d.wav"))],
+        Some(Arc::new(move |id| f3.lock().unwrap().push(id))),
+    );
+    pd.finalize_by_id(id2);
+    assert_eq!(*fired.lock().unwrap(), vec![id2]);
 }
 
 #[test]
@@ -485,7 +514,7 @@ fn restore_partial_failure_leaves_failed_pairs_for_sweep() {
     let SoftDeleteOutcome { moved, pairs, .. } = soft_delete_files(&base, &[stem.to_string()]);
     assert_eq!(moved, 1);
     let pd = Arc::new(PendingDeletes::default());
-    let id = pd.schedule(pairs);
+    let id = pd.schedule_with_finalize(pairs, None);
 
     // Yank one of the pending files before the user hits Undo — simulates
     // a process holding the file open or a manual edit.
@@ -565,7 +594,7 @@ fn schedule_stores_entry_and_timer_runs_finalize() {
     assert_eq!(moved, 1);
 
     let pd: Arc<PendingDeletes> = Arc::new(PendingDeletes::default());
-    let id = pd.schedule(pairs);
+    let id = pd.schedule_with_finalize(pairs, None);
     assert!(pd.has_entry(id));
 
     // Wait for the 5s std::thread timer to fire and finalize.
