@@ -393,12 +393,21 @@ fn run_llm_correction(
     // Prefer the cached corrector when it matches the current config (tests
     // inject a mock there); otherwise build a fresh client. The LLM API key
     // stays in-process — never logged, never sent to the frontend.
-    if let Some(guard) = crate::util::lock_mutex(&ps.cached_llm(), "cached_llm") {
-        if let Some(corrector) = guard.as_ref() {
-            if corrector.matches_config(&cfg.llm_api_url, &cfg.llm_api_key, &cfg.llm_model) {
-                return Some(corrector.correct_sync(text));
-            }
-        }
+    //
+    // Lock protocol: the verb holds the slot lock for the duration of
+    // `correct_sync` (HTTP via block_in_place). Previously open-coded across
+    // this site + recording_session x2 — see PipelineState::with_cached_llm.
+    // `correct_sync` must stay INSIDE the closure so the cache invariant
+    // (no concurrent rebuild while a corrector is mid-HTTP) holds.
+    if let Some(corrected) = ps
+        .with_cached_llm(|c| {
+            c.as_ref()
+                .filter(|x| x.matches_config(&cfg.llm_api_url, &cfg.llm_api_key, &cfg.llm_model))
+                .map(|x| x.correct_sync(text))
+        })
+        .flatten()
+    {
+        return Some(corrected);
     }
     let client = crate::llm::LLMClient::new(
         cfg.llm_api_url.clone(),

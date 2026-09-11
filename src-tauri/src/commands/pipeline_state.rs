@@ -288,8 +288,18 @@ impl PipelineState {
         self.clipboard.clone()
     }
 
-    pub(crate) fn cached_llm(&self) -> Arc<Mutex<Option<Box<dyn TextCorrector>>>> {
-        self.cached_llm.clone()
+    /// Run `f` against the cached-LLM slot under its lock. Lock poisoning
+    /// surfaces as None — callers translate that to their existing
+    /// "lock poisoned" errors. This is the ONLY way across this seam now:
+    /// the lock protocol (util::lock_mutex + slot name) lives with the
+    /// slot's owner instead of in 3 callers' heads. Lock is held for the
+    /// duration of `f`; HTTP calls (correct_sync via block_in_place) happen
+    /// inside the closure, matching the prior open-coded pattern.
+    pub(crate) fn with_cached_llm<R>(
+        &self,
+        f: impl FnOnce(&mut Option<Box<dyn TextCorrector>>) -> R,
+    ) -> Option<R> {
+        crate::util::lock_mutex(&self.cached_llm, "cached_llm").map(|mut guard| f(&mut guard))
     }
 
     pub(crate) fn perf_history(&self) -> Arc<crate::perf::PerfHistory> {
@@ -920,5 +930,68 @@ mod sm_verb_tests {
         // Slot is empty after take.
         assert!(ps.take_record_only_session().is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn with_cached_llm_runs_closure_under_slot_lock() {
+        // Verb contract: closure runs with &mut Option<…>; the returned value
+        // is funneled back to the caller via Some(...). Lock-poisoned case
+        // collapses to None (callers translate to their own error variant).
+        let ps = build_test_ps();
+        // build_test_ps seeds the slot with Some(MockCorrector("corrected"))
+        // — the predicate reports Some(true) because is_none() is false.
+        assert_eq!(ps.with_cached_llm(|c| c.is_none()), Some(false));
+
+        // Seeding via the verb works the same way as direct lock mutation.
+        let ps_empty = PipelineState::new(
+            Arc::new(Mutex::new(StateMachine::new())),
+            Arc::new(Mutex::new(MockAudioCapture::new())),
+            Arc::new(MockEngine::new("test")),
+            Arc::new(MockClipboard::new()),
+            Arc::new(PerfHistory::new()),
+            ConfigCache::new(AppConfig::default()),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(NoopWindowController),
+            Arc::new(MockEmitter::new()),
+            Arc::new(MockReviewProvider::new()),
+        );
+        assert_eq!(
+            ps_empty.with_cached_llm(|c| c.is_none()),
+            Some(true),
+            "fresh slot is None"
+        );
+        // The verb can also mutate the slot (seed for downstream tests).
+        ps_empty.with_cached_llm(|c| {
+            *c = Some(Box::new(MockCorrector::new("seeded")));
+        });
+        assert_eq!(
+            ps_empty.with_cached_llm(|c| c.is_some()),
+            Some(true),
+            "mutation visible on next verb call"
+        );
+    }
+
+    #[test]
+    fn public_surface_ratchet() {
+        // Interface ratchet: counts the PipelineState surface — both the
+        // pre-Task-4 46 pub fns and Task 4's `CancelGuard::new` (`+1`).
+        // Task 6 nets 0 (`+with_cached_llm`, `-cached_llm`). Growth requires
+        // editing this number DELIBERATELY (and justifying it) — silent
+        // accretion is the regression this guards (architecture review
+        // 2026-09-11 candidate 4).
+        //
+        // Calibration: the ratchet's two `src.matches(...)` literal strings
+        // ALSO appear in the test body itself (one for each pattern), so the
+        // measured count is real count + 2. The plan's instruction to set
+        // 47 was a measurement oversight; the actual measured count is 49,
+        // which equals 47 real pub fns + 2 self-references.
+        let src = include_str!("pipeline_state.rs");
+        let count = src.matches("    pub(crate) fn ").count() + src.matches("    pub fn ").count();
+        assert_eq!(
+            count, 49,
+            "PipelineState pub-fn surface changed; update the ratchet deliberately \
+             (real count = measured - 2, to subtract the test body's two self-references)"
+        );
     }
 }
