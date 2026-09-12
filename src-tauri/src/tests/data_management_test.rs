@@ -243,14 +243,18 @@ fn test_resolve_child_no_traversal_for_valid_stem() {
 }
 
 #[test]
-fn test_resolve_child_canonicalize_blocks_symlink_escape() {
-    // Create base + a symlink inside that points outside.
-    // On Windows symlink creation requires privileges; skip when impossible.
-    let dir = temp_dir("symlink-escape");
+fn test_resolve_child_missing_child_returns_plain_join() {
+    // Despite the historical name (this fn never tested the
+    // directory-junction-rejection path — that is covered by the
+    // dedicated `pending_junction_*` / `sweep_junction_*` tests
+    // below — it only pins down the canonicalize-failure contract).
+    // resolve_child (`src/commands/data_management_cmd.rs:593-597`)
+    // canonicalizes the candidate and, on failure, returns the
+    // unvalidated `base.join(stem, ext)` concatenation. A non-existent
+    // child does NOT error out and is returned as a plain joined path.
+    let dir = temp_dir("resolve-child-missing");
     let base = dir.canonicalize().unwrap();
 
-    // Without symlink privileges, we still verify that a non-existent child
-    // path does not error out (canonicalize fails gracefully).
     let child = resolve_child(&base, "2026-06-24_14-30-25", "wav").unwrap();
     assert!(child.starts_with(&base));
 
@@ -355,6 +359,47 @@ fn fresh_tempdir() -> PathBuf {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("mkdir");
     dir
+}
+
+/// Create a Windows directory junction (reparse point) at `link` pointing
+/// to `target`. Used by the security-gate tests below to simulate an
+/// attacker who plants a junction inside the data-save base that escapes
+/// to an external directory.
+///
+/// # Constraints
+///
+/// - **No privileges required** — `mklink /J` does not need Developer Mode
+///   or `SeCreateSymbolicLinkPrivilege`, so CI runners (windows-latest)
+///   can run it without any setup.
+/// - **Absolute cmd.exe path** — the child uses
+///   `%SystemRoot%\System32\cmd.exe` so it cannot resolve through PATH/CWD,
+///   which could otherwise route an attacker-controlled link to a different
+///   binary (defense-in-depth for a security-test helper).
+/// - **Plain-form paths** — `link` and `target` MUST be in plain form.
+///   `\\?\` verbatim prefixes (produced by `Path::canonicalize`) are
+///   REJECTED by `mklink /J`, so this helper takes the plain form
+///   returned by `fresh_tempdir()` rather than re-canonicalizing its
+///   arguments.
+#[cfg(windows)]
+fn make_junction(link: &Path, target: &Path) {
+    let cmd = format!(
+        "{}\\System32\\cmd.exe",
+        std::env::var("SystemRoot").expect("SystemRoot set")
+    );
+    let out = std::process::Command::new(cmd)
+        .args(["/c", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .expect("spawn cmd");
+    assert!(
+        out.status.success(),
+        "mklink /J {} -> {} failed: {} {}",
+        link.display(),
+        target.display(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
 }
 
 #[test]
@@ -637,20 +682,25 @@ fn schedule_stores_entry_and_timer_runs_finalize() {
 }
 
 /// M4 security gate regression: when `.dl_pending` is replaced with a
-/// junction/symlink_dir pointing OUTSIDE the base, `soft_delete_files`
-/// must reject the whole batch (no files moved, no data written to the
-/// attacker-chosen external target).
+/// When `.dl_pending` inside `base` is a Windows **directory junction**
+/// pointing OUTSIDE the base, `soft_delete_files` must reject the whole
+/// batch (no files moved, no data written to the attacker-chosen
+/// external target).
 ///
-/// Windows symlink_dir requires either Developer Mode enabled or
-/// `SeCreateSymbolicLinkPrivilege`. Most CI runners lack both — mark
-/// `#[ignore]` and run locally for the actual assertion. On non-Windows
-/// the test still runs (symlink_dir is unprivileged there).
+/// The guard is `ensure_inside` inside `soft_delete_files`
+/// (`src/commands/data_management_cmd.rs:337-346`): the junction target
+/// is canonicalized, and `Path::starts_with(base_canonical)` fails for
+/// any path that resolves outside the base — so the rename is aborted.
+///
+/// `mklink /J` is **unprivileged** on Windows (no Developer Mode, no
+/// `SeCreateSymbolicLinkPrivilege`), so this test runs in CI on
+/// windows-latest without any setup. The CI blind spot it closes is
+/// the only remaining coverage gap in the security-gate suite — the
+/// pre-existing `#[ignore]` annotation was a historical leftover from
+/// the previous implementation, which DID need those privileges.
 #[cfg(windows)]
 #[test]
-#[ignore = "requires Developer Mode or SeCreateSymbolicLinkPrivilege; run with `cargo test -- --ignored`"]
-fn pending_junction_rejected_by_symlink_guard() {
-    use std::os::windows::fs::symlink_dir;
-
+fn pending_junction_rejected_by_ensure_inside_guard() {
     let base = fresh_tempdir();
     let stem = "2026-09-05_10-00-05";
     write_recording(&base, stem, Some("secret"));
@@ -664,10 +714,10 @@ fn pending_junction_rejected_by_symlink_guard() {
     // and replace it with a junction pointing to the external dir.
     // `soft_delete_files` calls `create_dir_all` before canonicalize, so
     // the junction must exist BEFORE the call (an attacker would
-    // pre-plant it; here we simulate that by removing then symlinking).
+    // pre-plant it; here we simulate that by removing then mklink /J).
     let pending_link = base.join(".dl_pending");
-    let _ = fs::remove_dir_all(&pending_link);
-    symlink_dir(&external_pending, &pending_link).expect("symlink_dir requires Developer Mode");
+    let _ = fs::remove_dir(&pending_link);
+    make_junction(&pending_link, &external_pending);
 
     // soft_delete_files: must reject the stem (junction escapes base).
     let SoftDeleteOutcome {
@@ -700,6 +750,63 @@ fn pending_junction_rejected_by_symlink_guard() {
         "no files leaked into the external target"
     );
 
+    // Explicit three-step cleanup: drop the junction entry itself
+    // (remove_dir on a junction only unlinks the reparse point, never
+    // deletes the target — defense-in-depth on top of the
+    // CVE-2022-21658 stdlib fix), then tear down both tempdirs.
+    let _ = fs::remove_dir(&pending_link);
+    let _ = fs::remove_dir_all(&base);
+    let _ = fs::remove_dir_all(&external);
+}
+
+/// Sister test to `pending_junction_rejected_by_ensure_inside_guard`:
+/// covers the `sweep_pending_dir` startup-cleanup path
+/// (`src/commands/data_management_cmd.rs:424-430`). When `.dl_pending`
+/// inside `base` is a junction pointing OUTSIDE the base, sweep must
+/// abort (warn + early return) and NOT delete anything from the
+/// attacker-chosen external target.
+///
+/// The victim file MUST be a legal stem + `.wav` extension: if the
+/// guard ever regresses (sweep deletes regardless of ensure_inside),
+/// the deletion loop would only remove files matching the legal-stem
+/// predicate, so an ill-named victim would make the test silent. A
+/// legal stem turns any "sweep deleted it" outcome into an
+/// immediately-visible regression.
+#[cfg(windows)]
+#[test]
+fn sweep_junction_rejected_by_ensure_inside_guard() {
+    let base = fresh_tempdir();
+    let external = fresh_tempdir();
+    let external_pending = external.join(".dl_pending");
+    fs::create_dir_all(&external_pending).expect("mkdir external");
+
+    // Pre-plant a legal-stem victim inside the external target. If the
+    // guard regresses and sweep iterates the junction as if it were a
+    // real pending dir, this file gets deleted — the regression would
+    // be visible as "external wav disappeared".
+    let victim = external_pending.join("2026-09-05_10-00-06.wav");
+    fs::write(&victim, b"x").expect("write victim");
+
+    // Plant the junction inside `base`.
+    let pending_link = base.join(".dl_pending");
+    make_junction(&pending_link, &external_pending);
+
+    // sweep_pending_dir: must abort (warn + return) on ensure_inside
+    // failure. The victim file MUST survive untouched.
+    let cfg = AppConfig {
+        data_saving_path: base.to_string_lossy().to_string(),
+        ..AppConfig::default()
+    };
+    sweep_pending_dir(&cfg);
+
+    assert!(
+        victim.exists(),
+        "external victim file must survive: sweep must not delete across the junction boundary"
+    );
+
+    // Explicit three-step cleanup (same convention as the soft-delete
+    // sister test above).
+    let _ = fs::remove_dir(&pending_link);
     let _ = fs::remove_dir_all(&base);
     let _ = fs::remove_dir_all(&external);
 }
@@ -715,7 +822,8 @@ fn ensure_inside_accepts_child_and_rejects_escape() {
     // Path::starts_with compares by component — a verbatim child never
     // starts_with a plain-form base. fresh_tempdir() returns the plain
     // form, so canonicalize here first (same as the canonicalize precedents
-    // in test_resolve_child_no_traversal_for_valid_stem / ..._symlink_escape).
+    // in test_resolve_child_no_traversal_for_valid_stem /
+    // test_resolve_child_missing_child_returns_plain_join).
     let base = fresh_tempdir().canonicalize().unwrap();
     let inside = base.join("a.wav");
     std::fs::write(&inside, b"x").unwrap();
