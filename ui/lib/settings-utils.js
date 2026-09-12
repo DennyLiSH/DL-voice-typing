@@ -1,35 +1,17 @@
-import { MASKED_MARKER } from './api-key-mask.js';
 import { sameSpec } from './hotkeys.js';
+import { SETTINGS_FIELDS } from './settings-schema.js';
 
 /**
  * Compare current config against loaded config to determine dirty state.
+ * Derived from the SETTINGS_FIELDS schema — the field list and per-field
+ * comparison semantics live in one place (settings-schema.js).
  * Special handling: masked API key is never considered dirty.
- *
- * Note: hotkey / record_only_hotkey are HotkeySpec objects
- * ({ctrl, shift, alt, vk}) since the arbitrary-combination feature shipped
- * (2026-09-06). Shallow `!==` would always be true on objects, so we use
- * sameSpec from lib/hotkeys.js for structural equality.
  */
 export function isConfigDirty(current, loaded) {
-    const apiKeyDirty =
-        current.llm_api_key !== MASKED_MARKER &&
-        current.llm_api_key !== loaded.llm_api_key;
-    return (
-        current.language !== loaded.language ||
-        !sameSpec(current.hotkey, loaded.hotkey) ||
-        current.whisper_model !== loaded.whisper_model ||
-        current.llm_enabled !== loaded.llm_enabled ||
-        current.llm_api_url !== loaded.llm_api_url ||
-        apiKeyDirty ||
-        current.llm_model !== loaded.llm_model ||
-        current.download_mirror !== loaded.download_mirror ||
-        current.data_saving_enabled !== loaded.data_saving_enabled ||
-        current.data_saving_path !== loaded.data_saving_path ||
-        current.review_before_paste !== loaded.review_before_paste ||
-        current.realtime_transcription !== loaded.realtime_transcription ||
-        current.record_only_enabled !== loaded.record_only_enabled ||
-        !sameSpec(current.record_only_hotkey, loaded.record_only_hotkey) ||
-        current.autostart !== loaded.autostart
+    return SETTINGS_FIELDS.some(({ key, equal }) =>
+        equal
+            ? !equal(current[key], loaded[key])
+            : current[key] !== loaded[key],
     );
 }
 
