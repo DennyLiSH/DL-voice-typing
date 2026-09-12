@@ -892,10 +892,10 @@ async fn cancel_during_fast_path_skips_injection() {
     // `refine_and_deliver` (`src/commands/recording_session.rs:874-877`)
     // is what trips — the ONLY cancel gate on the fast path.
     //
-    // (commit 35a59e8 merged the previously-adjacent gates 2' and 3'
-    // into this single post-save gate; deleting it turns this test
-    // red, so the coverage is naturally distinguishable from the
-    // no-cancel case. There is no "joint coverage" / "save-closure
+    // (commit 35a59e8 merged the two previously-adjacent fast-path
+    // post-save gates into this single one; deleting it turns this
+    // test red, so the coverage is naturally distinguishable from
+    // the no-cancel case. There is no "joint coverage" / "save-closure
     // hook" complication any more.)
     //
     // The token flip on `llm-refining` proves the gate sits AFTER the
