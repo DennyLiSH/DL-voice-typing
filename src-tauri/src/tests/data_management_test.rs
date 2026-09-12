@@ -505,6 +505,31 @@ fn restore_unknown_id_is_error() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// The restore report counts RECORDINGS (stems), not files: the frontend
+/// renders "已撤销删除，恢复 N 条" and `SoftDeleteBatch::moved` on the delete
+/// side is already stem-counted — the two sides must share one unit, or
+/// undoing 1 recording displays "恢复 2 条" (wav + json) (P2 E2E finding).
+#[test]
+fn restore_with_id_counts_stems_not_files() {
+    let base = fresh_tempdir();
+    let stem_a = "2026-09-12_10-00-00";
+    let stem_b = "2026-09-12_10-00-01";
+    write_recording(&base, stem_a, Some("a"));
+    write_recording(&base, stem_b, Some("b"));
+    let SoftDeleteOutcome { pairs, .. } =
+        soft_delete_files(&base, &[stem_a.to_string(), stem_b.to_string()]);
+    let pd = Arc::new(PendingDeletes::default());
+    let id = pd.schedule_with_finalize(pairs, None);
+
+    let report = pd.restore_with_id(id).expect("entry exists");
+    assert_eq!(report.restored, 2, "2 recordings, not 4 files");
+    assert_eq!(report.failed, 0);
+    assert!(base.join(format!("{stem_a}.wav")).exists());
+    assert!(base.join(format!("{stem_b}.json")).exists());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
 #[test]
 fn restore_partial_failure_leaves_failed_pairs_for_sweep() {
     let base = fresh_tempdir();
@@ -524,10 +549,15 @@ fn restore_partial_failure_leaves_failed_pairs_for_sweep() {
     fs::remove_file(&wav_pending).unwrap();
 
     // restore_pending_delete: entry is consumed (take-once), but the missing
-    // pair stays gone (no orphan to restore) — restore_report returns 1/1
-    // restored (json only).
+    // wav stays gone (no orphan to restore) — the recording counts as a
+    // FAILED restore (stem-level semantics: all files must come back), so
+    // the report reads 0/1 even though the json did return.
     let report = pd.restore_with_id(id).expect("entry exists");
-    assert_eq!(report.restored, 1, "json restored, wav was already missing");
+    assert_eq!(
+        report.restored, 0,
+        "stem counts failed: wav was already missing"
+    );
+    assert_eq!(report.failed, 1);
     assert!(!pd.has_entry(id), "entry taken");
 
     // Original wav: still missing (rename src was gone — no-op); json back.

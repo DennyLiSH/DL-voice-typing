@@ -130,8 +130,9 @@ impl Default for PendingDeletes {
 
 /// Report returned from `restore_with_id`. Serialized to the frontend so
 /// the undo toast can tell the user when a restore was PARTIAL (failed > 0
-/// means some pairs could not be moved back and stay in pending until the
-/// startup sweep removes them).
+/// means some recordings could not be fully moved back and their remaining
+/// files stay in pending until the startup sweep removes them). Counts are
+/// in RECORDINGS (stems) — the same unit as `SoftDeleteBatch::moved`.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct RestoreReport {
     pub restored: u32,
@@ -233,28 +234,40 @@ impl PendingDeletes {
     /// Restore helper used by the command path and tests. Returns
     /// `Err(VALIDATION)` when the id is unknown (already restored or
     /// window expired). On success the entry is consumed (take-once).
+    ///
+    /// The report counts RECORDINGS (stems), not files: the frontend renders
+    /// "已撤销删除，恢复 N 条" and the delete side (`SoftDeleteBatch::moved`)
+    /// is stem-counted — mixed units made undoing 1 recording display
+    /// "恢复 2 条" (wav + json). A stem counts restored only when ALL its
+    /// files came back; any per-file failure marks the whole stem failed.
     pub(crate) fn restore_with_id(&self, id: u64) -> Result<RestoreReport, CommandError> {
         let Some(entry) = self.take_entry(id) else {
             return Err(CommandError::validation("撤销机会已过期或不存在"));
         };
-        let mut restored = 0u32;
-        let mut failed = 0u32;
+        let mut all_stems: std::collections::HashSet<&std::ffi::OsStr> =
+            std::collections::HashSet::new();
+        let mut failed_stems: std::collections::HashSet<&std::ffi::OsStr> =
+            std::collections::HashSet::new();
         for (orig, pending_path) in &entry.pairs {
+            let stem = orig.file_stem().unwrap_or_default();
+            all_stems.insert(stem);
             match std::fs::rename(pending_path, orig) {
-                Ok(()) => restored += 1,
+                Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     // Source already gone (e.g. user yanked it manually).
                     // Iteration 2 reversal (deviation #14): leave it gone —
                     // we do NOT finalize the rest of the batch. The failed
                     // pair stays missing; the next startup sweep sees no
                     // orphan, and successful pairs stay restored.
-                    failed += 1;
+                    failed_stems.insert(stem);
                 }
                 Err(_e) => {
-                    failed += 1;
+                    failed_stems.insert(stem);
                 }
             }
         }
+        let failed = failed_stems.len() as u32;
+        let restored = all_stems.len() as u32 - failed;
         info!(
             target: "data",
             id, restored, failed, "undo restore"
