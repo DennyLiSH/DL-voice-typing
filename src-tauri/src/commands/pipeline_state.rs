@@ -11,7 +11,7 @@ use crate::llm::TextCorrector;
 use crate::perf::PerfHistory;
 use crate::realtime::RealtimeTranscriber;
 use crate::speech::SpeechEngine;
-use crate::state::{StateMachine, StateTag};
+use crate::state::{StateMachine, StateTag, TransitionError};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tracing::{debug, info, warn};
@@ -411,6 +411,26 @@ impl PipelineState {
     // verb bodies never panic on lock failure — they match and return false).
     // ========================================================================
 
+    /// Shared template for the sm_* transition verbs: lock, run the
+    /// transition, warn on rejection. Lock-poisoned and transition-rejected
+    /// both collapse to `false` with a warn trail.
+    fn sm_call(
+        &self,
+        name: &'static str,
+        transition: impl FnOnce(&mut StateMachine) -> Result<(), TransitionError>,
+    ) -> bool {
+        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
+            return false;
+        };
+        match transition(&mut s) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("{name} failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Current state-machine tag, or None if the lock is poisoned.
     /// Query surface for production state guards (DeliveryController
     /// confirm/cancel, record-only release/recover/monitor) and the
@@ -428,135 +448,54 @@ impl PipelineState {
     }
 
     pub(crate) fn sm_start_recording(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.start_recording() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_start_recording failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_start_recording", StateMachine::start_recording)
     }
 
     pub(crate) fn sm_stop_recording(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.stop_recording() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_stop_recording failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_stop_recording", StateMachine::stop_recording)
     }
 
     pub(crate) fn sm_start_llm_refining(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.start_llm_refining() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_start_llm_refining failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_start_llm_refining", StateMachine::start_llm_refining)
     }
 
     pub(crate) fn sm_transcribing_to_injecting(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.transcribing_to_injecting() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_transcribing_to_injecting failed: {e}");
-                false
-            }
-        }
+        self.sm_call(
+            "sm_transcribing_to_injecting",
+            StateMachine::transcribing_to_injecting,
+        )
     }
 
     pub(crate) fn sm_llm_to_injecting(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.llm_to_injecting() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_llm_to_injecting failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_llm_to_injecting", StateMachine::llm_to_injecting)
     }
 
     pub(crate) fn sm_transcribing_to_reviewing(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.transcribing_to_reviewing() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_transcribing_to_reviewing failed: {e}");
-                false
-            }
-        }
+        self.sm_call(
+            "sm_transcribing_to_reviewing",
+            StateMachine::transcribing_to_reviewing,
+        )
     }
 
     pub(crate) fn sm_llm_to_reviewing(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.llm_to_reviewing() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_llm_to_reviewing failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_llm_to_reviewing", StateMachine::llm_to_reviewing)
     }
 
     /// Review → Injecting transition. Called by DeliveryController::confirm_from_reviewing.
     pub(crate) fn sm_reviewing_to_injecting(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.reviewing_to_injecting() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_reviewing_to_injecting failed: {e}");
-                false
-            }
-        }
+        self.sm_call(
+            "sm_reviewing_to_injecting",
+            StateMachine::reviewing_to_injecting,
+        )
     }
 
     /// Review → Idle (cancel) transition. Called by DeliveryController::cancel_review.
     pub(crate) fn sm_cancel_reviewing(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.cancel_reviewing() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_cancel_reviewing failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_cancel_reviewing", StateMachine::cancel_reviewing)
     }
 
     pub(crate) fn sm_finish_injecting(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.finish_injecting() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_finish_injecting failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_finish_injecting", StateMachine::finish_injecting)
     }
 
     /// Esc-cancel entrypoint verb: atomically check-and-transition from
@@ -577,29 +516,11 @@ impl PipelineState {
     }
 
     pub(crate) fn sm_start_record_only(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.start_record_only() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_start_record_only failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_start_record_only", StateMachine::start_record_only)
     }
 
     pub(crate) fn sm_finish_record_only(&self) -> bool {
-        let Some(mut s) = crate::util::lock_mutex(&self.sm, "state_machine") else {
-            return false;
-        };
-        match s.finish_record_only() {
-            Ok(()) => true,
-            Err(e) => {
-                warn!("sm_finish_record_only failed: {e}");
-                false
-            }
-        }
+        self.sm_call("sm_finish_record_only", StateMachine::finish_record_only)
     }
 
     /// Reset to Idle unconditionally (infallible — `reset()` itself cannot fail).
