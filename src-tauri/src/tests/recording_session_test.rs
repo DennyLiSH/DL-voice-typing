@@ -910,6 +910,8 @@ async fn cancel_during_fast_path_skips_injection() {
 /// What the hook thread does on Esc (cancel_active_pipeline), minus the
 /// `pipeline-cancelled` emit — MockEmitter fires test hooks while holding
 /// its `on_event` lock, so re-entering `emit` from inside would deadlock.
+/// The emit is the ONLY divergence: guard, token flip, and hide_overlays
+/// mirror the production method exactly.
 fn esc_cancel(ps: &crate::commands::pipeline_state::PipelineState) {
     assert!(
         ps.sm_cancel_transcribing_or_llm(),
@@ -918,7 +920,7 @@ fn esc_cancel(ps: &crate::commands::pipeline_state::PipelineState) {
     if let Some(token) = ps.take_cancel_token() {
         token.store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    ps.window_controller().hide_floating();
+    ps.hide_overlays();
 }
 
 /// `esc_cancel` plus the user immediately re-pressing the hotkey
