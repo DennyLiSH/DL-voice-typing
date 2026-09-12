@@ -170,7 +170,7 @@ impl RecordingSession {
     /// Runs on the Win32 hook thread — must be synchronous and non-blocking.
     pub(crate) fn on_press(&self) {
         let t_press = Instant::now();
-        let cycle_id = self.ps.perf_history().next_cycle_id();
+        let cycle_id = self.ps.next_perf_cycle_id();
 
         let can_record = self.ps.sm_start_recording();
 
@@ -208,14 +208,7 @@ impl RecordingSession {
         if can_record {
             // === Session state cleanup: prevent leaks from previous session ===
             self.ps.review().set_shown_on_press(false);
-            if let Some(mut rt_guard) =
-                crate::util::lock_mutex(&self.ps.realtime_transcriber(), "realtime_transcriber")
-            {
-                if let Some(ref mut rt) = *rt_guard {
-                    rt.stop();
-                    rt_guard.take();
-                }
-            }
+            self.ps.stop_realtime_leftover();
 
             let policy = SessionPolicy::from_config(&self.ps.config_cache().read_cached());
             let mode = policy.mode;
@@ -292,12 +285,7 @@ impl RecordingSession {
                                 language: policy.language,
                             },
                         );
-                        if let Some(mut rt_guard) = crate::util::lock_mutex(
-                            &self.ps.realtime_transcriber(),
-                            "realtime_transcriber",
-                        ) {
-                            *rt_guard = Some(rt);
-                        }
+                        self.ps.set_realtime_transcriber(rt);
                     }
                 }
             }
@@ -327,7 +315,7 @@ impl RecordingSession {
 
         let mut perf = crate::util::lock_mutex(&self.perf_slot, "perf")
             .and_then(|mut s| s.take())
-            .unwrap_or_else(|| PerfMetrics::new(self.ps.perf_history().next_cycle_id()));
+            .unwrap_or_else(|| PerfMetrics::new(self.ps.next_perf_cycle_id()));
         perf.audio_duration_ms = Some(t_release.elapsed().as_millis() as u64);
 
         let sample_rate = crate::util::lock_mutex(&self.ps.audio_capture(), "audio_capture")
@@ -482,9 +470,7 @@ impl RecordingSession {
     /// the post-inject case and cleans up leaked text in the pre-inject case.
     pub(crate) fn recover(&self) {
         self.ps.reset_to_idle();
-        if self.ps.clipboard().was_saved() {
-            let _ = self.ps.clipboard().restore();
-        }
+        self.ps.restore_clipboard_if_saved();
         // Defense-in-depth: the CancelGuard drains during unwind before
         // recover runs, making this a no-op today. Kept as a second lock
         // of the invariant against future refactors moving/delaying guard

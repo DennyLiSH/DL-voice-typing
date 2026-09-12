@@ -284,10 +284,6 @@ impl PipelineState {
         self.engine.clone()
     }
 
-    pub(crate) fn clipboard(&self) -> Arc<dyn ClipboardProvider> {
-        self.clipboard.clone()
-    }
-
     /// Run `f` against the cached-LLM slot under its lock. Lock poisoning
     /// surfaces as None — callers translate that to their existing
     /// "lock poisoned" errors. This is the ONLY way across this seam now:
@@ -300,14 +296,6 @@ impl PipelineState {
         f: impl FnOnce(&mut Option<Box<dyn TextCorrector>>) -> R,
     ) -> Option<R> {
         crate::util::lock_mutex(&self.cached_llm, "cached_llm").map(|mut guard| f(&mut guard))
-    }
-
-    pub(crate) fn perf_history(&self) -> Arc<crate::perf::PerfHistory> {
-        self.perf_history.clone()
-    }
-
-    pub(crate) fn realtime_transcriber(&self) -> Arc<Mutex<Option<RealtimeTranscriber>>> {
-        self.realtime_transcriber.clone()
     }
 
     pub(crate) fn audio_capture(&self) -> Arc<Mutex<dyn AudioCaptureProvider>> {
@@ -459,6 +447,47 @@ impl PipelineState {
             .emit("pipeline-cancelled", serde_json::Value::Null);
         info!(target: "cancel", "pipeline cancelled via Esc");
         true
+    }
+
+    /// Restore the clipboard only if it was saved earlier this cycle.
+    /// Returns whether a restore actually ran. Recover-path use only —
+    /// normal delivery self-restores inside the `save_and_inject` unit.
+    pub(crate) fn restore_clipboard_if_saved(&self) -> bool {
+        if self.clipboard.was_saved() {
+            self.clipboard.restore().is_ok()
+        } else {
+            false
+        }
+    }
+
+    /// Next perf cycle id (monotonic). Replaces the perf_history()
+    /// accessor — callers only ever used this one operation.
+    pub(crate) fn next_perf_cycle_id(&self) -> u64 {
+        self.perf_history.next_cycle_id()
+    }
+
+    /// Install the realtime transcriber (set semantics, mirrors the
+    /// record_only / cancel_token slot verbs).
+    pub(crate) fn set_realtime_transcriber(&self, rt: crate::realtime::RealtimeTranscriber) {
+        if let Some(mut guard) =
+            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+        {
+            *guard = Some(rt);
+        }
+    }
+
+    /// Session-start guard: stop and drop any leftover realtime
+    /// transcriber from an abnormally-ended previous session (e.g. hook
+    /// release event not delivered by Windows).
+    pub(crate) fn stop_realtime_leftover(&self) {
+        if let Some(mut rt_guard) =
+            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+        {
+            if let Some(ref mut rt) = *rt_guard {
+                rt.stop();
+                rt_guard.take();
+            }
+        }
     }
 
     // ========================================================================
@@ -1009,11 +1038,14 @@ mod sm_verb_tests {
         // 47 was a measurement oversight; the actual measured count is 49,
         // which equals 47 real pub fns + 2 self-references. After Task 2's
         // +2 verbs: 49 real + 2 self-references = 51; after Task 3's +1:
-        // 50 real + 2 self-references = 52.
+        // 50 real + 2 self-references = 52. Task 5 of the same follow-up
+        // nets +1 (51 real): +4 absorbed verbs (restore_clipboard_if_saved,
+        // next_perf_cycle_id, set_realtime_transcriber, stop_realtime_leftover)
+        // -3 deleted accessors (clipboard / perf_history / realtime_transcriber).
         let src = include_str!("pipeline_state.rs");
         let count = src.matches("    pub(crate) fn ").count() + src.matches("    pub fn ").count();
         assert_eq!(
-            count, 52,
+            count, 53,
             "PipelineState pub-fn surface changed; update the ratchet deliberately \
              (real count = measured - 2, to subtract the test body's two self-references)"
         );
@@ -1079,5 +1111,48 @@ mod sm_verb_tests {
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
         assert_eq!(*calls.lock().unwrap(), vec!["hide_floating", "hide_review"]);
         assert!(!review.was_shown_on_press());
+    }
+
+    #[test]
+    fn next_perf_cycle_id_monotonic() {
+        let ps = build_test_ps();
+        let a = ps.next_perf_cycle_id();
+        let b = ps.next_perf_cycle_id();
+        assert!(b > a, "cycle ids must be monotonically increasing");
+    }
+
+    #[test]
+    fn realtime_transcriber_slot_set_and_leftover_stop() {
+        let ps = build_test_ps();
+        // Smoke-only: the slot is private and RealtimeTranscriber exposes no
+        // handle back out, so no-panic + idempotence across the set → stop →
+        // stop sequence IS the entire observable surface of these two verbs
+        // here. Deep behaviour (thread actually stops, accumulated text
+        // taken) is covered by stop_recording_resources integration tests.
+        ps.stop_realtime_leftover();
+        ps.set_realtime_transcriber(crate::realtime::RealtimeTranscriber::start(
+            Arc::new(crate::realtime::AudioRingBufferSource::new(
+                ps.ring_buffer(),
+            )),
+            Arc::new(MockEngine::new("test")),
+            Arc::new(MockEmitter::new()),
+            16_000,
+            crate::realtime::RealtimePolicy {
+                language: crate::config::Language::Zh,
+            },
+        ));
+        ps.stop_realtime_leftover();
+        ps.stop_realtime_leftover(); // idempotent
+    }
+
+    #[test]
+    fn restore_clipboard_if_saved_gates_on_was_saved() {
+        let ps = build_test_ps();
+        // MockClipboard starts unsaved → no restore ran.
+        // 正分支（was_saved=true → restore 执行）由既有 recover 集成测试
+        // `recover_with_saved_restores_clipboard`（recording_session_test.rs）
+        // 间接覆盖——MockClipboard 的 saved 态由注入文本周期驱动，本单元
+        // 测试只锁 gate 语义（unsaved 不触发）。
+        assert!(!ps.restore_clipboard_if_saved());
     }
 }
