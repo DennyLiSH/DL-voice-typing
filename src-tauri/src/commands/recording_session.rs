@@ -266,7 +266,7 @@ impl RecordingSession {
 
                 if let Err(e) = start_result {
                     warn!("audio capture start failed: {e}");
-                    reset_to_idle(&self.ps);
+                    self.ps.reset_to_idle();
                     self.ps.emitter().emit(
                         "speech-error",
                         serde_json::to_value(format!("录音启动失败: {e}")).unwrap_or_default(),
@@ -408,12 +408,7 @@ impl RecordingSession {
                             "hotkey release: preprocess_audio returned None (silent?), samples={}",
                             audio_data.len()
                         );
-                        self.ps.sm_reset();
-                        self.ps.window_controller().hide_floating();
-                        if self.ps.review().was_shown_on_press() {
-                            self.ps.window_controller().hide_review();
-                            self.ps.review().set_shown_on_press(false);
-                        }
+                        self.ps.reset_to_idle();
                         return ReleaseAction::Done;
                     }
                 };
@@ -563,7 +558,7 @@ impl RecordingSession {
 
         if transcription.is_empty() {
             info!("run_pipeline: empty transcription, resetting to idle");
-            reset_to_idle(&self.ps);
+            self.ps.reset_to_idle();
             return;
         }
 
@@ -729,7 +724,7 @@ async fn transcribe_and_save(
                 "speech-error",
                 serde_json::to_value(e.to_string()).unwrap_or_default(),
             );
-            reset_to_idle(ps);
+            ps.reset_to_idle();
             return (save_result, String::new());
         }
         Err(e) => {
@@ -737,7 +732,7 @@ async fn transcribe_and_save(
                 "speech-error",
                 serde_json::to_value(e.to_string()).unwrap_or_default(),
             );
-            reset_to_idle(ps);
+            ps.reset_to_idle();
             return (save_result, String::new());
         }
     };
@@ -965,23 +960,6 @@ async fn refine_and_deliver(
                 )
                 .await;
         }
-    }
-}
-
-/// Reset state machine to Idle and hide floating window. The cancel-token
-/// slot is drained by the `CancelGuard` in the delivery future body; the
-/// callers inside those futures (the empty-branch and transcribe-error
-/// paths) sit in the guard's scope. The on_press not-ready path runs
-/// OUTSIDE any guard — safe by construction: the slot is empty there
-/// (no delivery was armed, since the cancel token is only set after
-/// `sm_stop_recording`, not at press-time), and a stale token would be
-/// overwritten by the next session's set_cancel_token anyway.
-fn reset_to_idle(ps: &PipelineState) {
-    ps.sm_reset();
-    ps.window_controller().hide_floating();
-    if ps.review().was_shown_on_press() {
-        ps.window_controller().hide_review();
-        ps.review().set_shown_on_press(false);
     }
 }
 

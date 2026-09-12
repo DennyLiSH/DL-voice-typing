@@ -399,6 +399,36 @@ impl PipelineState {
     }
 
     // ========================================================================
+    // Composite verbs (session teardown)
+    //
+    // The ordering knowledge — "reset must hide overlays, review cleanup is
+    // conditional on shown_on_press" — lives HERE, with the state owner,
+    // instead of in every caller's orchestration (architecture review
+    // 2026-09-06 candidate 1).
+    // ========================================================================
+
+    /// Hide the floating window and, if the review window was shown on
+    /// press, hide it and clear the flag. The review half is conditional:
+    /// `shown_on_press` is only set for RealtimeReview sessions.
+    pub(crate) fn hide_overlays(&self) {
+        self.window_controller.hide_floating();
+        if self.review.was_shown_on_press() {
+            self.window_controller.hide_review();
+            self.review.set_shown_on_press(false);
+        }
+    }
+
+    /// Reset the state machine to Idle and hide all overlays. The
+    /// cancel-token slot is NOT drained here — the `CancelGuard` in the
+    /// delivery future owns that (see its doc comment); callers outside
+    /// any guard are safe by construction (the slot is empty before
+    /// `sm_stop_recording` succeeds).
+    pub(crate) fn reset_to_idle(&self) {
+        self.sm_reset();
+        self.hide_overlays();
+    }
+
+    // ========================================================================
     // State-machine verb layer
     //
     // Each verb encapsulates lock_mutex of sm + the StateMachine method + warn
@@ -644,6 +674,39 @@ mod sm_verb_tests {
             emitter,
             Arc::new(MockReviewProvider::new()),
         )
+    }
+
+    /// Test-only WindowController recording method calls by name.
+    struct LogWindowController {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl crate::commands::window_controller::WindowController for LogWindowController {
+        fn show_floating_near_caret(&self) -> bool {
+            false
+        }
+        fn hide_floating(&self) {
+            self.calls.lock().unwrap().push("hide_floating");
+        }
+        fn show_review_near_caret(&self) -> bool {
+            false
+        }
+        fn hide_review(&self) {
+            self.calls.lock().unwrap().push("hide_review");
+        }
+        fn focus_review(&self) -> bool {
+            false
+        }
+        fn eval_review_js(&self, _js: &str) -> bool {
+            false
+        }
+        fn emit_review_show(&self) {}
+        fn emit_review_final_text(&self, _text: &str) {}
+        fn restore_foreground_hwnd(&self, _hwnd: isize) {}
+        fn show_floating_corner(&self) -> bool {
+            false
+        }
+        fn set_tray_tooltip(&self, _tooltip: &str) {}
     }
 
     #[test]
@@ -897,22 +960,88 @@ mod sm_verb_tests {
     fn public_surface_ratchet() {
         // Interface ratchet: counts the PipelineState surface — both the
         // pre-Task-4 46 pub fns and Task 4's `CancelGuard::new` (`+1`).
-        // Task 6 nets 0 (`+with_cached_llm`, `-cached_llm`). Growth requires
-        // editing this number DELIBERATELY (and justifying it) — silent
-        // accretion is the regression this guards (architecture review
-        // 2026-09-11 candidate 4).
+        // Task 6 nets 0 (`+with_cached_llm`, `-cached_llm`). Task 2 of the
+        // composite-verb follow-up adds 2 (`hide_overlays`, `reset_to_idle`)
+        // — deliberate growth, absorbed from recording_session.rs's
+        // orchestration (architecture review 2026-09-06 candidate 1).
+        // Growth requires editing this number DELIBERATELY (and justifying
+        // it) — silent accretion is the regression this guards
+        // (architecture review 2026-09-11 candidate 4).
         //
         // Calibration: the ratchet's two `src.matches(...)` literal strings
         // ALSO appear in the test body itself (one for each pattern), so the
         // measured count is real count + 2. The plan's instruction to set
         // 47 was a measurement oversight; the actual measured count is 49,
-        // which equals 47 real pub fns + 2 self-references.
+        // which equals 47 real pub fns + 2 self-references. After Task 2's
+        // +2 verbs: 49 real pub fns + 2 self-references = 51.
         let src = include_str!("pipeline_state.rs");
         let count = src.matches("    pub(crate) fn ").count() + src.matches("    pub fn ").count();
         assert_eq!(
-            count, 49,
+            count, 51,
             "PipelineState pub-fn surface changed; update the ratchet deliberately \
              (real count = measured - 2, to subtract the test body's two self-references)"
         );
+    }
+
+    #[test]
+    fn hide_overlays_hides_floating_and_conditional_review() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let review = Arc::new(MockReviewProvider::new());
+        let ps = PipelineState::new(
+            Arc::new(Mutex::new(StateMachine::new())),
+            Arc::new(Mutex::new(MockAudioCapture::new())),
+            Arc::new(MockEngine::new("test")),
+            Arc::new(MockClipboard::new()),
+            Arc::new(PerfHistory::new()),
+            ConfigCache::new(AppConfig::default()),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(LogWindowController {
+                calls: calls.clone(),
+            }),
+            Arc::new(MockEmitter::new()),
+            review.clone(),
+        );
+
+        // Case 1: review was NOT shown on press — floating only, flag untouched.
+        ps.hide_overlays();
+        assert_eq!(*calls.lock().unwrap(), vec!["hide_floating"]);
+
+        // Case 2: review shown on press — both hidden, flag cleared.
+        review.set_shown_on_press(true);
+        ps.hide_overlays();
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["hide_floating", "hide_floating", "hide_review"]
+        );
+        assert!(!review.was_shown_on_press());
+    }
+
+    #[test]
+    fn reset_to_idle_resets_state_and_hides_overlays() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let review = Arc::new(MockReviewProvider::new());
+        let ps = PipelineState::new(
+            Arc::new(Mutex::new(StateMachine::new())),
+            Arc::new(Mutex::new(MockAudioCapture::new())),
+            Arc::new(MockEngine::new("test")),
+            Arc::new(MockClipboard::new()),
+            Arc::new(PerfHistory::new()),
+            ConfigCache::new(AppConfig::default()),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(LogWindowController {
+                calls: calls.clone(),
+            }),
+            Arc::new(MockEmitter::new()),
+            review.clone(),
+        );
+
+        ps.sm_start_recording();
+        review.set_shown_on_press(true);
+        ps.reset_to_idle();
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert_eq!(*calls.lock().unwrap(), vec!["hide_floating", "hide_review"]);
+        assert!(!review.was_shown_on_press());
     }
 }
