@@ -2,6 +2,12 @@
 /* Fixed dark translucent frameless — does not participate in theme system */
 
 :root {
+  /* Fixed-dark window: pin native rendering dark regardless of system theme
+     (overrides common.css media-query values — same specificity, later load) */
+  color-scheme: dark;
+  --scrollbar-thumb: rgba(232, 230, 227, 0.28);
+  --scrollbar-thumb-hover: rgba(232, 230, 227, 0.48);
+
   --review-bg: rgba(26, 27, 30, 0.78);
   --review-surface: rgba(255, 255, 255, 0.06);
   --review-surface-hover: rgba(255, 255, 255, 0.08);

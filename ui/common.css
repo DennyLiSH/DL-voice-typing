@@ -10,6 +10,9 @@
   --accent-hover: #2DA8A3;
   --accent-light: rgba(58, 186, 180, 0.12);
 
+  /* Native form controls (checkbox/radio checked state) pick up the accent */
+  accent-color: var(--accent);
+
   /* Accessible text colors (WCAG AA computed, see plan table).
      Text on colored surfaces must use the -text family; raw --success/
      --warning/--error are for backgrounds/borders/decoration only. */
@@ -68,6 +71,9 @@
    -------------------------------------------------------------------------- */
 @media (prefers-color-scheme: dark) {
   :root {
+    /* Renders <select> popups (outside page DOM) and native controls dark */
+    color-scheme: dark;
+
     --bg: #1A1B1E;
     --surface: #222326;
     --surface-hover: #2A2B2E;
@@ -88,6 +94,9 @@
     --warning-text: #F59E0B;
     --error-text: #F87171;
     --accent-text: #3ABAB4;
+
+    --scrollbar-thumb: rgba(232, 230, 227, 0.25);
+    --scrollbar-thumb-hover: rgba(232, 230, 227, 0.45);
   }
 }
 
@@ -96,6 +105,8 @@
    -------------------------------------------------------------------------- */
 @media (prefers-color-scheme: light) {
   :root {
+    color-scheme: light;
+
     --bg: #FAFAF8;
     --surface: #FFFFFF;
     --surface-hover: #F5F4F2;
@@ -116,6 +127,9 @@
     --warning-text: #92400E;
     --error-text: #B91C1C;
     --accent-text: #11605C;
+
+    --scrollbar-thumb: rgba(26, 27, 30, 0.28);
+    --scrollbar-thumb-hover: rgba(26, 27, 30, 0.5);
   }
 }
 
@@ -142,6 +156,39 @@ body {
 :focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
+}
+
+/* --------------------------------------------------------------------------
+   Scrollbars — all in-page scroll surfaces (settings content, data list,
+   transcribe rec/segment lists, review textarea). Deliberately warm-neutral,
+   not jade: scrollbars are furniture, the accent stays reserved for
+   interactive focus. <select> popup scrollbars render outside the page DOM
+   and cannot be styled here — they follow color-scheme above.
+   -------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+  /* Transparent side borders float the pill off the edge (6px visual core,
+     10px hit target) */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* --------------------------------------------------------------------------
@@ -172,6 +219,12 @@ button:active:not(:disabled) {
 @media (forced-colors: active) {
   button, textarea, select, input {
     border: 1px solid ButtonText;
+  }
+
+  /* Translucent themed thumb loses contrast under high-contrast palettes */
+  ::-webkit-scrollbar-thumb,
+  ::-webkit-scrollbar-thumb:hover {
+    background: CanvasText;
   }
 }
 
