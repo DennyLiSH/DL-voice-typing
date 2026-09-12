@@ -886,20 +886,22 @@ async fn cancel_before_delivery_skips_both_review_and_inject() {
 
 #[tokio::test]
 async fn cancel_during_fast_path_skips_injection() {
-    // Gate 2' (fast path): RealtimeDirect + LLM. The hook-thread cancel
+    // Gate 3' (fast path): RealtimeDirect + LLM. The hook-thread cancel
     // runs on the `llm-refining` emit (resolve_llm_text starts AFTER the
-    // fast path's earlier steps) so the fast-path cancel gates — checked
-    // after LLM, before delivery — are what trip. A preset-true token
-    // would exit at gate 2' indistinguishably, hiding coverage gaps.
+    // fast path's earlier steps) so the post-save cancel gate inside
+    // `refine_and_deliver` (`src/commands/recording_session.rs:874-877`)
+    // is what trips — the ONLY cancel gate on the fast path.
     //
-    // COVERAGE SEMANTICS: gates 2' and 3' are adjacent, externally
-    // indistinguishable defences (same no-inject effect; the only code
-    // between them is the save await, which emits no event). This test
-    // therefore locks the JOINT coverage "gate2' OR gate3' exists":
-    // disabling either one alone stays green (the other catches it —
-    // verified manually), disabling BOTH goes red (the cancel reaches
-    // inject_direct). Splitting them requires a test hook inside the save
-    // spawn_blocking closure; tracked in _Project/TODO.md.
+    // (commit 35a59e8 merged the previously-adjacent gates 2' and 3'
+    // into this single post-save gate; deleting it turns this test
+    // red, so the coverage is naturally distinguishable from the
+    // no-cancel case. There is no "joint coverage" / "save-closure
+    // hook" complication any more.)
+    //
+    // The token flip on `llm-refining` proves the gate sits AFTER the
+    // LLM phase, not before — a preset-true token that short-circuits
+    // pre-LLM would also turn the test red, but for a different reason
+    // (no event would be emitted at all).
     let rig = build_rig(config(true, false, true), "ignored");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
@@ -937,7 +939,7 @@ async fn cancel_during_fast_path_skips_injection() {
     let names = event_names(&rig.emitter);
     assert!(
         names.contains(&"llm-refining".to_string()),
-        "gate2' test must reach the LLM phase; events: {names:?}"
+        "gate 3' test must reach the LLM phase; events: {names:?}"
     );
     assert!(!names.contains(&"injection-complete".to_string()));
     assert!(rig.session.ps_ref().take_cancel_token().is_none());
@@ -1047,9 +1049,10 @@ async fn cancel_gate_leaves_restarted_session_intact_classic() {
 
 #[tokio::test]
 async fn cancel_gate_leaves_restarted_session_intact_fast_path() {
-    // Gates 2'/3' (fast path): token trips during the LLM phase of
+    // Gate 3' (fast path): token trips during the LLM phase of
     // run_realtime_fast_path, gate fires with a new Recording session
-    // already running.
+    // already running. (The pre-merge sibling gate 2' was merged into
+    // 3' by commit 35a59e8; only one post-save gate now exists.)
     let calls: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
     let wc = Arc::new(CallLogWindowController {
         calls: calls.clone(),
