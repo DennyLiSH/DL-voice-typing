@@ -498,9 +498,8 @@ impl RecordingSession {
         );
     }
 
-    // Note: Esc-cancel entry is the free function `cancel_active_pipeline`
-    // (defined below) — it must take &PipelineState, not &self, so the hook
-    // slot can hold an Arc<PipelineState> without holding the session.
+    // Esc-cancel entry is the PipelineState::cancel_active_pipeline method —
+    // the hook slot holds an Arc<PipelineState> directly.
 
     /// Full transcription → LLM → injection pipeline (classic modes + realtime
     /// fallthrough). `review` decides review-vs-direct (derived once from mode
@@ -626,36 +625,6 @@ impl RecordingSession {
         )
         .await;
     }
-}
-
-/// Esc-cancel entry, called from the hook's cancel slot. Returns whether a
-/// cancellation happened (`true` → hook swallows the Esc; `false` → Esc
-/// passes through to the focused app).
-///
-/// Atomicity: the state-machine check-and-transition is done under a single
-/// lock acquisition (`sm_cancel_transcribing_or_llm`), eliminating the
-/// read-then-transition TOCTOU window where the pipeline could advance to
-/// `Injecting` between the guard check and the reset.
-pub(crate) fn cancel_active_pipeline(ps: &PipelineState) -> bool {
-    if !ps.sm_cancel_transcribing_or_llm() {
-        // Not in a cancellable phase (Idle / Recording / Injecting /
-        // Reviewing / RecordOnly). Pass the Esc through so the focused app
-        // receives it — including the case where the pipeline raced ahead
-        // and finished delivery between the user's intent and our check.
-        return false;
-    }
-    // Flip the token so the in-flight Whisper call aborts. If the slot is
-    // empty (no active pipeline body yet — possible if Esc lands during the
-    // microsecond gap between sm_stop_recording and the future spawn),
-    // there's nothing to abort — the state-reset above already cancelled.
-    if let Some(token) = ps.take_cancel_token() {
-        token.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-    ps.window_controller().hide_floating();
-    ps.emitter()
-        .emit("pipeline-cancelled", serde_json::Value::Null);
-    info!(target: "cancel", "pipeline cancelled via Esc");
-    true
 }
 
 /// Parallel save audio to disk + transcribe via speech engine.

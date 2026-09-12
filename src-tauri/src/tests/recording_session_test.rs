@@ -111,7 +111,9 @@ impl crate::commands::window_controller::WindowController for CallLogWindowContr
     fn show_review_near_caret(&self) -> bool {
         true
     }
-    fn hide_review(&self) {}
+    fn hide_review(&self) {
+        self.calls.lock().unwrap().push("hide_review");
+    }
     fn focus_review(&self) -> bool {
         true
     }
@@ -529,8 +531,6 @@ fn test_on_press_not_ready_missing_model_shows_actionable_error() {
 
 #[test]
 fn cancel_active_pipeline_only_succeeds_in_transcribing_or_llm_refining() {
-    use crate::commands::recording_session::cancel_active_pipeline;
-
     // Cases that MUST be cancellable.
     for start_state in [StateTag::Transcribing, StateTag::LLMRefining] {
         let rig = build_rig(config(false, false, false), "x");
@@ -539,7 +539,7 @@ fn cancel_active_pipeline_only_succeeds_in_transcribing_or_llm_refining() {
         let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
         rig.session.ps_ref().set_cancel_token(token.clone());
 
-        let handled = cancel_active_pipeline(rig.session.ps_ref());
+        let handled = rig.session.ps_ref().cancel_active_pipeline();
         assert!(handled, "{start_state:?} must be cancellable");
         // Token flipped.
         assert!(token.load(std::sync::atomic::Ordering::Relaxed));
@@ -569,7 +569,7 @@ fn cancel_active_pipeline_only_succeeds_in_transcribing_or_llm_refining() {
         let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
         rig.session.ps_ref().set_cancel_token(token.clone());
 
-        let handled = cancel_active_pipeline(rig.session.ps_ref());
+        let handled = rig.session.ps_ref().cancel_active_pipeline();
         assert!(!handled, "{start_state:?} must NOT be cancellable");
         assert_eq!(rig.sm.lock().unwrap().state(), start_state);
         assert!(!token.load(std::sync::atomic::Ordering::Relaxed));
@@ -585,14 +585,13 @@ fn cancel_active_pipeline_only_succeeds_in_transcribing_or_llm_refining() {
 
 #[test]
 fn cancel_active_pipeline_without_token_still_returns_true_and_resets_state() {
-    use crate::commands::recording_session::cancel_active_pipeline;
     let rig = build_rig(config(false, false, false), "x");
     rig.sm
         .lock()
         .unwrap()
         .force_state_tag(StateTag::Transcribing);
 
-    let handled = cancel_active_pipeline(rig.session.ps_ref());
+    let handled = rig.session.ps_ref().cancel_active_pipeline();
     assert!(handled);
     assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
     let events = rig.emitter.take_events();
@@ -601,7 +600,6 @@ fn cancel_active_pipeline_without_token_still_returns_true_and_resets_state() {
 
 #[test]
 fn cancel_active_pipeline_hides_floating_window() {
-    use crate::commands::recording_session::cancel_active_pipeline;
     let calls = Arc::new(Mutex::new(Vec::new()));
     let wc = Arc::new(CallLogWindowController {
         calls: calls.clone(),
@@ -618,13 +616,52 @@ fn cancel_active_pipeline_hides_floating_window() {
         .unwrap()
         .force_state_tag(StateTag::Transcribing);
 
-    let handled = cancel_active_pipeline(rig.session.ps_ref());
+    let handled = rig.session.ps_ref().cancel_active_pipeline();
     assert!(handled);
     let logged = calls.lock().unwrap().clone();
     assert!(
         logged.contains(&"hide_floating"),
         "cancel must hide floating window: {logged:?}"
     );
+}
+
+#[test]
+fn cancel_active_pipeline_hides_review_window_when_shown_on_press() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let wc = Arc::new(CallLogWindowController {
+        calls: calls.clone(),
+    });
+    let rig = build_rig_full(
+        config(false, false, false),
+        "x",
+        MockCorrector::new("x"),
+        wc,
+        true,
+    );
+    rig.sm
+        .lock()
+        .unwrap()
+        .force_state_tag(StateTag::Transcribing);
+    // Simulate a RealtimeReview session that showed the review window on press.
+    rig.session.ps_ref().review().set_shown_on_press(true);
+
+    let handled = rig.session.ps_ref().cancel_active_pipeline();
+
+    assert!(handled);
+    let logged = calls.lock().unwrap().clone();
+    assert!(
+        logged.contains(&"hide_review"),
+        "Esc-cancel must clean up a review window shown on press: {logged:?}"
+    );
+    assert!(
+        logged.contains(&"hide_floating"),
+        "Esc-cancel must hide the floating window: {logged:?}"
+    );
+    assert!(
+        !rig.session.ps_ref().review().was_shown_on_press(),
+        "Esc-cancel must clear the shown_on_press flag"
+    );
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
 }
 
 // ---------------------------------------------------------------------------
@@ -648,8 +685,6 @@ async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
     // invoked, resetting state to Idle, flipping + draining the token, and
     // hiding the floating window. Gate 1 then log-and-returns without
     // touching anything (ownership: the hook thread did the cleanup).
-    use crate::commands::recording_session::cancel_active_pipeline;
-
     let rig = build_rig(config(false, false, false), "raw transcription");
     to_transcribing(&rig.sm);
     let perf = PerfMetrics::new(0);
@@ -659,7 +694,7 @@ async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
     // Pre-arm the cancel slot so cancel_active_pipeline flips + drains this
     // exact token (the same Arc run_pipeline captures below).
     rig.session.ps_ref().set_cancel_token(cancel.clone());
-    assert!(cancel_active_pipeline(rig.session.ps_ref()));
+    assert!(rig.session.ps_ref().cancel_active_pipeline());
 
     rig.session
         .run_pipeline(
@@ -1029,8 +1064,6 @@ async fn cancel_before_whisper_returns_leaves_restarted_session_intact() {
     // Gate 1 returns an empty transcription, and the empty-transcription
     // branch must not "clean up" a state machine that no longer belongs to
     // this pipeline.
-    use crate::commands::recording_session::cancel_active_pipeline;
-
     let calls: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
     let wc = Arc::new(CallLogWindowController {
         calls: calls.clone(),
@@ -1045,7 +1078,7 @@ async fn cancel_before_whisper_returns_leaves_restarted_session_intact() {
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
     rig.session.ps_ref().set_cancel_token(cancel.clone());
 
-    assert!(cancel_active_pipeline(rig.session.ps_ref()));
+    assert!(rig.session.ps_ref().cancel_active_pipeline());
     // User immediately re-presses before the pipeline body runs.
     rig.sm.lock().unwrap().start_recording().unwrap();
 

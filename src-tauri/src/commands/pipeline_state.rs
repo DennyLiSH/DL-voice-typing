@@ -428,6 +428,39 @@ impl PipelineState {
         self.hide_overlays();
     }
 
+    /// Esc-cancel entrypoint: atomically check-and-transition from
+    /// Transcribing/LLMRefining to Idle, flip the in-flight cancel token,
+    /// hide the overlays, and emit `pipeline-cancelled`.
+    /// Returns `false` when not in a cancellable phase — the caller then
+    /// passes the Esc keypress through to the focused app.
+    ///
+    /// Atomicity: the state-machine check-and-transition is done under a
+    /// single lock acquisition (`sm_cancel_transcribing_or_llm`), eliminating
+    /// the read-then-transition TOCTOU window where the pipeline could
+    /// advance to `Injecting` between the guard check and the reset.
+    pub(crate) fn cancel_active_pipeline(&self) -> bool {
+        if !self.sm_cancel_transcribing_or_llm() {
+            // Not in a cancellable phase (Idle / Recording / Injecting /
+            // Reviewing / RecordOnly). Pass the Esc through so the focused app
+            // receives it — including the case where the pipeline raced ahead
+            // and finished delivery between the user's intent and our check.
+            return false;
+        }
+        // Flip the token so the in-flight Whisper call aborts. If the slot
+        // is empty (no active pipeline body yet — possible if Esc lands
+        // during the microsecond gap between sm_stop_recording and the
+        // future spawn), there's nothing to abort — the state-reset above
+        // already cancelled.
+        if let Some(token) = self.take_cancel_token() {
+            token.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.hide_overlays();
+        self.emitter
+            .emit("pipeline-cancelled", serde_json::Value::Null);
+        info!(target: "cancel", "pipeline cancelled via Esc");
+        true
+    }
+
     // ========================================================================
     // State-machine verb layer
     //
@@ -964,6 +997,8 @@ mod sm_verb_tests {
         // composite-verb follow-up adds 2 (`hide_overlays`, `reset_to_idle`)
         // — deliberate growth, absorbed from recording_session.rs's
         // orchestration (architecture review 2026-09-06 candidate 1).
+        // Task 3 of the same follow-up adds 1 (`cancel_active_pipeline`,
+        // moved off the recording_session free function).
         // Growth requires editing this number DELIBERATELY (and justifying
         // it) — silent accretion is the regression this guards
         // (architecture review 2026-09-11 candidate 4).
@@ -973,11 +1008,12 @@ mod sm_verb_tests {
         // measured count is real count + 2. The plan's instruction to set
         // 47 was a measurement oversight; the actual measured count is 49,
         // which equals 47 real pub fns + 2 self-references. After Task 2's
-        // +2 verbs: 49 real pub fns + 2 self-references = 51.
+        // +2 verbs: 49 real + 2 self-references = 51; after Task 3's +1:
+        // 50 real + 2 self-references = 52.
         let src = include_str!("pipeline_state.rs");
         let count = src.matches("    pub(crate) fn ").count() + src.matches("    pub fn ").count();
         assert_eq!(
-            count, 51,
+            count, 52,
             "PipelineState pub-fn surface changed; update the ratchet deliberately \
              (real count = measured - 2, to subtract the test body's two self-references)"
         );
