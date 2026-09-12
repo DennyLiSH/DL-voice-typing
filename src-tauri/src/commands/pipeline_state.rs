@@ -325,6 +325,12 @@ impl PipelineState {
             .unwrap_or_default()
     }
 
+    /// Next perf cycle id (monotonic). Replaces the perf_history()
+    /// accessor — callers only ever used this one operation.
+    pub(crate) fn next_perf_cycle_id(&self) -> u64 {
+        self.perf_history.next_cycle_id()
+    }
+
     /// Shared ring-buffer handle. **Only** for the two call sites that
     /// genuinely need the shared Arc (cpal callback lock+push, and the
     /// `AudioRingBufferSource` adapter construction) — same shared-handle
@@ -387,7 +393,42 @@ impl PipelineState {
     }
 
     // ========================================================================
-    // Composite verbs (session teardown)
+    // Realtime-transcriber slot
+    //
+    // Lifecycle: installed at session start (`set_realtime_transcriber`,
+    // on_press realtime branch), stopped and taken at release via
+    // `stop_recording_resources` / `stop_recording_resources_graceful`
+    // (which also take the accumulated text); `stop_realtime_leftover`
+    // at the next session start is the defensive sweep for a previous
+    // session that ended abnormally.
+    // ========================================================================
+
+    /// Install the realtime transcriber (set semantics, mirrors the
+    /// record_only / cancel_token slot verbs).
+    pub(crate) fn set_realtime_transcriber(&self, rt: crate::realtime::RealtimeTranscriber) {
+        if let Some(mut guard) =
+            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+        {
+            *guard = Some(rt);
+        }
+    }
+
+    /// Session-start guard: stop and drop any leftover realtime
+    /// transcriber from an abnormally-ended previous session (e.g. hook
+    /// release event not delivered by Windows).
+    pub(crate) fn stop_realtime_leftover(&self) {
+        if let Some(mut rt_guard) =
+            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+        {
+            if let Some(ref mut rt) = *rt_guard {
+                rt.stop();
+                rt_guard.take();
+            }
+        }
+    }
+
+    // ========================================================================
+    // Composite verbs (session teardown & Esc-cancel)
     //
     // The ordering knowledge — "reset must hide overlays, review cleanup is
     // conditional on shown_on_press" — lives HERE, with the state owner,
@@ -452,41 +493,15 @@ impl PipelineState {
     /// Restore the clipboard only if it was saved earlier this cycle.
     /// Returns whether a restore actually ran. Recover-path use only —
     /// normal delivery self-restores inside the `save_and_inject` unit.
+    /// Namesake: DeliveryController has a private method of the same name
+    /// (returns (), warns on failure with target "delivery") — this one is
+    /// the recover-path gate and stays silent on restore failure, matching
+    /// the pre-existing recover semantics.
     pub(crate) fn restore_clipboard_if_saved(&self) -> bool {
         if self.clipboard.was_saved() {
             self.clipboard.restore().is_ok()
         } else {
             false
-        }
-    }
-
-    /// Next perf cycle id (monotonic). Replaces the perf_history()
-    /// accessor — callers only ever used this one operation.
-    pub(crate) fn next_perf_cycle_id(&self) -> u64 {
-        self.perf_history.next_cycle_id()
-    }
-
-    /// Install the realtime transcriber (set semantics, mirrors the
-    /// record_only / cancel_token slot verbs).
-    pub(crate) fn set_realtime_transcriber(&self, rt: crate::realtime::RealtimeTranscriber) {
-        if let Some(mut guard) =
-            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
-        {
-            *guard = Some(rt);
-        }
-    }
-
-    /// Session-start guard: stop and drop any leftover realtime
-    /// transcriber from an abnormally-ended previous session (e.g. hook
-    /// release event not delivered by Windows).
-    pub(crate) fn stop_realtime_leftover(&self) {
-        if let Some(mut rt_guard) =
-            crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
-        {
-            if let Some(ref mut rt) = *rt_guard {
-                rt.stop();
-                rt_guard.take();
-            }
         }
     }
 
@@ -1020,28 +1035,21 @@ mod sm_verb_tests {
 
     #[test]
     fn public_surface_ratchet() {
-        // Interface ratchet: counts the PipelineState surface — both the
-        // pre-Task-4 46 pub fns and Task 4's `CancelGuard::new` (`+1`).
-        // Task 6 nets 0 (`+with_cached_llm`, `-cached_llm`). Task 2 of the
-        // composite-verb follow-up adds 2 (`hide_overlays`, `reset_to_idle`)
-        // — deliberate growth, absorbed from recording_session.rs's
-        // orchestration (architecture review 2026-09-06 candidate 1).
-        // Task 3 of the same follow-up adds 1 (`cancel_active_pipeline`,
-        // moved off the recording_session free function).
-        // Growth requires editing this number DELIBERATELY (and justifying
-        // it) — silent accretion is the regression this guards
-        // (architecture review 2026-09-11 candidate 4).
+        // Interface ratchet: counts the PipelineState pub-fn surface.
+        // Round 4 (2026-09-12): deliberate rebalance per architecture
+        // review 2026-09-06 candidate 1 — removed 3 object-graph accessors
+        // (clipboard / perf_history / realtime_transcriber, all call sites
+        // absorbed), added 7 composed verbs carrying ordering knowledge
+        // (hide_overlays, reset_to_idle, cancel_active_pipeline,
+        // restore_clipboard_if_saved, next_perf_cycle_id,
+        // set_realtime_transcriber, stop_realtime_leftover). Real count
+        // 47 → 51; the interface grew but its NATURE changed: exported
+        // object graph → composed operations. Growth still requires
+        // editing this number DELIBERATELY (and justifying it).
         //
         // Calibration: the ratchet's two `src.matches(...)` literal strings
         // ALSO appear in the test body itself (one for each pattern), so the
-        // measured count is real count + 2. The plan's instruction to set
-        // 47 was a measurement oversight; the actual measured count is 49,
-        // which equals 47 real pub fns + 2 self-references. After Task 2's
-        // +2 verbs: 49 real + 2 self-references = 51; after Task 3's +1:
-        // 50 real + 2 self-references = 52. Task 5 of the same follow-up
-        // nets +1 (51 real): +4 absorbed verbs (restore_clipboard_if_saved,
-        // next_perf_cycle_id, set_realtime_transcriber, stop_realtime_leftover)
-        // -3 deleted accessors (clipboard / perf_history / realtime_transcriber).
+        // measured count is real count + 2.
         let src = include_str!("pipeline_state.rs");
         let count = src.matches("    pub(crate) fn ").count() + src.matches("    pub fn ").count();
         assert_eq!(
