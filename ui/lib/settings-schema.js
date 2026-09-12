@@ -12,7 +12,7 @@ import { sameSpec } from './hotkeys.js';
  *
  * Consumers:
  *  - settings-utils.js :: isConfigDirty — derives the dirty check
- *  - settings-form.js :: FIELDS — injects DOM get/set wiring per key
+ *  - settings-form.js :: DOM_DEFS — injects DOM get/set wiring per key
  *
  * Adding a setting = one entry here + one DOM_DEFS wiring in
  * settings-form.js (sync guarded by __tests__/settings-schema.test.js).
