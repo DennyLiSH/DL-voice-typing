@@ -88,6 +88,43 @@ describe('createRovingList', () => {
         expect(onActivate).not.toHaveBeenCalled();
     });
 
+    it('Enter activation re-focuses the replacement row after a rebuild (P3 E2E fix)', () => {
+        // Callers rebuild the list inside onActivate (data page expand
+        // toggle, transcribe window selection): the focused row element is
+        // destroyed and focus falls to <body>, breaking the keyboard flow.
+        // The controller must restore focus to the replacement row.
+        let rebuilt = false;
+        const onActivate = () => {
+            rebuilt = true;
+            container.textContent = '';
+            buildRows(container, ['a', 'b'], 'rec-row');
+        };
+        const [a] = buildRows(container, ['a', 'b'], 'rec-row');
+        createRovingList({ container, rowSelector: '.rec-row', onActivate });
+        a.focus();
+        a.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+        expect(rebuilt).toBe(true);
+        const fresh = container.querySelector('[data-filename="a"]');
+        expect(fresh).not.toBe(a);
+        expect(document.activeElement).toBe(fresh);
+    });
+
+    it('activation without a rebuild keeps focus untouched', () => {
+        const [a] = buildRows(container, ['a'], 'rec-row');
+        createRovingList({
+            container,
+            rowSelector: '.rec-row',
+            onActivate: () => {},
+        });
+        a.focus();
+        a.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        );
+        expect(document.activeElement).toBe(a);
+    });
+
     it('destroy() removes listeners', () => {
         const [a, b] = buildRows(container, ['a', 'b'], 'rec-row');
         const list = createRovingList({

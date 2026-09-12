@@ -55,6 +55,18 @@ export function createRovingList({ container, rowSelector, onActivate }) {
             e.preventDefault();
             const filename = row.dataset.filename;
             if (filename) onActivate(filename);
+            // Activation usually re-renders the list (expand toggle,
+            // selection), destroying `row` and dropping focus to <body>.
+            // Restore it to the replacement row so the keyboard flow
+            // survives the rebuild — but only when focus was actually lost:
+            // a caller that deliberately moved focus (dialog, input) keeps
+            // it (P3 E2E 2026-09-12).
+            if (document.activeElement === document.body) {
+                const fresh = rows().find(
+                    (r) => r.dataset.filename === filename,
+                );
+                if (fresh) fresh.focus();
+            }
         }
     }
 
