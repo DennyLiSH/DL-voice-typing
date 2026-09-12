@@ -397,8 +397,9 @@ impl PipelineState {
     //
     // Lifecycle: installed at session start (`set_realtime_transcriber`,
     // on_press realtime branch), stopped and taken at release via
-    // `stop_recording_resources` / `stop_recording_resources_graceful`
-    // (which also take the accumulated text); `stop_realtime_leftover`
+    // `stop_recording_resources` (which also takes the accumulated text),
+    // or via `stop_recording_resources_graceful` on review-cancel/error
+    // exits (blocking stop, no text); `stop_realtime_leftover`
     // at the next session start is the defensive sweep for a previous
     // session that ended abnormally.
     // ========================================================================
