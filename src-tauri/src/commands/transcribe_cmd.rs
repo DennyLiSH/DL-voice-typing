@@ -69,8 +69,9 @@ pub fn open_transcribe_window(
     open_window_impl(&app, &pt)
 }
 
-/// Start a transcription for the given recording. Returns immediately after
-/// validation; progress and results arrive via `transcription-*` events.
+/// Start a transcription for the given recording. Returns after the run
+/// completes (or fails to start); progress and results arrive via
+/// `transcription-*` events.
 #[tauri::command]
 pub async fn transcribe_recording(
     pt: tauri::State<'_, PendingTranscribe>,
@@ -78,33 +79,64 @@ pub async fn transcribe_recording(
     filename: String,
     use_llm: bool,
 ) -> Result<(), CommandError> {
-    let base = recordings_base_dir(&ps)?;
-    let wav_path = resolve_child(&base, &filename, "wav")?;
-    let json_path = resolve_child(&base, &filename, "json")?;
-    // Read + validate the WAV header before claiming the in-flight slot.
-    let (samples, _duration_ms) = read_wav_samples(&wav_path)?;
-
-    let token = begin_transcription(&pt)?;
     let ps_owned = ps.inner().clone();
+    transcribe_impl(&pt, ps_owned, filename, use_llm).await
+}
+
+/// Testable body of `transcribe_recording` (the command only adapts Tauri
+/// `State` borrows into owned values).
+///
+/// The in-flight slot is claimed BEFORE any filesystem work: a Cancel that
+/// arrives while this command is still resolving/reading the WAV must find
+/// a token to set. With the old claim-after-read order, a fast Cancel
+/// errored "没有进行中的转录任务" and the transcription then ran to
+/// completion (E2E 2026-09-12). Validation + read live INSIDE the blocking
+/// task (a 30-min recording is ~55 MB — the async runtime must not block),
+/// so validation errors surface after the slot is released: no manual
+/// end_transcription on early-error paths.
+async fn transcribe_impl(
+    pt: &PendingTranscribe,
+    ps: PipelineState,
+    filename: String,
+    use_llm: bool,
+) -> Result<(), CommandError> {
+    let token = begin_transcription(pt)?;
     let token_for_task = token.clone();
-    let join = tokio::task::spawn_blocking(move || {
+    let join = tokio::task::spawn_blocking(move || -> Result<(), CommandError> {
+        let base = recordings_base_dir(&ps)?;
+        let wav_path = resolve_child(&base, &filename, "wav")?;
+        let json_path = resolve_child(&base, &filename, "json")?;
+        let (samples, _duration_ms) = read_wav_samples(&wav_path)?;
         run_transcription(
-            &ps_owned,
+            &ps,
             &json_path,
             &filename,
             &samples,
             use_llm,
             token_for_task,
         );
+        Ok(())
     })
     .await;
-    end_transcription(&pt);
-    join.map_err(|e| CommandError::new("INTERNAL", format!("transcription task failed: {e}")))
+    end_transcription(pt);
+    match join {
+        Ok(result) => result,
+        Err(join_err) => Err(CommandError::new(
+            "INTERNAL",
+            format!("transcription task failed: {join_err}"),
+        )),
+    }
 }
 
 /// Cancel the in-flight transcription. Errors when nothing is running.
 #[tauri::command]
 pub fn cancel_transcription(pt: tauri::State<'_, PendingTranscribe>) -> Result<(), CommandError> {
+    cancel_in_flight(&pt)
+}
+
+/// Testable core of `cancel_transcription`: set the in-flight token, or
+/// error when no transcription is running (shared with tests).
+fn cancel_in_flight(pt: &PendingTranscribe) -> Result<(), CommandError> {
     let Some(guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token") else {
         return Err(CommandError::lock("cancel token lock poisoned"));
     };
@@ -654,6 +686,117 @@ mod tests {
                 .map(|g| g.is_none())
                 .unwrap_or(false)
         );
+    }
+
+    // --- fast-cancel race (P3 E2E fix): the in-flight slot must be claimed
+    // before the command's first await point, so a Cancel issued right after
+    // the command starts finds a token — instead of erroring
+    // "没有进行中的转录任务" while the WAV read/validation is still in
+    // flight and letting the transcription run to completion. ---
+
+    #[tokio::test]
+    async fn fast_cancel_after_command_start_aborts_transcription() {
+        let dir = temp_dir("fast-cancel");
+        // A real finalized recording (valid WAV) + pending JSON.
+        let rec = crate::streaming_recorder::StreamingRecorder::start(&dir, 16_000);
+        assert!(rec.is_ok());
+        let Some(mut rec) = rec.ok() else { return };
+        rec.push_samples(&vec![0.5f32; 16000]);
+        let info = rec.finalize();
+        assert!(info.is_ok());
+        let info = match info {
+            Ok(i) => i,
+            Err(_) => return,
+        };
+        let json_path = dir.join(format!("{}.json", info.stem));
+        assert!(
+            crate::data_saving::atomic_write_json(
+                &json_path,
+                &serde_json::json!({
+                    "transcription": serde_json::Value::Null,
+                    "llm_corrected": serde_json::Value::Null,
+                    "segments": [],
+                    "transcription_status": "pending",
+                    "source": "record_only",
+                    "dropped_blocks": 0,
+                })
+            )
+            .is_ok()
+        );
+
+        let cfg = AppConfig {
+            data_saving_path: dir.to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        let (ps, emitter, _) = build_ps(cfg, None);
+        let pt = Arc::new(PendingTranscribe::new());
+        let pt_for_task = Arc::clone(&pt);
+        let stem = info.stem.clone();
+
+        let handle =
+            tokio::spawn(async move { transcribe_impl(&pt_for_task, ps, stem, false).await });
+
+        // Scheduler passes until the impl has claimed the slot: the claim
+        // is the FIRST statement, so this resolves within a couple of
+        // yields — long before the blocking task's read could matter.
+        let mut claimed = false;
+        for _ in 0..1000 {
+            tokio::task::yield_now().await;
+            if let Some(g) = crate::util::lock_mutex(&pt.cancel_token, "t") {
+                if g.is_some() {
+                    claimed = true;
+                    break;
+                }
+            }
+        }
+        assert!(claimed, "slot must be claimed before the first await");
+
+        // Cancel while the blocking task is still starting / validating.
+        let cancelled = match cancel_in_flight(&pt) {
+            Ok(()) => true,
+            Err(_) => false,
+        };
+        assert!(cancelled, "cancel must find the in-flight token");
+
+        let joined = match handle.await {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        assert!(joined.is_ok());
+
+        let events = event_names(&emitter);
+        assert!(events.iter().any(|e| e == "transcription-cancelled"));
+        assert!(!events.iter().any(|e| e == "transcription-done"));
+        // JSON stays pending (cancel leaves the recording re-transcribable).
+        let content = std::fs::read_to_string(&json_path);
+        assert!(content.is_ok());
+        let content = match content {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+        assert_eq!(parsed["transcription_status"], "pending");
+        // Slot released after the command finishes: a new run can start.
+        assert!(begin_transcription(&pt).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn transcribe_validation_failure_releases_slot_and_errors() {
+        let dir = temp_dir("transcribe-bad-wav");
+        let cfg = AppConfig {
+            data_saving_path: dir.to_string_lossy().to_string(),
+            ..Default::default()
+        };
+        let (ps, _emitter, _) = build_ps(cfg, None);
+        let pt = PendingTranscribe::new();
+
+        // Valid stem, missing wav file → the read fails inside the task.
+        let result = transcribe_impl(&pt, ps, "2026-08-18_10-30-00".to_string(), false).await;
+        assert!(result.is_err());
+        // The slot must be free again (window-open guard / next run).
+        assert!(begin_transcription(&pt).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
