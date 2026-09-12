@@ -968,13 +968,17 @@ button:disabled {
 
 .data-row-preview {
     flex: 1;
-    /* Floor, not target: actual width = leftover after fixed siblings.
-     * 560px window - 48px sidebar - paddings ≈ 442px row budget; fixed
-     * siblings (checkbox/ts/source badge/duration/play/delete, 6 gaps)
-     * ≈ 432px for both classic and record-only rows — status/warning
-     * badges moved to the expanded section, so the floor must stay ≤ 72px
-     * to avoid horizontal overflow. */
-    min-width: 72px;
+    /* No min-width floor — actual width = leftover after fixed siblings
+     * (checkbox/ts/source badge/duration/play/delete, 6 gaps). A floor only
+     * engages when the fixed siblings already fill the row budget, and at
+     * that point it manufactures horizontal overflow: the classic 语音输入
+     * badge is wider than the old 72px-floor arithmetic assumed (E2E
+     * 2026-09-12: rows overflowed by ~27px). Fixed siblings alone always
+     * fit, so dropping the floor entirely makes the no-overflow guarantee
+     * arithmetic instead of estimate-driven; the preview ellipsizes at
+     * whatever width is left and the full text stays reachable in the
+     * expanded section. */
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1021,17 +1025,6 @@ button:disabled {
     padding: 2px 6px;
     border-radius: 4px;
     cursor: not-allowed;
-}
-
-/* wav_size === 0 variant: the "音频缺失" badge (~56px) is ~28px wider than
- * the 28px play button it replaces, so fixed siblings + the 72px preview
- * floor overflow the 442px budget (≈460px, worst on classic rows). Fixed
- * siblings alone always fit, so dropping the floor — not shrinking it —
- * turns the no-overflow guarantee into arithmetic instead of estimates.
- * Preview collapses to leftover width with ellipsis; the full text stays
- * reachable in the expanded section. */
-.data-row.audio-missing .data-row-preview {
-    min-width: 0;
 }
 
 .audio-error-badge {
