@@ -72,8 +72,11 @@ describe('floating state machine', () => {
             expect(indicator().classList.contains('visible')).toBe(true);
             expect(text().textContent).toBe(`${'x'.repeat(40)}…`);
         }
-        // Last error's delayed hide
-        vi.advanceTimersByTime(4_500);
+        // Last error's delayed hide — locked from both sides: still visible
+        // at 4499ms, hidden at exactly 4500ms.
+        vi.advanceTimersByTime(4_499);
+        expect(indicator().classList.contains('visible')).toBe(true);
+        vi.advanceTimersByTime(1);
         expect(indicator().classList.contains('visible')).toBe(false);
     });
 
