@@ -224,7 +224,7 @@ function showProcessing() {
     // final transcription runs (same textContent path as the error states).
     // Esc hint advertises the cancel affordance: Transcribing/LLMRefining
     // are the two phases during which Esc is swallowed by the hook (see
-    // cancel_active_pipeline in recording_session.rs).
+    // PipelineState::cancel_active_pipeline).
     transcriptText.textContent = '转录中… 按 Esc 取消';
     transcriptText.classList.remove('error');
     transcriptText.classList.add('visible');
