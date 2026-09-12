@@ -345,8 +345,7 @@ impl RecordingSession {
             ReleaseActionKind::DeliverFast => {
                 let Some(accumulated) = realtime_accumulated else {
                     warn!("hotkey release: DeliverFast missing accumulated text, resetting");
-                    self.ps.sm_reset();
-                    self.ps.window_controller().hide_floating();
+                    self.ps.reset_to_idle();
                     return ReleaseAction::Done;
                 };
                 info!(
@@ -358,8 +357,7 @@ impl RecordingSession {
                 let stop_ok = self.ps.sm_stop_recording();
                 if !stop_ok {
                     info!("hotkey release: RealtimeDirect stop_recording failed");
-                    self.ps.sm_reset();
-                    self.ps.window_controller().hide_floating();
+                    self.ps.reset_to_idle();
                     return ReleaseAction::Done;
                 }
                 // P1 Esc-cancel: arm the cancel token right after entering
@@ -403,7 +401,7 @@ impl RecordingSession {
                 let stop_ok = self.ps.sm_stop_recording();
                 if !stop_ok {
                     info!("hotkey release: stop_recording failed (state already reset)");
-                    self.ps.window_controller().hide_floating();
+                    self.ps.reset_to_idle();
                     return ReleaseAction::Done;
                 }
                 // P1 Esc-cancel: same arming point as DeliverFast (above).
