@@ -254,6 +254,44 @@ describe('audio load failure badge (P1 fix: render-state driven)', () => {
     });
 });
 
+describe('delegated click targeting (SVG inner elements, P1 E2E fix)', () => {
+    // Real mouse clicks on an icon button land on the inner SVG <path>, not
+    // the <button> — the delegated handler must resolve via closest(), not
+    // e.target.classList (old bug: play/delete clicks fell through to the
+    // row-expand toggle).
+    it('clicking the SVG path inside .btn-play toggles the player row', async () => {
+        await loadFresh(defaultInvoke);
+        mod.onDataPageEnter();
+        await flush();
+        await flush();
+
+        document
+            .querySelector('.btn-play svg path')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flush();
+        await flush();
+
+        expect(document.querySelector('audio')).not.toBeNull();
+        expect(
+            document.querySelector('.data-row').getAttribute('aria-expanded'),
+        ).toBe('false');
+    });
+
+    it('clicking the SVG path inside .btn-delete opens the confirm dialog', async () => {
+        await loadFresh(defaultInvoke);
+        mod.onDataPageEnter();
+        await flush();
+        await flush();
+
+        document
+            .querySelector('.btn-delete svg path')
+            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flush();
+
+        expect(document.querySelector('.dialog-actions .btn-danger')).not.toBeNull();
+    });
+});
+
 describe('undo restore report (restore_pending_delete {restored, failed})', () => {
     async function clickUndoWithReport(report) {
         await loadFresh((cmd) => {

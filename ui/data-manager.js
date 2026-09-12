@@ -386,8 +386,9 @@ function wireDataListEvents() {
                 return;
             }
 
-            // Play button
-            if (e.target.classList.contains('btn-play')) {
+            // Play button — closest(), not e.target.classList: a real mouse
+            // click on the icon lands on the inner SVG <path> (P1 E2E fix).
+            if (e.target.closest('.btn-play')) {
                 e.stopPropagation();
                 // Toggle: clicking again collapses.
                 if (dataState.audioPlayerRowId === filename) {
@@ -400,8 +401,8 @@ function wireDataListEvents() {
                 return;
             }
 
-            // Delete button
-            if (e.target.classList.contains('btn-delete')) {
+            // Delete button — closest() for the same SVG-inner-target reason.
+            if (e.target.closest('.btn-delete')) {
                 e.stopPropagation();
                 handleSingleDelete(filename);
                 return;
