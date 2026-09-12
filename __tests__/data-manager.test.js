@@ -288,7 +288,9 @@ describe('delegated click targeting (SVG inner elements, P1 E2E fix)', () => {
             .dispatchEvent(new MouseEvent('click', { bubbles: true }));
         await flush();
 
-        expect(document.querySelector('.dialog-actions .btn-danger')).not.toBeNull();
+        expect(
+            document.querySelector('.dialog-actions .btn-danger'),
+        ).not.toBeNull();
     });
 });
 
