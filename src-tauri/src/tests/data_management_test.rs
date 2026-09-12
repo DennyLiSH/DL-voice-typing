@@ -392,13 +392,14 @@ fn make_junction(link: &Path, target: &Path) {
         .arg(target)
         .output()
         .expect("spawn cmd");
+    let success = out.status.success();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        out.status.success(),
-        "mklink /J {} -> {} failed: {} {}",
+        success,
+        "mklink /J {} -> {} failed: {stdout} {stderr}",
         link.display(),
         target.display(),
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
     );
 }
 
