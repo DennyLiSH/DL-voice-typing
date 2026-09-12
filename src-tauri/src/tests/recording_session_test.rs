@@ -665,6 +665,45 @@ fn cancel_active_pipeline_hides_review_window_when_shown_on_press() {
 }
 
 // ---------------------------------------------------------------------------
+// recover 统一（Round 4 Task 4）：panic 恢复路径必须清理 review 态
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recover_clears_review_state_and_hides_review_window() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let wc = Arc::new(CallLogWindowController {
+        calls: calls.clone(),
+    });
+    let rig = build_rig_full(
+        config(false, false, false),
+        "x",
+        MockCorrector::new("x"),
+        wc,
+        true,
+    );
+    // Simulate a RealtimeReview session that showed the review window on
+    // press, then the delivery future panicked.
+    rig.session.ps_ref().review().set_shown_on_press(true);
+
+    rig.session.recover();
+
+    let logged = calls.lock().unwrap().clone();
+    assert!(
+        logged.contains(&"hide_review"),
+        "recover must hide the review window after a RealtimeReview panic: {logged:?}"
+    );
+    assert!(
+        logged.contains(&"hide_floating"),
+        "recover must hide the floating window: {logged:?}"
+    );
+    assert!(
+        !rig.session.ps_ref().review().was_shown_on_press(),
+        "recover must clear the shown_on_press flag"
+    );
+    assert_eq!(rig.sm.lock().unwrap().state(), StateTag::Idle);
+}
+
+// ---------------------------------------------------------------------------
 // P1 Esc-cancel: orchestration gate tests
 //
 // Drive run_pipeline / run_realtime_fast_path with a cancelled token and

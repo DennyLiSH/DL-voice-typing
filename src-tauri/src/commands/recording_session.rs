@@ -480,8 +480,7 @@ impl RecordingSession {
     /// self-restores after a successful paste, so this is a harmless no-op in
     /// the post-inject case and cleans up leaked text in the pre-inject case.
     pub(crate) fn recover(&self) {
-        self.ps.sm_reset();
-        self.ps.window_controller().hide_floating();
+        self.ps.reset_to_idle();
         if self.ps.clipboard().was_saved() {
             let _ = self.ps.clipboard().restore();
         }
