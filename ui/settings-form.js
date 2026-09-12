@@ -9,6 +9,7 @@ import {
     specLabel,
     writeSpecToUI,
 } from './lib/hotkeys.js';
+import { SETTINGS_FIELDS } from './lib/settings-schema.js';
 import {
     hasCredentialInUrl,
     isConfigDirty,
@@ -71,34 +72,35 @@ onFormChange(updateDirtyState);
 // --- Initialization ---
 
 /**
- * Field descriptors for the settings form.
- * Single source of truth for: populateFields (config -> DOM),
- * getCurrentConfig (DOM -> config). Adding a new field = adding one entry.
+ * DOM wiring for each SETTINGS_FIELDS key (get: DOM → value,
+ * set: value → DOM). Keyed by field name — the key LIST lives in
+ * lib/settings-schema.js (single source); this map only wires DOM.
+ * Sync is guarded by __tests__/settings-schema.test.js.
  *
  * Toggle fields use classList.contains('active') + setAttribute('aria-checked').
  * Input/select fields use .value.
  * llm_api_key has masked-marker fallback in get (preserves existing behavior).
  * whisper_model delegates to model-manager getSelectedModel/setSelectedModel.
  */
-const FIELDS = [
-    {
-        key: 'language',
+const DOM_DEFS = {
+    language: {
         get: () => languageSelect.value,
         set: (v) => {
             languageSelect.value = v || 'zh';
         },
     },
-    {
-        key: 'hotkey',
+    hotkey: {
         get: () => specFromUI('hotkey'),
         set: (v) => {
             writeSpecToUI('hotkey', v ?? DEFAULT_PRIMARY_SPEC);
             updateHotkeyPreview('hotkey');
         },
     },
-    { key: 'whisper_model', get: getSelectedModel, set: setSelectedModel },
-    {
-        key: 'llm_enabled',
+    whisper_model: {
+        get: getSelectedModel,
+        set: setSelectedModel,
+    },
+    llm_enabled: {
         get: () => llmToggle.classList.contains('active'),
         set: (v) => {
             llmToggle.classList.toggle('active', !!v);
@@ -106,15 +108,13 @@ const FIELDS = [
             updateLlmFieldsState(!!v);
         },
     },
-    {
-        key: 'llm_api_url',
+    llm_api_url: {
         get: () => apiUrlInput.value.trim(),
         set: (v) => {
             apiUrlInput.value = v || '';
         },
     },
-    {
-        key: 'llm_api_key',
+    llm_api_key: {
         get: () => {
             const v = apiKeyInput.value.trim();
             const hasExistingKey =
@@ -132,22 +132,19 @@ const FIELDS = [
             }
         },
     },
-    {
-        key: 'llm_model',
+    llm_model: {
         get: () => modelInput.value.trim(),
         set: (v) => {
             modelInput.value = v || '';
         },
     },
-    {
-        key: 'download_mirror',
+    download_mirror: {
         get: () => downloadMirrorSelect.value,
         set: (v) => {
             downloadMirrorSelect.value = v || 'hf-mirror';
         },
     },
-    {
-        key: 'data_saving_enabled',
+    data_saving_enabled: {
         get: () => dataSavingToggle.classList.contains('active'),
         set: (v) => {
             dataSavingToggle.classList.toggle('active', !!v);
@@ -155,31 +152,27 @@ const FIELDS = [
             updateDataSavingFieldsState(!!v);
         },
     },
-    {
-        key: 'data_saving_path',
+    data_saving_path: {
         get: () => dataSavingPath.value.trim(),
         set: (v) => {
             dataSavingPath.value = v || '';
         },
     },
-    {
-        key: 'review_before_paste',
+    review_before_paste: {
         get: () => reviewToggle.classList.contains('active'),
         set: (v) => {
             reviewToggle.classList.toggle('active', !!v);
             reviewToggle.setAttribute('aria-checked', String(!!v));
         },
     },
-    {
-        key: 'realtime_transcription',
+    realtime_transcription: {
         get: () => realtimeToggle.classList.contains('active'),
         set: (v) => {
             realtimeToggle.classList.toggle('active', !!v);
             realtimeToggle.setAttribute('aria-checked', String(!!v));
         },
     },
-    {
-        key: 'autostart',
+    autostart: {
         get: () => autostartToggle.classList.contains('active'),
         set: (v) => {
             loadedAutostart = !!v;
@@ -190,8 +183,7 @@ const FIELDS = [
             );
         },
     },
-    {
-        key: 'record_only_enabled',
+    record_only_enabled: {
         get: () => recordOnlyToggle.classList.contains('active'),
         set: (v) => {
             recordOnlyToggle.classList.toggle('active', !!v);
@@ -199,15 +191,16 @@ const FIELDS = [
             updateRecordOnlyHotkeyState(!!v);
         },
     },
-    {
-        key: 'record_only_hotkey',
+    record_only_hotkey: {
         get: () => specFromUI('record-only-hotkey'),
         set: (v) => {
             writeSpecToUI('record-only-hotkey', v ?? DEFAULT_RECORD_ONLY_SPEC);
             updateHotkeyPreview('record-only-hotkey');
         },
     },
-];
+};
+
+const FIELDS = SETTINGS_FIELDS.map(({ key }) => ({ key, ...DOM_DEFS[key] }));
 
 export function populateFields(config) {
     loadedConfig = config;
