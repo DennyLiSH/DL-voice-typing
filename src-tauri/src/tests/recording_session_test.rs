@@ -684,6 +684,12 @@ fn recover_clears_review_state_and_hides_review_window() {
     // Simulate a RealtimeReview session that showed the review window on
     // press, then the delivery future panicked.
     rig.session.ps_ref().review().set_shown_on_press(true);
+    // A panic mid-delivery leaves the machine in a non-Idle phase; recover's
+    // reset leg is only observable from one.
+    rig.sm
+        .lock()
+        .unwrap()
+        .force_state_tag(StateTag::LLMRefining);
 
     rig.session.recover();
 

@@ -471,7 +471,8 @@ impl RecordingSession {
         }
     }
 
-    /// Panic recovery: reset state to idle, conditionally restore the
+    /// Panic recovery: reset state to idle (hiding any shown overlays,
+    /// including a review window shown on press), conditionally restore the
     /// clipboard, and surface a `speech-error`. Each step is tolerant so a
     /// secondary panic does not escape the supervisor task.
     ///
