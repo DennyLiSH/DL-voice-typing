@@ -322,9 +322,7 @@ describe('error guide suffix', () => {
     it('speech-error fallback carries the guide', () => {
         listeners['recording-start']({ payload: null });
         listeners['speech-error']({ payload: null });
-        expect(text().textContent).toBe(
-            '语音识别失败 · 详情见 帮助→最近错误',
-        );
+        expect(text().textContent).toBe('语音识别失败 · 详情见 帮助→最近错误');
     });
 
     it('object payload (serialized AppError) falls back + guide, not raw JSON', () => {

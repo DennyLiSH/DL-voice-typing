@@ -70,7 +70,9 @@ describe('floating state machine', () => {
             listeners[evt]({ payload: 'x'.repeat(60) });
             expect(indicator().classList.contains('error')).toBe(true);
             expect(indicator().classList.contains('visible')).toBe(true);
-            expect(text().textContent).toBe(`${'x'.repeat(24)}… · 详情见 帮助→最近错误`);
+            expect(text().textContent).toBe(
+                `${'x'.repeat(24)}… · 详情见 帮助→最近错误`,
+            );
         }
         // Last error's delayed hide — locked from both sides: still visible
         // at 4499ms, hidden at exactly 4500ms.

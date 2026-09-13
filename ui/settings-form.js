@@ -56,9 +56,8 @@ const recordOnlyHotkeyGroup = document.getElementById(
 const recordOnlyHotkeySelect = document.getElementById('record-only-hotkey');
 
 // Initial icon for the API key toggle: input starts as type="password",
-// which maps to the EYE (reveal) affordance — replaces the emoji placeholder
-// in the HTML so first paint matches the click-handler semantics.
-toggleKeyBtn.innerHTML = EYE_SVG;
+// which maps to the EYE (reveal) affordance — the SVG is now inlined in
+// settings.html so first paint matches without a JS replacement pass.
 
 // State
 let loadedConfig = null;
@@ -349,7 +348,7 @@ testBtn.addEventListener('click', async () => {
     }
 
     testBtn.disabled = true;
-    testBtn.textContent = '测试中...';
+    testBtn.textContent = '测试中…';
     testStatus.textContent = '';
 
     try {
@@ -450,7 +449,7 @@ saveBtn.addEventListener('click', async () => {
     }
 
     saveBtn.disabled = true;
-    saveBtn.textContent = '保存中...';
+    saveBtn.textContent = '保存中…';
     saveBtn.classList.add('saving');
 
     const prevHotkey = loadedConfig?.hotkey;

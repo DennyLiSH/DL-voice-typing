@@ -83,7 +83,7 @@ export function validateSettings(config, modelStatus) {
     if (config.record_only_enabled && !config.data_saving_path) {
         return {
             valid: false,
-            error: '启用录音模式时，必须设置数据保存路径（录音文件保存在此）',
+            error: '开启「录音模式」时，必须设置数据保存路径（录音文件保存在此）',
         };
     }
     return { valid: true, error: null };

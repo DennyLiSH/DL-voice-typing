@@ -363,8 +363,7 @@ listen('record-only-finished', (event) => {
         indicator.style.boxShadow = '';
         indicator.style.filter = '';
         indicator.classList.add('error');
-        transcriptText.textContent =
-            '录音不完整已提前停止，已保存部分可在转录窗口查看' + ERROR_GUIDE;
+        transcriptText.textContent = `录音不完整已提前停止，已保存部分可在转录窗口查看${ERROR_GUIDE}`;
         transcriptText.classList.add('visible', 'error');
         hide(4500);
     } else {
