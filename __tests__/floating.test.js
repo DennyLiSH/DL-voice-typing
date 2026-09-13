@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
     COLOR_STOPS,
+    ERROR_GUIDE,
     errorDisplayText,
+    errorTextWithGuide,
     getColor,
     getShadow,
     lerpColor,
@@ -248,5 +250,27 @@ describe('errorDisplayText', () => {
     it('never truncates the fallback (capping applies to the payload only)', () => {
         const longFallback = '兜'.repeat(60);
         expect(errorDisplayText('', longFallback)).toBe(longFallback);
+    });
+});
+
+describe('errorTextWithGuide', () => {
+    it('appends the help-page guide to a short fallback', () => {
+        expect(errorTextWithGuide(undefined, '语音识别失败')).toBe(
+            `语音识别失败${ERROR_GUIDE}`,
+        );
+    });
+
+    it('tightens the payload cap to 24 chars so base + guide fits the 40-char area', () => {
+        const long = 'a'.repeat(30);
+        const out = errorTextWithGuide(long, 'fallback');
+        expect(out.endsWith(ERROR_GUIDE)).toBe(true);
+        expect(out.length).toBeLessThanOrEqual(40);
+        // The payload itself was capped at 24 before the guide was appended.
+        expect(out.startsWith('a'.repeat(24))).toBe(true);
+    });
+
+    it('guide is 14 chars and does not double-count', () => {
+        expect([...ERROR_GUIDE].length).toBe(14);
+        expect(ERROR_GUIDE).toBe(' · 详情见 帮助→最近错误');
     });
 });

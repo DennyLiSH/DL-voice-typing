@@ -65,12 +65,12 @@ describe('floating state machine', () => {
         vi.restoreAllMocks();
     });
 
-    it('error channels show error state and auto-hide after 4.5s (payload truncated to 40 + ellipsis)', () => {
+    it('error channels show error state and auto-hide after 4.5s (payload truncated to 24 + guide suffix)', () => {
         for (const evt of ['speech-error', 'llm-error', 'injection-error']) {
             listeners[evt]({ payload: 'x'.repeat(60) });
             expect(indicator().classList.contains('error')).toBe(true);
             expect(indicator().classList.contains('visible')).toBe(true);
-            expect(text().textContent).toBe(`${'x'.repeat(40)}…`);
+            expect(text().textContent).toBe(`${'x'.repeat(24)}… · 详情见 帮助→最近错误`);
         }
         // Last error's delayed hide — locked from both sides: still visible
         // at 4499ms, hidden at exactly 4500ms.
@@ -82,7 +82,7 @@ describe('floating state machine', () => {
 
     it('error fallback text is used for empty payloads', () => {
         listeners['speech-error']({ payload: '' });
-        expect(text().textContent).toBe('语音识别失败');
+        expect(text().textContent).toBe('语音识别失败 · 详情见 帮助→最近错误');
     });
 
     it('a later show() cancels a pending delayed hide', () => {

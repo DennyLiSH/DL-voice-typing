@@ -1,5 +1,6 @@
 import {
-    errorDisplayText,
+    ERROR_GUIDE,
+    errorTextWithGuide,
     getColor,
     getShadow,
     remapRms,
@@ -62,6 +63,20 @@ function updateRecordOnlyText() {
     transcriptText.classList.add('visible');
 }
 
+// #transcript-text is dual-purpose: realtime transcript (announce
+// politely) and record-only timer (role=timer; the timer role's implicit
+// aria-live=off keeps the per-second tick unannounced). Mode switches
+// flip the attributes; the HTML default covers the classic path.
+function setTranscriptAnnouncement(mode) {
+    if (mode === 'timer') {
+        transcriptText.setAttribute('role', 'timer');
+        transcriptText.setAttribute('aria-live', 'off');
+    } else {
+        transcriptText.removeAttribute('role');
+        transcriptText.setAttribute('aria-live', 'polite');
+    }
+}
+
 function showRecordOnly() {
     // The record-only look is CSS-driven (breathe keyframes + tint), so any
     // inline background/shadow/transform left by the spring-driven modes
@@ -71,6 +86,7 @@ function showRecordOnly() {
     indicator.style.transform = '';
     indicator.style.filter = '';
     rmsHistory = [];
+    setTranscriptAnnouncement('timer');
     indicator.classList.remove('processing', 'error', 'exit');
     indicator.classList.add('record-only', 'visible');
     stopRecordOnlyTimer();
@@ -184,6 +200,7 @@ function show() {
     }
     indicator.classList.remove('exit', 'error', 'processing');
     transcriptText.classList.remove('error');
+    setTranscriptAnnouncement('polite');
     indicator.classList.add('visible');
 }
 
@@ -219,7 +236,7 @@ function showError(eventName, payload) {
     indicator.style.boxShadow = '';
     indicator.classList.remove('processing');
     indicator.classList.add('error', 'visible');
-    transcriptText.textContent = errorDisplayText(
+    transcriptText.textContent = errorTextWithGuide(
         payload,
         ERROR_DEFAULTS[eventName] || '出错了',
     );
@@ -242,13 +259,13 @@ function showRecording() {
     rmsHistory = [];
 }
 
-function showProcessing() {
+function showProcessing(label) {
     // Placeholder text keeps the transcript area from going blank while the
-    // final transcription runs (same textContent path as the error states).
-    // Esc hint advertises the cancel affordance: Transcribing/LLMRefining
-    // are the two phases during which Esc is swallowed by the hook (see
-    // PipelineState::cancel_active_pipeline).
-    transcriptText.textContent = '转录中… 按 Esc 取消';
+    // final transcription / LLM correction runs (same textContent path as the
+    // error states). Esc hint advertises the cancel affordance:
+    // Transcribing/LLMRefining are the two phases during which Esc is
+    // swallowed by the hook (see PipelineState::cancel_active_pipeline).
+    transcriptText.textContent = label;
     transcriptText.classList.remove('error');
     transcriptText.classList.add('visible');
     // Let spring settle naturally before switching to CSS animation
@@ -295,11 +312,11 @@ listen('transcription-partial', (event) => {
 });
 
 listen('transcription-complete', () => {
-    showProcessing();
+    showProcessing('转录中… 按 Esc 取消');
 });
 
 listen('llm-refining', () => {
-    showProcessing();
+    showProcessing('AI 纠错中… 按 Esc 取消');
 });
 
 listen('injection-complete', () => {
@@ -337,6 +354,7 @@ listen('record-only-started', () => {
 
 listen('record-only-finished', (event) => {
     stopRecordOnlyTimer();
+    setTranscriptAnnouncement('polite');
     indicator.classList.remove('record-only');
     if (event.payload?.status === 'failed') {
         // Backpressure controlled stop: the WAV was finalized but lost
@@ -346,7 +364,7 @@ listen('record-only-finished', (event) => {
         indicator.style.filter = '';
         indicator.classList.add('error');
         transcriptText.textContent =
-            '录音不完整已提前停止，已保存部分可在转录窗口查看';
+            '录音不完整已提前停止，已保存部分可在转录窗口查看' + ERROR_GUIDE;
         transcriptText.classList.add('visible', 'error');
         hide(4500);
     } else {
@@ -363,12 +381,13 @@ listen('record-only-error', (event) => {
     // passes object payloads straight to errorDisplayText, which falls back
     // to the table key and would lose the backend message. Unpack here.
     stopRecordOnlyTimer();
+    setTranscriptAnnouncement('polite');
     indicator.classList.remove('record-only', 'processing');
     indicator.style.background = '';
     indicator.style.boxShadow = '';
     indicator.style.filter = '';
     indicator.classList.add('error', 'visible');
-    transcriptText.textContent = errorDisplayText(
+    transcriptText.textContent = errorTextWithGuide(
         event.payload?.message,
         '录音失败',
     );

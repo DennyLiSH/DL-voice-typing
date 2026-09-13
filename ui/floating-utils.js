@@ -100,3 +100,19 @@ export function errorDisplayText(payload, fallback, maxLen = 40) {
     }
     return fallback;
 }
+
+/**
+ * Suffix appended to floating-window error text pointing users at the
+ * persistent error history (设置 → 帮助 → 最近错误). Round 6 P3: the
+ * history existed but was undiscoverable at error time.
+ */
+export const ERROR_GUIDE = ' · 详情见 帮助→最近错误';
+
+/**
+ * errorDisplayText + ERROR_GUIDE, with the payload cap tightened from 40
+ * to 24 chars so base + guide stays inside the ~40-char text-area budget
+ * (the guide itself is 14 chars; the truncation marker adds 1).
+ */
+export function errorTextWithGuide(payload, fallback) {
+    return errorDisplayText(payload, fallback, 24) + ERROR_GUIDE;
+}

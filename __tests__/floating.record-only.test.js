@@ -80,7 +80,7 @@ describe('floating record-only in-flight indicator', () => {
         });
 
         expect(text().textContent).toBe(
-            '录音不完整已提前停止，已保存部分可在转录窗口查看',
+            '录音不完整已提前停止，已保存部分可在转录窗口查看 · 详情见 帮助→最近错误',
         );
         expect(indicator().classList.contains('error')).toBe(true);
 
@@ -94,7 +94,9 @@ describe('floating record-only in-flight indicator', () => {
             payload: { message: '录音启动失败，请检查数据保存路径' },
         });
 
-        expect(text().textContent).toBe('录音启动失败，请检查数据保存路径');
+        expect(text().textContent).toBe(
+            '录音启动失败，请检查数据保存路径 · 详情见 帮助→最近错误',
+        );
         expect(indicator().classList.contains('error')).toBe(true);
         expect(indicator().classList.contains('record-only')).toBe(false);
     });
@@ -237,5 +239,99 @@ describe('record-only level feedback (盲录电平)', () => {
         const ripples = document.querySelectorAll('.ripple');
         expect(ripples.length).toBeGreaterThanOrEqual(1);
         expect(ripples[0].classList.contains('red')).toBe(false);
+    });
+});
+
+describe('phase-distinct processing labels', () => {
+    beforeEach(async () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('requestAnimationFrame', () => 0);
+        vi.stubGlobal('cancelAnimationFrame', () => {});
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('transcription-complete and llm-refining show distinct placeholders', () => {
+        listeners['recording-start']({ payload: null });
+        listeners['transcription-complete']({ payload: null });
+        expect(text().textContent).toBe('转录中… 按 Esc 取消');
+        listeners['llm-refining']({ payload: null });
+        expect(text().textContent).toBe('AI 纠错中… 按 Esc 取消');
+    });
+});
+
+describe('transcript aria mode switch', () => {
+    beforeEach(async () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('requestAnimationFrame', () => 0);
+        vi.stubGlobal('cancelAnimationFrame', () => {});
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('record-only timer mode: role=timer + aria-live=off; classic: polite, no role', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        expect(text().getAttribute('role')).toBe('timer');
+        expect(text().getAttribute('aria-live')).toBe('off');
+        listeners['recording-start']({ payload: null });
+        expect(text().hasAttribute('role')).toBe(false);
+        expect(text().getAttribute('aria-live')).toBe('polite');
+    });
+
+    it('record-only-finished announces as a status (polite), not a timer', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['record-only-finished']({
+            payload: { stem: 'x', status: 'pending', dropped_blocks: 0 },
+        });
+        expect(text().hasAttribute('role')).toBe(false);
+        expect(text().getAttribute('aria-live')).toBe('polite');
+    });
+
+    it('record-only-error also switches back to polite', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['record-only-error']({ payload: { message: '录音失败' } });
+        expect(text().hasAttribute('role')).toBe(false);
+        expect(text().getAttribute('aria-live')).toBe('polite');
+    });
+});
+
+describe('error guide suffix', () => {
+    beforeEach(async () => {
+        vi.useFakeTimers();
+        vi.stubGlobal('requestAnimationFrame', () => 0);
+        vi.stubGlobal('cancelAnimationFrame', () => {});
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('speech-error fallback carries the guide', () => {
+        listeners['recording-start']({ payload: null });
+        listeners['speech-error']({ payload: null });
+        expect(text().textContent).toBe(
+            '语音识别失败 · 详情见 帮助→最近错误',
+        );
+    });
+
+    it('object payload (serialized AppError) falls back + guide, not raw JSON', () => {
+        listeners['recording-start']({ payload: null });
+        listeners['llm-error']({ payload: { code: 'X', message: 'boom' } });
+        expect(text().textContent).toBe(
+            'LLM 纠错失败，已保留原始转录 · 详情见 帮助→最近错误',
+        );
     });
 });
