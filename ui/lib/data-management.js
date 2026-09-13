@@ -191,7 +191,8 @@ export function buildRecordingRow(entry, opts = {}) {
         const badge = document.createElement('span');
         badge.className = 'audio-error-badge';
         badge.textContent = '音频加载失败';
-        badge.title = '音频文件暂时无法读取（可能被其他程序占用），点「刷新」重试';
+        badge.title =
+            '音频文件暂时无法读取（可能被其他程序占用），点「刷新」重试';
         row.appendChild(badge);
     } else if (entry.wav_size > 0) {
         const playBtn = document.createElement('button');
