@@ -29,7 +29,7 @@ const MINIMAL_DOM = `
   <div class="sidebar-item" data-page="help"></div>
   <div class="page-content" id="page-general"></div>
   <div class="page-content" id="page-help"></div>
-  <div id="error-history-list"></div>
+  <details class="help-section" id="help-errors-section"><summary>最近错误</summary><div class="help-section-body"><div id="error-history-list" aria-live="polite"></div></div></details>
   <select id="language"><option value="zh"></option></select>
   <div id="hotkey-combo">
     <input type="checkbox" id="hotkey-ctrl" />
@@ -430,6 +430,28 @@ describe('help page recent-errors section', () => {
         const list = document.getElementById('error-history-list');
         expect(list.querySelector('.hint').textContent).toBe(
             '无法加载错误记录',
+        );
+    });
+
+    it('requests 5 entries and auto-expands the section when history is non-empty', async () => {
+        await loadWithErrors('ok', [
+            {
+                timestamp: '2026-09-13T10:00:00+08:00',
+                event: 'llm-error',
+                message: 'x',
+            },
+        ]);
+        const call = invokeMock.mock.calls.find(
+            ([c]) => c === 'get_last_errors',
+        );
+        expect(call?.[1]).toEqual({ n: 5 });
+        expect(document.getElementById('help-errors-section')?.open).toBe(true);
+    });
+
+    it('keeps the section collapsed when history is empty', async () => {
+        await loadWithErrors('ok', []);
+        expect(document.getElementById('help-errors-section')?.open).toBe(
+            false,
         );
     });
 });

@@ -1166,3 +1166,17 @@ button:disabled {
 .hotkey-warning {
   margin-top: var(--space-1);
 }
+
+/* Help footer: version + feedback link (Round 6 Minor). The link opens
+   via the opener plugin (system browser), not in-app navigation. */
+.help-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.help-footer a {
+  color: var(--accent-text);
+  font-size: var(--font-hint);
+}

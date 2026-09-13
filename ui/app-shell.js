@@ -1,5 +1,5 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
-import { call } from './lib/api.js';
+import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog, isDialogOpen } from './lib/confirm-dialog.js';
 import { isFormDirty } from './lib/form-state.js';
 import { populateMainKeySelects } from './lib/hotkeys.js';
@@ -19,6 +19,8 @@ import {
 } from './settings-form.js';
 
 const { listen } = window.__TAURI__.event;
+
+const FEEDBACK_URL = 'https://github.com/DennyLiSH/DL-voice-typing/issues';
 
 // DOM elements
 const sidebarItems = document.querySelectorAll('.sidebar-item');
@@ -70,6 +72,26 @@ export async function switchPage(pageName) {
     }
 }
 
+// --- Feedback link (help footer): opens the system browser via the
+// opener plugin. The WebView never navigates away. A plugin failure is
+// logged AND surfaced on the link itself (prefer errors over silent
+// degradation — a dead click with no feedback is undiagnosable).
+const feedbackLink = document.getElementById('feedback-link');
+feedbackLink?.addEventListener('click', (e) => {
+    e.preventDefault();
+    rawInvoke('plugin:opener|open_url', { url: FEEDBACK_URL }).catch((err) => {
+        reportError(err, 'feedback-link');
+        if (feedbackLink.dataset.recovering === '1') return;
+        feedbackLink.dataset.recovering = '1';
+        const original = feedbackLink.textContent;
+        feedbackLink.textContent = '打开失败，请手动访问 GitHub Issues';
+        setTimeout(() => {
+            feedbackLink.textContent = original;
+            delete feedbackLink.dataset.recovering;
+        }, 3000);
+    });
+});
+
 // --- Recent Errors (help page) ---
 
 const CHANNEL_LABELS = {
@@ -91,7 +113,7 @@ async function refreshErrorHistory() {
     const seq = ++errorHistorySeq;
     let records;
     try {
-        records = await call('get_last_errors', { n: 3 });
+        records = await call('get_last_errors', { n: 5 });
     } catch (_e) {
         if (seq === errorHistorySeq) {
             renderErrorHistoryHint(list, '无法加载错误记录');
@@ -99,6 +121,11 @@ async function refreshErrorHistory() {
         return;
     }
     if (seq !== errorHistorySeq) return;
+    // 全套发现性: auto-expand the section when there is something to show
+    // (the floating error text now points users here — a collapsed
+    // accordion would add one more hop).
+    const section = document.getElementById('help-errors-section');
+    if (section) section.open = records.length > 0;
     if (!Array.isArray(records) || records.length === 0) {
         renderErrorHistoryHint(list, '暂无错误记录');
         return;
