@@ -171,3 +171,14 @@ textarea::placeholder {
   margin-top: var(--space-1);
   min-height: 0;
 }
+
+/* --------------------------------------------------------------------------
+   Keyboard convention hint (Round 6 Minor: Enter newline rule was
+   invisible). Fixed-dark tertiary, right-aligned against the button row.
+   -------------------------------------------------------------------------- */
+.review-hint {
+  color: var(--review-text-tertiary);
+  font-size: var(--font-hint);
+  margin-top: var(--space-1);
+  text-align: right;
+}

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>审查</title>
+    <title>粘贴前确认</title>
     <link rel="stylesheet" href="common.css">
     <link rel="stylesheet" href="review.css">
 </head>
@@ -11,15 +11,15 @@
     <div class="container" id="container">
         <textarea
             id="review-text"
-            role="textbox"
             aria-label="转录结果"
             aria-multiline="true"
             spellcheck="false"
         ></textarea>
+        <div class="review-hint" id="review-hint">Enter 确认粘贴 · Shift+Enter 换行 · Esc 取消</div>
         <div class="error-msg" id="error-msg"></div>
         <div class="button-row">
-            <button class="btn-cancel" id="btn-cancel" role="button" aria-label="取消">取消</button>
-            <button class="btn-confirm" id="btn-confirm" role="button" aria-label="确认粘贴">确认粘贴</button>
+            <button class="btn-cancel" id="btn-cancel" aria-label="取消">取消</button>
+            <button class="btn-confirm" id="btn-confirm" aria-label="确认粘贴">确认粘贴</button>
         </div>
     </div>
 
