@@ -7,7 +7,7 @@
 //! backpressure monitor, the watchdog, and the tray reset, so timeout and
 //! error mapping live in exactly one place.
 
-use crate::audio::{AudioCallback, TARGET_SAMPLE_RATE};
+use crate::audio::{AudioCallback, TARGET_SAMPLE_RATE, rms};
 use crate::commands::pipeline_state::PipelineState;
 use crate::config::{Language, WhisperModel};
 use crate::error::AppError;
@@ -19,11 +19,16 @@ use crate::streaming_recorder::{
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 /// Backpressure monitor poll interval.
 const MONITOR_POLL_MS: u64 = 250;
+
+/// Level-feedback event throttle for record-only (盲录电平). 10fps: the
+/// frontend smooths brightness via a CSS transition, and 30min sessions
+/// would ship ~54k IPC events at the classic pipeline's 33ms rate.
+const RMS_EMIT_INTERVAL_MS: u64 = 100;
 
 /// Session-level config snapshot taken at press time, so mid-session
 /// settings changes cannot affect an in-flight recording.
@@ -228,11 +233,31 @@ impl RecordOnlySession {
         // callbacks no-op instead of locking shared session state.
         let push_cell: PushCell = Arc::new(Mutex::new(None));
         let cell_for_cb = push_cell.clone();
+        // 盲录电平: level feedback reuses the classic pipeline's `audio-rms`
+        // event; the floating window branches on the record-only class to
+        // drive brightness/ripple instead of the spring scale. Modes are
+        // mutually exclusive (atomic state gate), so the shared name cannot
+        // collide.
+        let emitter_for_rms = ps.emitter();
+        let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
+        let last_rms_for_cb = Arc::clone(&last_rms_emit);
         let on_data: AudioCallback = Box::new(move |data: &[f32]| {
             let handle = crate::util::lock_mutex(&cell_for_cb, "record_only_push")
                 .and_then(|g| g.as_ref().cloned());
             if let Some(handle) = handle {
                 handle.push(data);
+            }
+            let rms_val = rms::calculate_rms(data);
+            if let Some(mut last) =
+                crate::util::lock_mutex(&last_rms_for_cb, "record_only_rms_emit")
+            {
+                if last.elapsed() >= Duration::from_millis(RMS_EMIT_INTERVAL_MS) {
+                    *last = Instant::now();
+                    emitter_for_rms.emit(
+                        "audio-rms",
+                        serde_json::to_value(rms_val).unwrap_or_default(),
+                    );
+                }
             }
         });
 
@@ -801,6 +826,43 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
         assert_eq!(parsed["transcription_status"], "failed");
         assert!(parsed["dropped_blocks"].as_u64().unwrap_or(0) >= 51);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_record_only_emits_throttled_audio_rms() {
+        let dir = temp_dir("rms-emit");
+        let (ps, emitter) = build_ps(record_only_config(&dir));
+        RecordOnlySession::on_press(&ps);
+
+        // Deterministic throttle proof, robust to slow CI:
+        //   deliver A - may or may not emit (whether on_press->A crossed the
+        //   100ms window depends on runner speed; both outcomes are fine)
+        //   sleep 110ms - guarantees the window is open
+        //   deliver B then C back-to-back - B emits, C is throttled (<100ms
+        //   since B's emit)
+        // Total audio-rms events in {1, 2}; without throttling it would be 3.
+        if let Some(mut ac) = crate::util::lock_mutex(&ps.audio_capture(), "audio_capture") {
+            ac.deliver(&vec![0.5f32; 4_800]);
+        }
+        std::thread::sleep(Duration::from_millis(110));
+        if let Some(mut ac) = crate::util::lock_mutex(&ps.audio_capture(), "audio_capture") {
+            ac.deliver(&vec![0.5f32; 4_800]);
+            ac.deliver(&vec![0.5f32; 4_800]);
+        }
+        let rms_payloads: Vec<f64> = emitter
+            .take_events()
+            .iter()
+            .filter(|(e, _)| e == "audio-rms")
+            .filter_map(|(_, p)| p.as_f64())
+            .collect();
+        assert!((1..=2).contains(&rms_payloads.len()));
+        // RMS of a constant 0.5 signal is 0.5.
+        for p in &rms_payloads {
+            assert!((p - 0.5).abs() < 1e-3);
+        }
+
+        RecordOnlySession::recover(&ps);
         let _ = fs::remove_dir_all(&dir);
     }
 
