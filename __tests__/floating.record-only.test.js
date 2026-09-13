@@ -146,3 +146,96 @@ describe('pipeline-cancelled (Esc cancel)', () => {
         expect(text().textContent).toContain('按 Esc 取消');
     });
 });
+
+describe('record-only level feedback (盲录电平)', () => {
+    beforeEach(async () => {
+        vi.useFakeTimers();
+        // The spring/settle transitions run on rAF; stubbed as no-ops (same
+        // as the sibling describes).
+        vi.stubGlobal('requestAnimationFrame', () => 0);
+        vi.stubGlobal('cancelAnimationFrame', () => {});
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('audio-rms in record-only mode drives the brightness filter, not the spring transform', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['audio-rms']({ payload: 0.05 });
+        const f1 = indicator().style.filter;
+        expect(f1).toContain('brightness(');
+        listeners['audio-rms']({ payload: 0.5 });
+        const f2 = indicator().style.filter;
+        const b1 = Number.parseFloat(f1.match(/brightness\(([\d.]+)\)/)[1]);
+        const b2 = Number.parseFloat(f2.match(/brightness\(([\d.]+)\)/)[1]);
+        // Louder input → higher brightness factor.
+        expect(b2).toBeGreaterThan(b1);
+        // The spring path must NOT run: record-only transform belongs to the
+        // CSS breathe keyframes.
+        expect(indicator().style.transform).toBe('');
+    });
+
+    it('audio-rms in classic mode keeps the spring path and sets no filter', () => {
+        listeners['recording-start']({ payload: null });
+        listeners['audio-rms']({ payload: 0.4 });
+        expect(indicator().style.filter).toBe('');
+    });
+
+    it('record-only-finished clears the level filter', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['audio-rms']({ payload: 0.4 });
+        expect(indicator().style.filter).not.toBe('');
+        listeners['record-only-finished']({
+            payload: { stem: 'x', status: 'pending', dropped_blocks: 0 },
+        });
+        expect(indicator().style.filter).toBe('');
+    });
+
+    it('record-only-error clears the level filter', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['audio-rms']({ payload: 0.4 });
+        listeners['record-only-error']({ payload: { message: '录音失败' } });
+        expect(indicator().style.filter).toBe('');
+    });
+
+    it('hide() backstop clears the level filter (injection-complete path)', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['audio-rms']({ payload: 0.4 });
+        expect(indicator().style.filter).not.toBe('');
+        listeners['injection-complete']({ payload: null });
+        expect(indicator().style.filter).toBe('');
+    });
+
+    it('peak rms in record-only mode spawns a red ripple', () => {
+        // Explicit performance.now mock (same pattern as the ripple describe
+        // in floating.state.test.js) — fake timers alone do not control it.
+        const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['audio-rms']({ payload: 0.01 });
+        listeners['audio-rms']({ payload: 0.01 });
+        listeners['audio-rms']({ payload: 0.01 });
+        // Advance past RIPPLE_MIN_INTERVAL (250ms) before the peak push.
+        nowSpy.mockReturnValue(1_400);
+        listeners['audio-rms']({ payload: 0.9 }); // ~4x the running average → peak
+        const ripples = document.querySelectorAll('.ripple');
+        expect(ripples.length).toBeGreaterThanOrEqual(1);
+        expect(ripples[0].classList.contains('red')).toBe(true);
+    });
+
+    it('classic-mode ripples keep the default (non-red) variant', () => {
+        const nowSpy = vi.spyOn(performance, 'now').mockReturnValue(1_000);
+        listeners['recording-start']({ payload: null });
+        listeners['audio-rms']({ payload: 0.01 });
+        listeners['audio-rms']({ payload: 0.01 });
+        listeners['audio-rms']({ payload: 0.01 });
+        nowSpy.mockReturnValue(1_400);
+        listeners['audio-rms']({ payload: 0.9 });
+        const ripples = document.querySelectorAll('.ripple');
+        expect(ripples.length).toBeGreaterThanOrEqual(1);
+        expect(ripples[0].classList.contains('red')).toBe(false);
+    });
+});

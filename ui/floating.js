@@ -69,6 +69,8 @@ function showRecordOnly() {
     indicator.style.background = '';
     indicator.style.boxShadow = '';
     indicator.style.transform = '';
+    indicator.style.filter = '';
+    rmsHistory = [];
     indicator.classList.remove('processing', 'error', 'exit');
     indicator.classList.add('record-only', 'visible');
     stopRecordOnlyTimer();
@@ -78,6 +80,17 @@ function showRecordOnly() {
         recordOnlySeconds += 1;
         updateRecordOnlyText();
     }, 1000);
+}
+
+// Record-only level feedback (盲录电平): brightness modulation + shared
+// peak-ripple logic. Never touches the spring/transform path — the
+// record-only look is CSS-keyframe-driven (breathe owns transform), and
+// an inline transform/background would fight the class styles that
+// showRecordOnly deliberately cleared.
+function updateRecordOnlyLevel(rms) {
+    const visualRms = remapRms(rms);
+    indicator.style.filter = `brightness(${(1 + visualRms * 0.6).toFixed(2)})`;
+    maybeRipple(rms);
 }
 
 function updateVisuals(visualRms) {
@@ -130,8 +143,13 @@ function updatePulse(rms) {
     targetScale = MIN_SCALE + visualRms * (MAX_SCALE - MIN_SCALE);
     targetScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, targetScale));
     startSpring();
+    maybeRipple(rms);
+}
 
-    // Ripple logic
+// Shared peak-ripple detection: spawns a ripple when the current rms
+// spikes above the recent running average. Used by BOTH the classic
+// spring path and the record-only brightness path.
+function maybeRipple(rms) {
     rmsHistory.push(rms);
     if (rmsHistory.length > RMS_HISTORY_LEN) rmsHistory.shift();
 
@@ -150,7 +168,11 @@ function spawnRipple() {
     if (ripples.length >= MAX_ACTIVE_RIPPLES) return;
 
     const el = document.createElement('div');
-    el.className = 'ripple';
+    // Record-only ripples are red to match the recording indicator; the
+    // jade default matches the classic accent circle.
+    el.className = indicator.classList.contains('record-only')
+        ? 'ripple red'
+        : 'ripple';
     document.body.appendChild(el);
     el.addEventListener('animationend', () => el.remove());
 }
@@ -177,6 +199,7 @@ function hide(delay = 0) {
     // Remove any lingering ripples
     document.querySelectorAll('.ripple').forEach((r) => r.remove());
     stopRecordOnlyTimer();
+    indicator.style.filter = '';
     indicator.classList.remove('visible', 'processing', 'record-only');
     indicator.classList.add('exit');
     transcriptText.textContent = '';
@@ -259,7 +282,11 @@ listen('recording-start', () => {
 });
 
 listen('audio-rms', (event) => {
-    updatePulse(event.payload);
+    if (indicator.classList.contains('record-only')) {
+        updateRecordOnlyLevel(event.payload);
+    } else {
+        updatePulse(event.payload);
+    }
 });
 
 listen('transcription-partial', (event) => {
@@ -316,12 +343,14 @@ listen('record-only-finished', (event) => {
         // >3.2s of audio — surface it as an error, not "saved".
         indicator.style.background = '';
         indicator.style.boxShadow = '';
+        indicator.style.filter = '';
         indicator.classList.add('error');
         transcriptText.textContent =
             '录音不完整已提前停止，已保存部分可在转录窗口查看';
         transcriptText.classList.add('visible', 'error');
         hide(4500);
     } else {
+        indicator.style.filter = '';
         transcriptText.textContent = '录音已保存';
         transcriptText.classList.remove('error');
         transcriptText.classList.add('visible');
@@ -337,6 +366,7 @@ listen('record-only-error', (event) => {
     indicator.classList.remove('record-only', 'processing');
     indicator.style.background = '';
     indicator.style.boxShadow = '';
+    indicator.style.filter = '';
     indicator.classList.add('error', 'visible');
     transcriptText.textContent = errorDisplayText(
         event.payload?.message,

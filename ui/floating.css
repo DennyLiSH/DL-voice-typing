@@ -64,11 +64,20 @@ html, body {
 
 /* Record-only long-session indicator: recording-red tint with a slow,
  * deliberate breathe (2s) — visually distinct from the fast processing
- * breathe (1.5s, accent-colored) and the static error state. */
+ * breathe (1.5s, accent-colored) and the static error state.
+ * The extra `filter` transition smooths the 10fps 盲录电平 brightness
+ * updates into continuous glow changes; the list must repeat the base
+ * opacity/transform entries — a lone `filter` entry would REPLACE them
+ * and break the show/hide animation for this mode (locked by
+ * __tests__/record-only-css-contract.test.js). */
 .indicator.record-only {
   background: rgba(220, 38, 38, 0.78) !important;
   border-color: rgba(248, 113, 113, 0.9);
   animation: breathe 2s ease-in-out infinite;
+  transition:
+    opacity var(--duration-medium) var(--ease-spring),
+    transform var(--duration-medium) var(--ease-spring),
+    filter 150ms ease;
 }
 
 .indicator.error {
@@ -104,6 +113,12 @@ html, body {
   box-shadow: 0 0 0 2px var(--floating-accent);
   pointer-events: none;
   animation: ripple-out 700ms ease-out forwards;
+}
+
+/* Record-only ripple variant: recording-red ring instead of the jade
+ * accent (盲录电平 peak feedback). */
+.ripple.red {
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.55);
 }
 
 /* --------------------------------------------------------------------------
