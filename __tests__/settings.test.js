@@ -3,6 +3,7 @@ import { MASKED_MARKER } from '../ui/lib/api-key-mask.js';
 import { sameSpec } from '../ui/lib/hotkeys.js';
 import {
     hasCredentialInUrl,
+    hotkeyConflictWarning,
     isConfigDirty,
     validateSettings,
 } from '../ui/lib/settings-utils.js';
@@ -336,5 +337,18 @@ describe('sameSpec (sanity check — deep coverage lives in __tests__/hotkeys.te
         expect(sameSpec(RIGHT_CTRL, RIGHT_CTRL)).toBe(true);
         expect(sameSpec(RIGHT_CTRL, RIGHT_ALT)).toBe(false);
         expect(sameSpec(F1, F9)).toBe(false);
+    });
+});
+
+describe('hotkeyConflictWarning', () => {
+    it('flags F1 and F12 with actionable copy', () => {
+        expect(hotkeyConflictWarning('F1')).toContain('帮助');
+        expect(hotkeyConflictWarning('F12')).toContain('开发者工具');
+    });
+
+    it('returns null for other F-keys and letters', () => {
+        expect(hotkeyConflictWarning('F5')).toBeNull();
+        expect(hotkeyConflictWarning('B')).toBeNull();
+        expect(hotkeyConflictWarning('')).toBeNull();
     });
 });

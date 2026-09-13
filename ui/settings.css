@@ -1161,3 +1161,8 @@ button:disabled {
     overflow-wrap: anywhere;
     white-space: pre-line;
 }
+
+/* F1/F12 conflict warning under the combo preview (Round 5 Minor) */
+.hotkey-warning {
+  margin-top: var(--space-1);
+}

@@ -65,6 +65,8 @@ export async function switchPage(pageName) {
         onDataPageEnter();
     } else if (pageName === 'help') {
         refreshErrorHistory();
+    } else if (pageName === 'model') {
+        loadComputeMode();
     }
 }
 

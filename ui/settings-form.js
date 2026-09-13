@@ -12,6 +12,7 @@ import {
 import { SETTINGS_FIELDS } from './lib/settings-schema.js';
 import {
     hasCredentialInUrl,
+    hotkeyConflictWarning,
     isConfigDirty,
     validateSettings,
 } from './lib/settings-utils.js';
@@ -424,6 +425,22 @@ function updateHotkeyPreview(prefix) {
     const spec = specFromUI(prefix);
     el.textContent =
         spec.vk === 0 ? '未选择主键' : `当前组合：${specLabel(spec)}`;
+    updateHotkeyWarning(prefix);
+}
+
+/**
+ * F1/F12 conflict warning under the combo preview. Refreshed from the same
+ * funnel as the preview label (init populateFields + the 8 change
+ * handlers), so a config that loads F12 shows the warning immediately.
+ */
+function updateHotkeyWarning(prefix) {
+    const warn = document.getElementById(`${prefix}-warning`);
+    if (!warn) return;
+    const warning = hotkeyConflictWarning(
+        document.getElementById(prefix)?.value ?? '',
+    );
+    warn.hidden = !warning;
+    warn.textContent = warning ?? '';
 }
 
 // Show the plaintext-persistence warning when the URL embeds credential-like

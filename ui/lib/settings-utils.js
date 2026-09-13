@@ -88,3 +88,19 @@ export function validateSettings(config, modelStatus) {
     }
     return { valid: true, error: null };
 }
+
+/**
+ * Conflict warning for combo-form main keys that other software commonly
+ * claims (Round 5 Minor: the select offered F1/F12 with no warning).
+ * Returns null when the key has no known conflict risk.
+ */
+export function hotkeyConflictWarning(keyName) {
+    const risks = {
+        F1: '多数程序用作「帮助」键',
+        F12: '浏览器的「开发者工具」键',
+    };
+    const risk = risks[keyName];
+    return risk
+        ? `「${keyName}」是${risk}，容易被其他程序抢占，建议更换主键`
+        : null;
+}

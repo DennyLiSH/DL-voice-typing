@@ -123,6 +123,7 @@ whisperModelSelect.addEventListener('change', () => {
 export async function loadComputeMode() {
     const badge = document.getElementById('compute-mode-badge');
     try {
+        badge.title = '';
         const mode = await call('get_compute_mode');
         if (mode === 'gpu') {
             badge.textContent = 'GPU 加速';
@@ -137,6 +138,7 @@ export async function loadComputeMode() {
     } catch (_e) {
         badge.textContent = '检测失败';
         badge.className = 'mode-badge unloaded';
+        badge.title = '检测失败：切到其他设置页再切回本页可重试';
     }
 }
 
