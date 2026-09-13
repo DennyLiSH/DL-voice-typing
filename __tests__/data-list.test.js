@@ -421,7 +421,7 @@ describe('Data list — audio playback contract', () => {
         const row = buildRecordingRow(missing);
         expect(row.querySelector('.btn-play')).toBeNull();
         expect(row.querySelector('.audio-missing-badge').textContent).toBe(
-            '音频缺失',
+            '音频文件缺失',
         );
     });
 });

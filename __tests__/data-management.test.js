@@ -237,7 +237,7 @@ describe('buildRecordingRow', () => {
         const row = buildRecordingRow(entry);
         expect(row.querySelector('.btn-play')).toBeNull();
         expect(row.querySelector('.audio-missing-badge').textContent).toBe(
-            '音频缺失',
+            '音频文件缺失',
         );
         // Variant hook for the CSS preview-floor override (442px row budget).
         expect(row.classList.contains('audio-missing')).toBe(true);
