@@ -804,6 +804,12 @@ fn sweep_junction_rejected_by_ensure_inside_guard() {
         victim.exists(),
         "external victim file must survive: sweep must not delete across the junction boundary"
     );
+    // The junction entry itself must also survive: the guard aborts on
+    // ensure_inside failure — it never removes the reparse point either.
+    assert!(
+        pending_link.exists(),
+        "junction entry must remain: sweep must abort, not partially dismantle the link"
+    );
 
     // Explicit three-step cleanup (same convention as the soft-delete
     // sister test above).
