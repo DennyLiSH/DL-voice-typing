@@ -12,7 +12,7 @@
         "format": "biome check --write ."
     },
     "devDependencies": {
-        "@biomejs/biome": "~2.0",
+        "@biomejs/biome": "~2.5",
         "jsdom": "^29.1.1",
         "vitest": "^4.1.9"
     }
