@@ -387,7 +387,7 @@ impl fmt::Debug for AppConfig {
             .field("llm_enabled", &self.llm_enabled)
             .field(
                 "llm_api_url",
-                &crate::llm::redact_query_credentials(&self.llm_api_url),
+                &crate::llm::redact_error_detail(&self.llm_api_url, &self.llm_api_key),
             )
             .field(
                 "llm_api_key",
@@ -700,6 +700,22 @@ mod tests {
         assert!(dbg.contains("v1?key=***"));
         assert!(!dbg.contains("SECRET"));
         assert!(dbg.contains("model=gpt"));
+    }
+
+    #[test]
+    fn test_debug_redacts_unlisted_param_carrying_api_key() {
+        // Layer 2: a query param NAME outside the 11-word list whose VALUE
+        // equals the configured key must still be masked in {:?} output.
+        let config = AppConfig {
+            llm_api_url: "https://api.example.com/v1?sig=sk-live-abc123".to_string(),
+            llm_api_key: "sk-live-abc123".to_string(),
+            ..Default::default()
+        };
+        let dbg = format!("{config:?}");
+        assert!(
+            !dbg.contains("sk-live-abc123"),
+            "unlisted param name must not leak the key value: {dbg}"
+        );
     }
 
     #[test]
