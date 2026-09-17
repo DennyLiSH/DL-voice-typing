@@ -318,7 +318,6 @@ fn name_matches_credential_word(name: &str) -> bool {
 pub(crate) fn url_contains_credential_query(url: &str) -> bool {
     url.split(['?', '#', '&'])
         .skip(1)
-        .flat_map(|segment| segment.split('&'))
         .any(|pair| name_matches_credential_word(pair.split('=').next().unwrap_or_default()))
 }
 
