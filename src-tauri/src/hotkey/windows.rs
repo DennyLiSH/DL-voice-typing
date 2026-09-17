@@ -520,9 +520,8 @@ unsafe extern "system" fn keyboard_hook_proc(
                 Some(HookAction::EscCancel(cb)) => {
                     // Lock released — call outside (pre-existing convention:
                     // user callbacks may dispatch window calls / emit events).
-                    let has_slot = true;
                     let handled = cb();
-                    if esc_should_swallow(has_slot, true, handled) {
+                    if esc_should_swallow(true, true, handled) {
                         // SAFETY: swallow this Esc — the focused app must not
                         // receive the same key-press that just cancelled its
                         // transcription.
