@@ -385,7 +385,10 @@ impl fmt::Debug for AppConfig {
             .field("language", &self.language)
             .field("whisper_model", &self.whisper_model)
             .field("llm_enabled", &self.llm_enabled)
-            .field("llm_api_url", &self.llm_api_url)
+            .field(
+                "llm_api_url",
+                &crate::llm::redact_query_credentials(&self.llm_api_url),
+            )
             .field(
                 "llm_api_key",
                 &if self.llm_api_key.is_empty() {
@@ -685,6 +688,27 @@ mod tests {
         // Empty key should show as "" not "******"
         assert!(!debug_str.contains("******"));
         assert!(debug_str.contains("llm_api_key"));
+    }
+
+    #[test]
+    fn test_debug_masks_llm_api_url_query_credentials() {
+        let config = AppConfig {
+            llm_api_url: "https://api.example.com/v1?key=SECRET&model=gpt".to_string(),
+            ..Default::default()
+        };
+        let dbg = format!("{config:?}");
+        assert!(dbg.contains("v1?key=***"));
+        assert!(!dbg.contains("SECRET"));
+        assert!(dbg.contains("model=gpt"));
+    }
+
+    #[test]
+    fn test_debug_keeps_plain_llm_api_url() {
+        let config = AppConfig {
+            llm_api_url: "https://api.example.com/v1".to_string(),
+            ..Default::default()
+        };
+        assert!(format!("{config:?}").contains("https://api.example.com/v1"));
     }
 
     #[test]
