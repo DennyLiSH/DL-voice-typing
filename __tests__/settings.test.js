@@ -77,6 +77,24 @@ describe('isConfigDirty', () => {
         expect(isConfigDirty(current, baseConfig)).toBe(true);
     });
 
+    it('returns true when llm_api_url differs', () => {
+        const current = {
+            ...baseConfig,
+            llm_api_url: 'https://api.example.com/v1',
+        };
+        expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
+
+    it('returns true when llm_model differs', () => {
+        const current = { ...baseConfig, llm_model: 'gpt-4o-mini' };
+        expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
+
+    it('returns true when data_saving_path differs', () => {
+        const current = { ...baseConfig, data_saving_path: 'D:\\recordings' };
+        expect(isConfigDirty(current, baseConfig)).toBe(true);
+    });
+
     it('returns false when API key is masked', () => {
         const loaded = { ...baseConfig, llm_api_key: MASKED_MARKER };
         const current = { ...baseConfig, llm_api_key: MASKED_MARKER };
