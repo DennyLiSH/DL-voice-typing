@@ -54,7 +54,8 @@ impl AppConfig {
     fn for_disk(&self) -> Result<Self, AppError> {
         let mut for_disk = self.clone();
         if !for_disk.llm_api_key.is_empty() {
-            for_disk.llm_api_key = crypto::encrypt(&for_disk.llm_api_key)?;
+            for_disk.llm_api_key = crypto::encrypt(&for_disk.llm_api_key)
+                .map_err(|e| AppError::Crypto(format!("llm_api_key encrypt failed: {e}")))?;
         }
         if !for_disk.llm_api_url.is_empty()
             && crate::llm::url_contains_credential_query(&for_disk.llm_api_url)
@@ -75,7 +76,8 @@ impl AppConfig {
     /// silent degradation).
     fn decrypt_at_load(&mut self) -> Result<(), AppError> {
         if !self.llm_api_key.is_empty() && crypto::is_encrypted(&self.llm_api_key) {
-            self.llm_api_key = crypto::decrypt(&self.llm_api_key)?;
+            self.llm_api_key = crypto::decrypt(&self.llm_api_key)
+                .map_err(|e| AppError::Crypto(format!("llm_api_key decrypt failed: {e}")))?;
         }
         if !self.llm_api_url.is_empty() && crypto::is_encrypted(&self.llm_api_url) {
             self.llm_api_url = crypto::decrypt(&self.llm_api_url)
