@@ -92,8 +92,9 @@ pub async fn transcribe_recording(
 /// errored "没有进行中的转录任务" and the transcription then ran to
 /// completion (E2E 2026-09-12). Validation + read live INSIDE the blocking
 /// task (a 30-min recording is ~55 MB — the async runtime must not block),
-/// so validation errors surface after the slot is released: no manual
-/// end_transcription on early-error paths.
+/// so validation errors surface after the slot is released. Release is
+/// RAII (`TranscribeSlotGuard`): every exit path — including the future
+/// being dropped mid-await — frees the slot.
 async fn transcribe_impl(
     pt: &PendingTranscribe,
     ps: PipelineState,
@@ -101,6 +102,7 @@ async fn transcribe_impl(
     use_llm: bool,
 ) -> Result<(), CommandError> {
     let token = begin_transcription(pt)?;
+    let _slot = TranscribeSlotGuard(pt);
     let token_for_task = token.clone();
     let join = tokio::task::spawn_blocking(move || -> Result<(), CommandError> {
         let base = recordings_base_dir(&ps)?;
@@ -118,7 +120,6 @@ async fn transcribe_impl(
         Ok(())
     })
     .await;
-    end_transcription(pt);
     match join {
         Ok(result) => result,
         Err(join_err) => Err(CommandError::new(
@@ -308,6 +309,17 @@ fn begin_transcription(pt: &PendingTranscribe) -> Result<Arc<AtomicBool>, Comman
 fn end_transcription(pt: &PendingTranscribe) {
     if let Some(mut guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token") {
         guard.take();
+    }
+}
+
+/// RAII release for the in-flight slot: Drop runs on every exit path,
+/// including the command future being dropped mid-await (e.g. window
+/// closed) — the manual post-await call could not cover that.
+struct TranscribeSlotGuard<'a>(&'a PendingTranscribe);
+
+impl Drop for TranscribeSlotGuard<'_> {
+    fn drop(&mut self) {
+        end_transcription(self.0);
     }
 }
 
@@ -669,6 +681,17 @@ mod tests {
         end_transcription(&pt);
         let third = begin_transcription(&pt);
         assert!(third.is_ok());
+    }
+
+    #[test]
+    fn test_slot_guard_releases_on_drop() {
+        let pt = PendingTranscribe::new();
+        let _token = begin_transcription(&pt).expect("first claim succeeds");
+        {
+            let _slot = TranscribeSlotGuard(&pt);
+        } // guard dropped here — must free the slot
+        let again = begin_transcription(&pt);
+        assert!(again.is_ok(), "slot must be free after guard drop");
     }
 
     #[test]
