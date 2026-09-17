@@ -22,9 +22,10 @@ impl AppConfig {
     }
 
     /// Load config from disk. Returns default if file doesn't exist.
-    /// Returns default + logs warning if file is corrupt.
-    /// Automatically decrypts DPAPI-encrypted API keys; plaintext keys
-    /// are left as-is (migrated to encrypted on next save).
+    /// A corrupt file propagates Err; the caller (lib.rs) falls back to
+    /// defaults with a warning.
+    /// Automatically decrypts DPAPI-encrypted API keys / API URLs;
+    /// plaintext values are left as-is (migrated to encrypted on next save).
     pub fn load() -> Result<Self, AppError> {
         let path = Self::config_path()?;
         if !path.exists() {
@@ -32,27 +33,54 @@ impl AppConfig {
         }
         let content = fs::read_to_string(&path)?;
         let mut config: AppConfig = serde_json::from_str(&content)?;
-
-        // Decrypt API key if encrypted; plaintext keys stay as-is (auto-migrate on next save).
-        if !config.llm_api_key.is_empty() && crypto::is_encrypted(&config.llm_api_key) {
-            config.llm_api_key = crypto::decrypt(&config.llm_api_key)?;
-        }
-
+        config.decrypt_at_load()?;
         Ok(config)
     }
 
-    /// Save config to disk. The API key is encrypted via DPAPI before writing.
+    /// Save config to disk. The API key is encrypted via DPAPI before
+    /// writing; the API URL is encrypted too when it embeds query
+    /// credentials (ordinary URLs stay human-readable in config.json).
     pub fn save(&self) -> Result<(), AppError> {
         let dir = Self::config_dir()?;
         fs::create_dir_all(&dir)?;
+        let content = serde_json::to_string_pretty(&self.for_disk()?)?;
+        fs::write(Self::config_path()?, content)?;
+        Ok(())
+    }
 
+    /// Compute the on-disk representation: DPAPI-encrypt the API key, and
+    /// the API URL when it embeds query credentials (conditional
+    /// encryption keeps ordinary URLs human-readable in config.json).
+    fn for_disk(&self) -> Result<Self, AppError> {
         let mut for_disk = self.clone();
         if !for_disk.llm_api_key.is_empty() {
             for_disk.llm_api_key = crypto::encrypt(&for_disk.llm_api_key)?;
         }
+        if !for_disk.llm_api_url.is_empty()
+            && crate::llm::url_contains_credential_query(&for_disk.llm_api_url)
+        {
+            for_disk.llm_api_url = crypto::encrypt(&for_disk.llm_api_url)
+                .map_err(|e| AppError::Crypto(format!("llm_api_url encrypt failed: {e}")))?;
+            tracing::info!(target: "config", "llm_api_url encrypted at rest (credential query detected)");
+        }
+        Ok(for_disk)
+    }
 
-        let content = serde_json::to_string_pretty(&for_disk)?;
-        fs::write(Self::config_path()?, content)?;
+    /// Decrypt DPAPI-encrypted fields in place (API key; API URL when
+    /// conditionally encrypted). Plaintext values are left as-is
+    /// (auto-migrate on next save). A failing blob (e.g. config.json
+    /// copied from another machine/user) propagates Err; on load()
+    /// failure lib.rs falls back to full defaults — accepted per the
+    /// 2026-09-17 security-hardening decision (Prefer Errors over
+    /// silent degradation).
+    fn decrypt_at_load(&mut self) -> Result<(), AppError> {
+        if !self.llm_api_key.is_empty() && crypto::is_encrypted(&self.llm_api_key) {
+            self.llm_api_key = crypto::decrypt(&self.llm_api_key)?;
+        }
+        if !self.llm_api_url.is_empty() && crypto::is_encrypted(&self.llm_api_url) {
+            self.llm_api_url = crypto::decrypt(&self.llm_api_url)
+                .map_err(|e| AppError::Crypto(format!("llm_api_url decrypt failed: {e}")))?;
+        }
         Ok(())
     }
 }
@@ -145,14 +173,12 @@ mod tests {
 
     #[test]
     fn test_save_encrypts_api_key() -> Result<(), Box<dyn std::error::Error>> {
-        // save() encrypts the key via DPAPI before writing to JSON.
+        // for_disk() is the save() pre-write step: the key is DPAPI-encrypted.
         let config = AppConfig {
             llm_api_key: "sk-test-secret-key".to_string(),
             ..Default::default()
         };
-        // Clone config and encrypt key manually (same logic as save()).
-        let mut for_disk = config.clone();
-        for_disk.llm_api_key = crate::crypto::encrypt(&for_disk.llm_api_key)?;
+        let for_disk = config.for_disk()?;
         let json = serde_json::to_string(&for_disk)?;
         let parsed: serde_json::Value = serde_json::from_str(&json)?;
         let stored_key = parsed["llm_api_key"]
@@ -183,21 +209,12 @@ mod tests {
     #[test]
     fn test_load_decrypts_encrypted_key() -> Result<(), Box<dyn std::error::Error>> {
         let encrypted = crate::crypto::encrypt("sk-test-key")?;
-        let config = AppConfig {
+        let mut config = AppConfig {
             llm_api_key: encrypted,
             ..Default::default()
         };
-        let json = serde_json::to_string_pretty(&config)?;
-
-        // Parse it back as if loading from disk — but we need to parse
-        // without the save() encryption step.
-        // The key in json is still DPAPI:... because we bypassed save()
-        // Simulate load behavior manually:
-        let mut loaded: AppConfig = serde_json::from_str(&json)?;
-        if !loaded.llm_api_key.is_empty() && crate::crypto::is_encrypted(&loaded.llm_api_key) {
-            loaded.llm_api_key = crate::crypto::decrypt(&loaded.llm_api_key)?;
-        }
-        assert_eq!(loaded.llm_api_key, "sk-test-key");
+        config.decrypt_at_load()?;
+        assert_eq!(config.llm_api_key, "sk-test-key");
         Ok(())
     }
 
@@ -208,6 +225,68 @@ mod tests {
         let config: AppConfig = serde_json::from_str(json)?;
         assert_eq!(config.llm_api_key, "sk-plaintext-legacy");
         Ok(())
+    }
+
+    #[test]
+    fn test_for_disk_conditionally_encrypts_api_url_with_query_credential()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let config = AppConfig {
+            llm_api_url: "https://x.com/v1?key=abc&model=gpt".to_string(),
+            ..Default::default()
+        };
+        let for_disk = config.for_disk()?;
+        assert!(for_disk.llm_api_url.starts_with("DPAPI:"));
+        // Roundtrip via the load-side decrypt branch.
+        let mut loaded = for_disk;
+        loaded.decrypt_at_load()?;
+        assert_eq!(loaded.llm_api_url, "https://x.com/v1?key=abc&model=gpt");
+        Ok(())
+    }
+
+    #[test]
+    fn test_for_disk_keeps_plain_api_url_plaintext() -> Result<(), Box<dyn std::error::Error>> {
+        let config = AppConfig {
+            llm_api_url: "https://api.example.com/v1".to_string(),
+            ..Default::default()
+        };
+        let for_disk = config.for_disk()?;
+        assert_eq!(for_disk.llm_api_url, "https://api.example.com/v1");
+        Ok(())
+    }
+
+    #[test]
+    fn test_for_disk_skips_empty_api_url() -> Result<(), Box<dyn std::error::Error>> {
+        let config = AppConfig {
+            llm_api_url: String::new(),
+            ..Default::default()
+        };
+        let for_disk = config.for_disk()?;
+        assert_eq!(for_disk.llm_api_url, "");
+        Ok(())
+    }
+
+    #[test]
+    fn test_decrypt_at_load_preserves_plaintext_credential_url() {
+        // Old configs saved by previous versions store credential URLs in
+        // plaintext — load must keep them as-is (auto-migrate on next save).
+        let mut config = AppConfig {
+            llm_api_url: "https://x.com/v1?key=abc".to_string(),
+            ..Default::default()
+        };
+        config.decrypt_at_load().unwrap();
+        assert_eq!(config.llm_api_url, "https://x.com/v1?key=abc");
+    }
+
+    #[test]
+    fn test_decrypt_at_load_propagates_decrypt_error() {
+        // A DPAPI blob that fails to decrypt (e.g. config.json copied from
+        // another machine/user) propagates Err from load(); on load failure
+        // lib.rs falls back to full defaults (accepted consequence chain).
+        let mut config = AppConfig {
+            llm_api_url: "DPAPI:!!!invalid-base64!!!".to_string(),
+            ..Default::default()
+        };
+        assert!(config.decrypt_at_load().is_err());
     }
 
     #[test]

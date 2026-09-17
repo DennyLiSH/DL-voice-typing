@@ -309,6 +309,19 @@ fn name_matches_credential_word(name: &str) -> bool {
         })
 }
 
+/// True when the LLM API URL embeds credential-like query/fragment params
+/// (e.g. Gemini-style `?key=…`). Rust counterpart of the frontend warn
+/// check `ui/lib/settings-utils.js::hasCredentialInUrl` (keep both in
+/// sync): segments after `?`/`#`/`&`, each param name (before
+/// `=`) is token-matched against [`CREDENTIAL_QUERY_WORDS`]. Used to
+/// conditionally DPAPI-encrypt `llm_api_url` at save time.
+pub(crate) fn url_contains_credential_query(url: &str) -> bool {
+    url.split(['?', '#', '&'])
+        .skip(1)
+        .flat_map(|segment| segment.split('&'))
+        .any(|pair| name_matches_credential_word(pair.split('=').next().unwrap_or_default()))
+}
+
 /// Mock corrector for testing.
 pub struct MockCorrector {
     response: String,
@@ -516,6 +529,38 @@ mod tests {
             redact_error_detail("http://x?key=密钥值&next=1", ""),
             "http://x?key=***&next=1"
         );
+    }
+
+    #[test]
+    fn test_url_contains_credential_query_detected() {
+        assert!(url_contains_credential_query("https://x.com/v1?key=abc"));
+        assert!(url_contains_credential_query(
+            "https://x.com/v1/chat?client_secret=abc&x=1"
+        ));
+        assert!(url_contains_credential_query(
+            "https://x.com/v1#access-token=abc"
+        ));
+        assert!(url_contains_credential_query(
+            "https://x.com/v1?API-KEY=abc"
+        ));
+        // Pathological URL with a leading `&`-separated param (no `?`):
+        // the frontend treats `&` as a top-level separator — so must the
+        // detector (splitting on `&` too keeps the sync promise true).
+        assert!(url_contains_credential_query("http://x.com/v1&key=SECRET"));
+    }
+
+    #[test]
+    fn test_url_contains_credential_query_clean_urls() {
+        assert!(!url_contains_credential_query("https://api.example.com/v1"));
+        assert!(!url_contains_credential_query(
+            "https://x.com/v1?error_code=E1&status_code=200"
+        ));
+        assert!(!url_contains_credential_query(
+            "https://x.com/v1?keyboard=dell&monkey=none&author=me"
+        ));
+        // `&` in a path segment (no `=`-bearing credential param after it).
+        assert!(!url_contains_credential_query("https://x.com/a&b/c"));
+        assert!(!url_contains_credential_query(""));
     }
 
     /// `)` is deliberately not a value terminator: reqwest wraps URLs as
