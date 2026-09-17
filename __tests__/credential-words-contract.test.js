@@ -21,8 +21,9 @@ function backendWords() {
     );
     expect(m, 'CREDENTIAL_QUERY_WORDS not found in llm/mod.rs').not.toBeNull();
     const words = [...m[2].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
-    expect(words.length, 'declared array length must match scraped words')
-        .toBe(Number(m[1]));
+    expect(words.length, 'declared array length must match scraped words').toBe(
+        Number(m[1]),
+    );
     return new Set(words);
 }
 
@@ -34,8 +35,10 @@ describe('credential-words FFI contract', () => {
             expect(backend.has(word), `missing in backend: ${word}`).toBe(true);
         }
         for (const word of backend) {
-            expect(CREDENTIAL_WORDS.has(word), `missing in frontend: ${word}`)
-                .toBe(true);
+            expect(
+                CREDENTIAL_WORDS.has(word),
+                `missing in frontend: ${word}`,
+            ).toBe(true);
         }
     });
 });
