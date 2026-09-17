@@ -15,7 +15,7 @@ export function isConfigDirty(current, loaded) {
     );
 }
 
-const CREDENTIAL_WORDS = new Set([
+export const CREDENTIAL_WORDS = new Set([
     'key',
     'apikey',
     'token',
@@ -31,12 +31,14 @@ const CREDENTIAL_WORDS = new Set([
 
 /**
  * Detect credential-like query/fragment params embedded in the LLM API URL.
- * Such URLs are persisted to config.json in plaintext (DPAPI covers only
- * llm_api_key), so the user should move the key to the dedicated field.
+ * Such URLs are conditionally DPAPI-encrypted at save time (backend
+ * `url_contains_credential_query`); the warning still recommends moving
+ * the key to the dedicated field.
  * Param names are split on non-alphanumerics, then matched exactly —
  * `keyboard`/`monkey`/`author` must NOT match.
- * Bare-word counterpart of the backend log-redaction list
- * `src-tauri/src/llm/mod.rs::REDACT_QUERY_KEYS` (keep both in sync).
+ * Word-level counterpart of the backend redaction list
+ * `src-tauri/src/llm/mod.rs::CREDENTIAL_QUERY_WORDS` (sync guarded by
+ * `__tests__/credential-words-contract.test.js`).
  */
 export function hasCredentialInUrl(url) {
     const segments = url.split(/[?&#]/).slice(1);
