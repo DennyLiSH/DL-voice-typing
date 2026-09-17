@@ -17,5 +17,5 @@ if (-not (Test-Path $vcvars)) {
     exit 1
 }
 
-Set-Location "D:\NC_Work\___DL\voice-typing\src-tauri"
+Set-Location (Join-Path $PSScriptRoot "..\src-tauri")
 cmd /c "`"$vcvars`" x64 && cargo $CargoArgs"
