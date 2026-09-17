@@ -184,29 +184,34 @@ impl TextCorrector for LLMClient {
     }
 }
 
-/// Query parameter names whose values are treated as credentials when they
-/// appear in logged LLM error strings. reqwest's Display embeds the full
-/// request URL, so a key placed in the `api_url` query (some OpenAI-compatible
-/// endpoints accept `?key=…`) would otherwise reach the plaintext log file.
+/// Credential-like words for query-param redaction. When any word appears
+/// as a token of a `?name=value` / `&name=value` / `#name=value`
+/// parameter name (name is
+/// split on non-alphanumerics, ASCII-case-insensitive), the value is
+/// replaced with `***` before the string reaches the plaintext log file —
+/// reqwest's Display embeds the full request URL, so a key placed in the
+/// `api_url` query (some OpenAI-compatible endpoints accept `?key=…`)
+/// would otherwise leak.
 ///
-/// Word-level aligned with the frontend warn list
-/// `ui/lib/settings-utils.js::CREDENTIAL_WORDS` (bare words only): the match
-/// below is exact-parameter-name (`eq_ignore_ascii_case`), so compound names
-/// (`client_secret`) and hyphenated forms (`api-key`, truncated at the span
-/// boundary) still escape — known residual, tracked in TODO.md.
+/// Token-split aligned with the frontend warn list
+/// `ui/lib/settings-utils.js::CREDENTIAL_WORDS` (sync guarded by
+/// `__tests__/credential-words-contract.test.js`): compound names
+/// (`client_secret`) and hyphenated forms (`api-key`) match via their
+/// tokens (`api_key` → [`api`, `key`]). `code` is deliberately NOT in the
+/// list: token matching would also hit `error_code`/`status_code`
+/// diagnostic params; the short-lived OAuth authorization-code residual
+/// is accepted (spec 2026-09-17). Parameters outside the list (e.g.
+/// `sig`/`hmac`) are a known boundary — layer 2 below only catches values
+/// equal to the configured key.
 ///
-/// Conservative allowlist: layer 2 of `redact_error_detail` (api_key value
-/// replace) catches unlisted parameter names whose value equals the
-/// configured key. `code` may over-redact non-credential parameters (status
-/// or language codes) — over-redaction is the safe direction; do NOT remove
-/// a marker on a false-positive report, tighten the match instead.
-const REDACT_QUERY_KEYS: [&str; 14] = [
+/// Layer 2 of `redact_error_detail` (api_key value replace) catches
+/// unlisted parameter names whose value equals the configured key.
+/// Over-redaction is the safe direction; do NOT remove a marker on a
+/// false-positive report, tighten the match instead.
+const CREDENTIAL_QUERY_WORDS: [&str; 11] = [
     "key",
     "apikey",
-    "api_key",
     "token",
-    "access_token",
-    "code",
     "secret",
     "password",
     "signature",
@@ -218,8 +223,9 @@ const REDACT_QUERY_KEYS: [&str; 14] = [
 ];
 
 /// Redact an LLM error string before it reaches the tracing log:
-/// 1. replace `?name=value` / `&name=value` query credentials (name in
-///    [`REDACT_QUERY_KEYS`], ASCII-case-insensitive) with `***`;
+/// 1. replace `?name=value` / `&name=value` / `#name=value` query/fragment
+///    credentials (token of `name` matches [`CREDENTIAL_QUERY_WORDS`],
+///    ASCII-case-insensitive) with `***`;
 /// 2. replace any occurrence of `api_key` with `[REDACTED]` (skipped when
 ///    empty — `str::replace("", x)` would insert between every char);
 /// 3. truncate to 500 chars (multi-byte safe, applied last so truncation
@@ -238,24 +244,31 @@ pub(crate) fn redact_error_detail(s: &str, api_key: &str) -> String {
 /// `&`, ASCII whitespace, or end of string — `)` is deliberately NOT a
 /// terminator: reqwest wraps URLs as `url (…)`, so swallowing a trailing `)`
 /// only hurts log readability (the safe direction). Cutting at `)` instead
-/// would leak values that legitimately contain `)`.
-fn redact_query_credentials(s: &str) -> String {
+/// would leak values that legitimately contain `)`. The parameter name
+/// runs to the next `=`/`&`/`?`/`#`/ASCII whitespace — an exclusion set,
+/// so names containing other punctuation (e.g. `api.key`) still reach the
+/// tokenizer, keeping this layer aligned with the detector and the
+/// frontend warn check.
+pub(crate) fn redact_query_credentials(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0usize;
     while i < bytes.len() {
         let b = bytes[i];
-        if b == b'?' || b == b'&' {
+        if b == b'?' || b == b'&' || b == b'#' {
             let mut j = i + 1;
-            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+            while j < bytes.len()
+                && !(bytes[j] == b'='
+                    || bytes[j] == b'&'
+                    || bytes[j] == b'?'
+                    || bytes[j] == b'#'
+                    || bytes[j].is_ascii_whitespace())
+            {
                 j += 1;
             }
             if j < bytes.len() && bytes[j] == b'=' {
                 let name = &s[i + 1..j];
-                if REDACT_QUERY_KEYS
-                    .iter()
-                    .any(|k| name.eq_ignore_ascii_case(k))
-                {
+                if name_matches_credential_word(name) {
                     out.push(b as char);
                     out.push_str(name);
                     out.push('=');
@@ -281,6 +294,19 @@ fn redact_query_credentials(s: &str) -> String {
         i += size;
     }
     out
+}
+
+/// True when any non-alphanumeric-separated token of `name` matches a
+/// [`CREDENTIAL_QUERY_WORDS`] entry (ASCII-case-insensitive):
+/// `client_secret` → [`client`, `secret`] hits; `keyboard`/`monkey`/
+/// `author` must not.
+fn name_matches_credential_word(name: &str) -> bool {
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|word| {
+            CREDENTIAL_QUERY_WORDS
+                .iter()
+                .any(|k| word.eq_ignore_ascii_case(k))
+        })
 }
 
 /// Mock corrector for testing.
@@ -376,16 +402,13 @@ mod tests {
     /// removed (function and tests narrow together and stay green) — pin the
     /// list itself so deleting a marker becomes a visible test change.
     #[test]
-    fn test_redact_query_keys_content_pinned() {
+    fn test_credential_query_words_content_pinned() {
         assert_eq!(
-            REDACT_QUERY_KEYS,
+            CREDENTIAL_QUERY_WORDS,
             [
                 "key",
                 "apikey",
-                "api_key",
                 "token",
-                "access_token",
-                "code",
                 "secret",
                 "password",
                 "signature",
@@ -400,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_redact_all_markers_both_prefixes() {
-        for name in REDACT_QUERY_KEYS {
+        for name in CREDENTIAL_QUERY_WORDS {
             for prefix in ['?', '&'] {
                 let input = format!("http://x/v1{prefix}{name}=SECRET&next=1");
                 let out = redact_error_detail(&input, "");
@@ -431,6 +454,67 @@ mod tests {
         assert_eq!(
             redact_error_detail("http://x?key=A1B2&other=2", ""),
             "http://x?key=***&other=2"
+        );
+    }
+
+    #[test]
+    fn test_redact_token_split_matches_compound_and_hyphenated_names() {
+        assert_eq!(
+            redact_error_detail("http://x?client_secret=SECRET&next=1", ""),
+            "http://x?client_secret=***&next=1"
+        );
+        assert_eq!(
+            redact_error_detail("http://x?api-key=SECRET", ""),
+            "http://x?api-key=***"
+        );
+        assert_eq!(
+            redact_error_detail("http://x&X-API-Key=SECRET", ""),
+            "http://x&X-API-Key=***"
+        );
+        // Name characters outside [_-] (e.g. `.`): the detector and the
+        // frontend tokenize on ANY non-alphanumeric, so the scanner's name
+        // collection must not stop early — layer alignment.
+        assert_eq!(
+            redact_error_detail("http://x?api.key=SECRET&next=1", ""),
+            "http://x?api.key=***&next=1"
+        );
+    }
+
+    #[test]
+    fn test_redact_token_split_does_not_match_non_credential_names() {
+        // `code` was removed from the list: diagnostic params stay readable.
+        assert_eq!(
+            redact_error_detail("http://x?error_code=E1&status_code=200", ""),
+            "http://x?error_code=E1&status_code=200"
+        );
+        assert_eq!(
+            redact_error_detail("http://x?keyboard=dell&monkey=none&author=me", ""),
+            "http://x?keyboard=dell&monkey=none&author=me"
+        );
+    }
+
+    #[test]
+    fn test_redact_fragment_credential_params() {
+        // `#` is part of the credential surface: the detector and the
+        // frontend treat fragment params as credential-bearing, so the
+        // redaction scanner must cover the same prefix.
+        assert_eq!(
+            redact_error_detail("http://x#access-token=SECRET&next=1", ""),
+            "http://x#access-token=***&next=1"
+        );
+        assert_eq!(
+            redact_error_detail("http://x#key=SECRET", ""),
+            "http://x#key=***"
+        );
+    }
+
+    #[test]
+    fn test_redact_multibyte_value_runs_to_amp_boundary() {
+        // The value-scan loop skips to char boundaries — guard it with a
+        // multi-byte value (a non-boundary slice would panic).
+        assert_eq!(
+            redact_error_detail("http://x?key=密钥值&next=1", ""),
+            "http://x?key=***&next=1"
         );
     }
 
