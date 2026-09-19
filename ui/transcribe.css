@@ -60,8 +60,7 @@ body {
 }
 
 .rec-row.selected {
-    background: var(--sidebar-active-bg);
-    box-shadow: inset 2px 0 0 var(--accent);
+    background: rgba(var(--accent-rgb), 0.18);
 }
 
 .rec-row.disabled {

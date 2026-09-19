@@ -196,3 +196,21 @@ describe('input treatment uniformity', () => {
         expect(blockOf(css, '#merged:focus')).toContain('var(--accent)');
     });
 });
+
+describe('list row state uniformity', () => {
+    it('selected rows use accent tint, not a side-stripe', () => {
+        const css = read('../ui/transcribe.css');
+        const block = blockOf(css, '.rec-row.selected {');
+        expect(block).not.toContain('inset 2px');
+        expect(block).toContain('rgba(var(--accent-rgb), 0.18)');
+    });
+
+    it('row hover is neutral surface, accent reserved for selection', () => {
+        expect(
+            blockOf(read('../ui/settings.css'), '.data-row:hover {'),
+        ).toContain('var(--surface-hover)');
+        expect(
+            blockOf(read('../ui/transcribe.css'), '.rec-row:hover {'),
+        ).toContain('var(--surface-hover)');
+    });
+});
