@@ -745,7 +745,7 @@ select:disabled, input:disabled {
     color: var(--text-primary);
     box-shadow: var(--shadow-lg);
     font-size: var(--font-label);
-    animation: status-pop 300ms var(--ease-spring, ease);
+    animation: status-pop var(--duration-short) var(--ease-spring);
     z-index: 300;
 }
 

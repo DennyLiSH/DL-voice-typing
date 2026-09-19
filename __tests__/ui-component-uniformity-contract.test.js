@@ -214,3 +214,21 @@ describe('list row state uniformity', () => {
         ).toContain('var(--surface-hover)');
     });
 });
+
+describe('spinner/toast uniformity', () => {
+    it('.spinner is owned by common.css, not transcribe.css', () => {
+        expect(read('../ui/common.css')).toMatch(/\.spinner \{/);
+        expect(read('../ui/transcribe.css')).not.toMatch(/\.spinner \{/);
+    });
+
+    it('toasts share the duration-short entrance', () => {
+        expect(
+            blockOf(read('../ui/settings.css'), '.pending-toast {'),
+        ).toContain(
+            'animation: status-pop var(--duration-short) var(--ease-spring)',
+        );
+        expect(blockOf(read('../ui/transcribe.css'), '.toast {')).toContain(
+            'animation: status-pop var(--duration-short) var(--ease-spring)',
+        );
+    });
+});

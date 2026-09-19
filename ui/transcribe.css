@@ -384,15 +384,6 @@ body {
     color: var(--text-tertiary);
 }
 
-.spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid var(--accent-light);
-    border-top-color: var(--accent);
-    border-radius: var(--radius-full);
-    animation: spin 0.8s linear infinite;
-}
-
 /* --- Toast --- */
 .toast {
     position: fixed;
