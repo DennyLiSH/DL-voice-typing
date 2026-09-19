@@ -842,7 +842,7 @@ select:disabled, input:disabled {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
-  transition: background 120ms var(--ease-spring, ease);
+  transition: background 120ms var(--ease-spring);
   min-height: 36px;
 }
 
@@ -863,7 +863,7 @@ select:disabled, input:disabled {
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
   border-top: 5px solid var(--text-tertiary);
-  transition: transform 150ms var(--ease-spring, ease);
+  transition: transform 150ms var(--ease-spring);
   flex-shrink: 0;
 }
 
@@ -936,7 +936,7 @@ select:disabled, input:disabled {
   height: 28px;
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-primary);
   font-size: 14px;
@@ -1044,6 +1044,12 @@ select:disabled, input:disabled {
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+/* Utility for buttons whose label must not wrap (e.g. 浏览 in the
+   path-select row, where a wrapped CJK label would stretch the row). */
+.btn-nowrap {
+  white-space: nowrap;
 }
 
 /* #record-only-hotkey-group.disabled (form-group): dims the label + hint
