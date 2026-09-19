@@ -114,4 +114,9 @@ describe('badge uniformity', () => {
             'class="badge badge-failed"',
         );
     });
+
+    it('.badge base guards [hidden] against the author display declaration', () => {
+        const css = read('../ui/common.css');
+        expect(css).toMatch(/^\.badge\[hidden\]\s*\{\s*display:\s*none;/m);
+    });
 });

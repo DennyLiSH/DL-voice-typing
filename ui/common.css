@@ -376,6 +376,13 @@ button:disabled {
   font-weight: 500;
 }
 
+/* Author display on the base beats the UA [hidden] rule — guard every badge
+ * consumer against a permanently-visible hidden badge (same pattern as
+ * .segments-loading[hidden] / .data-error-bar[hidden]). */
+.badge[hidden] {
+  display: none;
+}
+
 .badge-pending,
 .badge-warning {
   background: rgba(var(--warning-rgb), 0.15);
