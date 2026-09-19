@@ -228,37 +228,13 @@ select:disabled, input:disabled {
   white-space: nowrap;
 }
 
+/* Layout-only modifier on top of .btn-primary (see common.css). The button
+ * element also swaps to `btn-primary btn-download-model btn-danger` when a
+ * custom model is selected (delete action), and to a disabled danger variant
+ * while another model is downloading (model-manager.js:86/101). */
 .btn-download-model {
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-size: var(--font-label);
-  cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-  font-weight: 500;
-  transition:
-    background var(--duration-micro) ease,
-    transform var(--duration-micro) ease,
-    box-shadow var(--duration-micro) ease;
-}
-
-.btn-download-model:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  box-shadow: 0 2px 6px rgba(var(--accent-rgb), 0.25);
-}
-
-.btn-download-model:active:not(:disabled) {
-  transform: scale(0.97);
-}
-
-.btn-download-model:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .btn-cancel-download {
@@ -436,11 +412,6 @@ select:disabled, input:disabled {
   border-top-color: var(--accent-contrast);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
-}
-
-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 /* --------------------------------------------------------------------------

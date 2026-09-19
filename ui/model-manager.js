@@ -78,12 +78,13 @@ export function updateModelAction() {
     btnDownloadModel.style.display = 'none';
     downloadProgress.style.display = 'none';
     btnDownloadModel.textContent = '下载';
-    btnDownloadModel.className = 'btn-download-model';
+    btnDownloadModel.className = 'btn-primary btn-download-model';
 
     if (isCustom && !isDownloading) {
         // Custom model — show delete button
         btnDownloadModel.textContent = '删除';
-        btnDownloadModel.className = 'btn-download-model btn-danger';
+        btnDownloadModel.className =
+            'btn-primary btn-download-model btn-danger';
         btnDownloadModel.style.display = 'inline-block';
         btnDownloadModel.disabled = false;
         whisperModelSelect.disabled = false;
@@ -98,7 +99,8 @@ export function updateModelAction() {
     } else if (isCustom) {
         // Custom model during download of another model
         btnDownloadModel.textContent = '删除';
-        btnDownloadModel.className = 'btn-download-model btn-danger';
+        btnDownloadModel.className =
+            'btn-primary btn-download-model btn-danger';
         btnDownloadModel.style.display = 'inline-block';
         btnDownloadModel.disabled = true;
         whisperModelSelect.disabled = true;

@@ -213,6 +213,13 @@ button:active:not(:disabled) {
   transform: scale(0.97);
 }
 
+/* Bare (non .btn-*) disabled buttons only get the cursor; token classes
+ * (.btn-primary/.btn-secondary/.btn-danger) express disabled via their own
+ * token group above. */
+button:disabled {
+  cursor: not-allowed;
+}
+
 /* --------------------------------------------------------------------------
    High contrast mode
    -------------------------------------------------------------------------- */
@@ -331,7 +338,8 @@ button:active:not(:disabled) {
 }
 
 .btn-primary:disabled,
-.btn-secondary:disabled {
+.btn-secondary:disabled,
+.btn-danger:disabled {
   background: var(--disabled-bg);
   color: var(--disabled-text);
   cursor: not-allowed;
@@ -400,17 +408,8 @@ button:active:not(:disabled) {
 .btn-danger {
   background: var(--error);
   color: #fff;
-  border: none;
-  padding: 6px 14px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
 }
 
 .btn-danger:hover:not(:disabled) {
   background: #B91C1C;
-}
-
-.btn-danger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }

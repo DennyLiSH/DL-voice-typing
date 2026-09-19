@@ -110,7 +110,6 @@ textarea::placeholder {
 .btn-confirm {
   background: rgba(var(--accent-rgb), 0.85);
   color: var(--accent-contrast);
-  padding: 6px 20px;
   font-weight: 500;
   transition:
     background var(--duration-micro) ease,
@@ -123,10 +122,6 @@ textarea::placeholder {
   box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.25);
 }
 
-.btn-confirm:active:not(:disabled) {
-  transform: scale(0.96);
-}
-
 .btn-confirm:disabled {
   background: rgba(var(--accent-rgb), 0.25);
   color: var(--review-text-tertiary);
@@ -136,8 +131,6 @@ textarea::placeholder {
 .btn-cancel {
   background: rgba(255, 255, 255, 0.04);
   color: var(--review-btn-cancel);
-  border: none;
-  padding: 6px 16px;
   font-weight: 500;
   box-shadow: 0 0 0 1px var(--review-btn-cancel-border);
   transition:
@@ -151,10 +144,6 @@ textarea::placeholder {
   background: rgba(255, 255, 255, 0.08);
   color: var(--review-btn-cancel-hover);
   box-shadow: 0 0 0 1px var(--review-btn-cancel-border-hover);
-}
-
-.btn-cancel:active:not(:disabled) {
-  transform: scale(0.96);
 }
 
 .btn-cancel:disabled {
