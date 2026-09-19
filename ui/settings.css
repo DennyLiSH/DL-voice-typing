@@ -675,411 +675,411 @@ select:disabled, input:disabled {
    ============================================================ */
 
 .data-list-section {
-    margin-top: var(--space-6);
-    padding-top: var(--space-4);
-    border-top: 1px solid var(--border);
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 .data-section-title {
-    font-size: var(--font-section);
-    color: var(--text-primary);
-    margin-bottom: var(--space-3);
+  font-size: var(--font-section);
+  color: var(--text-primary);
+  margin-bottom: var(--space-3);
 }
 
 .data-stats-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-    flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .data-stats-summary {
-    font-size: var(--font-hint);
-    color: var(--text-secondary);
-    white-space: nowrap;
+  font-size: var(--font-hint);
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 /* Layout-only: the global input rule above (covers type="search") owns the
  * border/focus/disabled recipe. */
 .data-search-input {
-    flex: 1;
-    min-width: 150px;
+  flex: 1;
+  min-width: 150px;
 }
 
 /* Visual recipe composed from the shared .banner base (colors, padding,
  * radius, pre-line wrapping); this class only owns the flex layout. */
 .data-error-bar {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-2);
-    margin-bottom: var(--space-3);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 
 .data-error-bar[hidden] {
-    display: none;
+  display: none;
 }
 
 /* Neutral (success/partial) variant of the same bar — used for the undo
  * toast's "已撤销删除" feedback so a success message doesn't render in
  * error red. Toggled via classList from data-manager.js. */
 .data-error-bar.notice {
-    background: rgba(var(--success-rgb), 0.08);
-    border-color: rgba(var(--success-rgb), 0.2);
-    color: var(--success-text);
+  background: rgba(var(--success-rgb), 0.08);
+  border-color: rgba(var(--success-rgb), 0.2);
+  color: var(--success-text);
 }
 
 /* Pending (soft-delete) undo toast — fixed bottom-right single-instance slot.
  * Counterpart to the in-page error bar; the toast uses the same surface
  * treatment so the two feedback channels share visual weight. */
 .pending-toast {
-    position: fixed;
-    right: var(--space-5);
-    bottom: var(--space-5);
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-2) var(--space-4);
-    border-radius: var(--radius-md);
-    background: var(--surface);
-    color: var(--text-primary);
-    box-shadow: var(--shadow-lg);
-    font-size: var(--font-label);
-    animation: status-pop var(--duration-short) var(--ease-spring);
-    z-index: 300;
+  position: fixed;
+  right: var(--space-5);
+  bottom: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--font-label);
+  animation: status-pop var(--duration-short) var(--ease-spring);
+  z-index: 300;
 }
 
 .pending-toast-text {
-    white-space: nowrap;
+  white-space: nowrap;
 }
 
 .pending-toast-undo {
-    background: transparent;
-    color: var(--accent-text);
-    border: none;
-    font-size: var(--font-label);
-    font-weight: 600;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-text);
+  border: none;
+  font-size: var(--font-label);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
 }
 
 .pending-toast-undo:hover {
-    background: rgba(var(--accent-rgb), 0.1);
+  background: rgba(var(--accent-rgb), 0.1);
 }
 
 /* Finalized state (countdown hit zero): the undo window is closed on the
  * backend, so the affordance stays visible but inert. */
 .pending-toast-undo:disabled {
-    cursor: default;
-    opacity: 0.5;
+  cursor: default;
+  opacity: 0.5;
 }
 
 .pending-toast-undo:disabled:hover {
-    background: transparent;
+  background: transparent;
 }
 
 .pending-toast-undo:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .data-batch-bar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: 8px 10px;
-    background: rgba(var(--accent-rgb), 0.06);
-    border: 1px solid rgba(var(--accent-rgb), 0.15);
-    border-radius: var(--radius-md);
-    margin-bottom: var(--space-3);
-    flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px 10px;
+  background: rgba(var(--accent-rgb), 0.06);
+  border: 1px solid rgba(var(--accent-rgb), 0.15);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .data-batch-bar[hidden] {
-    display: none;
+  display: none;
 }
 
 .data-select-all-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--font-label);
-    color: var(--text-secondary);
-    cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-label);
+  color: var(--text-secondary);
+  cursor: pointer;
 }
 
 .data-batch-info {
-    font-size: var(--font-label);
-    color: var(--text-secondary);
+  font-size: var(--font-label);
+  color: var(--text-secondary);
 }
 
 /* Right-alignment scoped to the batch bar: the shared .btn-danger must NOT
    carry margin-left:auto — the confirm-dialog's .dialog-actions (flex-end)
    and .model-select-row layouts break with an auto margin. */
 .data-batch-bar .btn-danger {
-    margin-left: auto;
+  margin-left: auto;
 }
 
 .data-list {
-    display: flex;
-    flex-direction: column;
-    max-height: 480px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  max-height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 
 .data-list:empty {
-    display: none;
+  display: none;
 }
 
 .data-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border);
-    cursor: pointer;
-    transition: background 120ms var(--ease-spring, ease);
-    min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 120ms var(--ease-spring, ease);
+  min-height: 36px;
 }
 
 .data-row:last-child {
-    border-bottom: none;
+  border-bottom: none;
 }
 
 .data-row:hover {
-    background: var(--surface-hover);
+  background: var(--surface-hover);
 }
 
 /* Expand affordance: chevron at the row end, rotates when expanded. */
 .data-row::after {
-    content: '';
-    margin-left: auto;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid var(--text-tertiary);
-    transition: transform 150ms var(--ease-spring, ease);
-    flex-shrink: 0;
+  content: '';
+  margin-left: auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-tertiary);
+  transition: transform 150ms var(--ease-spring, ease);
+  flex-shrink: 0;
 }
 
 .data-row.expanded::after {
-    transform: rotate(180deg);
+  transform: rotate(180deg);
 }
 
 .data-row:focus-visible {
-    outline: 2px solid rgba(var(--accent-rgb), 0.6);
-    outline-offset: -2px;
+  outline: 2px solid rgba(var(--accent-rgb), 0.6);
+  outline-offset: -2px;
 }
 
 .data-row.selected {
-    background: rgba(var(--accent-rgb), 0.18);
+  background: rgba(var(--accent-rgb), 0.18);
 }
 
 .data-row.expanded {
-    background: rgba(var(--accent-rgb), 0.10);
+  background: rgba(var(--accent-rgb), 0.10);
 }
 
 .data-row-cb {
-    flex-shrink: 0;
-    margin: 0;
+  flex-shrink: 0;
+  margin: 0;
 }
 
 .data-row-ts {
-    flex-shrink: 0;
-    font-size: var(--font-hint);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    min-width: 130px;
+  flex-shrink: 0;
+  font-size: var(--font-hint);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 130px;
 }
 
 .data-row-dur {
-    flex-shrink: 0;
-    font-size: var(--font-hint);
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    min-width: 50px;
-    text-align: right;
+  flex-shrink: 0;
+  font-size: var(--font-hint);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 50px;
+  text-align: right;
 }
 
 .data-row-preview {
-    flex: 1;
-    /* No min-width floor — actual width = leftover after fixed siblings
-     * (checkbox/ts/source badge/duration/play/delete, 6 gaps). A floor only
-     * engages when the fixed siblings already fill the row budget, and at
-     * that point it manufactures horizontal overflow: the classic 语音输入
-     * badge is wider than the old 72px-floor arithmetic assumed (E2E
-     * 2026-09-12: rows overflowed by ~27px). Fixed siblings alone always
-     * fit, so dropping the floor entirely makes the no-overflow guarantee
-     * arithmetic instead of estimate-driven; the preview ellipsizes at
-     * whatever width is left and the full text stays reachable in the
-     * expanded section. */
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-primary);
-    font-size: var(--font-label);
+  flex: 1;
+  /* No min-width floor — actual width = leftover after fixed siblings
+   * (checkbox/ts/source badge/duration/play/delete, 6 gaps). A floor only
+   * engages when the fixed siblings already fill the row budget, and at
+   * that point it manufactures horizontal overflow: the classic 语音输入
+   * badge is wider than the old 72px-floor arithmetic assumed (E2E
+   * 2026-09-12: rows overflowed by ~27px). Fixed siblings alone always
+   * fit, so dropping the floor entirely makes the no-overflow guarantee
+   * arithmetic instead of estimate-driven; the preview ellipsizes at
+   * whatever width is left and the full text stays reachable in the
+   * expanded section. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--font-label);
 }
 
 .data-row-preview.placeholder {
-    color: var(--text-tertiary);
+  color: var(--text-tertiary);
 }
 
 .btn-icon {
-    flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm, 4px);
-    cursor: pointer;
-    color: var(--text-primary);
-    font-size: 14px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
 .btn-icon:hover {
-    background: var(--accent-light);
-    border-color: var(--accent);
+  background: var(--accent-light);
+  border-color: var(--accent);
 }
 
 .btn-delete:hover {
-    background: rgba(var(--error-rgb), 0.15);
-    border-color: var(--error);
-    color: var(--error-text);
+  background: rgba(var(--error-rgb), 0.15);
+  border-color: var(--error);
+  color: var(--error-text);
 }
 
 .data-row-expanded {
-    padding: 8px 14px 10px 38px;
-    background: rgba(var(--accent-rgb), 0.04);
-    border-bottom: 1px solid var(--border);
-    font-size: var(--font-label);
-    color: var(--text-secondary);
+  padding: 8px 14px 10px 38px;
+  background: rgba(var(--accent-rgb), 0.04);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-label);
+  color: var(--text-secondary);
 }
 
 .data-row-meta-line {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 4px;
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
 }
 
 .data-row-meta-label {
-    color: var(--text-secondary);
-    flex-shrink: 0;
-    min-width: 36px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  min-width: 36px;
 }
 
 .data-row-meta-value {
-    color: var(--text-primary);
-    word-break: break-all;
+  color: var(--text-primary);
+  word-break: break-all;
 }
 
 .data-row-player {
-    padding: 6px 14px 10px 38px;
-    background: rgba(var(--accent-rgb), 0.04);
-    border-bottom: 1px solid var(--border);
+  padding: 6px 14px 10px 38px;
+  background: rgba(var(--accent-rgb), 0.04);
+  border-bottom: 1px solid var(--border);
 }
 
 .data-row-player audio {
-    width: 100%;
-    height: 32px;
+  width: 100%;
+  height: 32px;
 }
 
 .data-empty-state {
-    text-align: center;
-    padding: var(--space-6);
-    color: var(--text-secondary);
-    font-size: var(--font-label);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-md);
+  text-align: center;
+  padding: var(--space-6);
+  color: var(--text-secondary);
+  font-size: var(--font-label);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
 }
 
 .data-empty-state[hidden] {
-    display: none;
+  display: none;
 }
 
 .data-pagination {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-3);
-    margin-top: var(--space-3);
-    font-size: var(--font-label);
-    color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--font-label);
+  color: var(--text-secondary);
 }
 
 .data-pagination[hidden] {
-    display: none;
+  display: none;
 }
 
 .data-pagination button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .btn-secondary.saving,
 .btn-secondary.loading {
-    position: relative;
-    color: transparent;
-    pointer-events: none;
+  position: relative;
+  color: transparent;
+  pointer-events: none;
 }
 
 .btn-secondary.loading::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 12px;
-    height: 12px;
-    margin: -6px 0 0 -6px;
-    border: 2px solid var(--accent);
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 /* #record-only-hotkey-group.disabled (form-group): dims the label + hint
    so the disabled state is visible beyond the select's native graying. */
 .form-group.disabled label,
 .form-group.disabled .hint {
-    opacity: 0.5;
+  opacity: 0.5;
 }
 
 /* --------------------------------------------------------------------------
    Recent errors (help page)
    -------------------------------------------------------------------------- */
 .error-history-item {
-    padding: var(--space-2) 0;
-    border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .error-history-item:last-child {
-    border-bottom: none;
+  border-bottom: none;
 }
 
 .error-history-time {
-    font-size: var(--font-hint);
-    color: var(--text-tertiary);
-    margin-bottom: 2px;
+  font-size: var(--font-hint);
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
 }
 
 .error-history-head {
-    margin-bottom: 4px;
+  margin-bottom: 4px;
 }
 
 .error-history-message {
-    font-size: var(--font-body);
-    color: var(--text-primary);
-    overflow-wrap: anywhere;
-    white-space: pre-line;
+  font-size: var(--font-body);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 /* F1/F12 conflict warning under the combo preview (Round 5 Minor) */
