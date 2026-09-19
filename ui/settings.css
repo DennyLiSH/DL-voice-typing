@@ -231,7 +231,7 @@ select:disabled, input:disabled {
 /* Layout-only modifier on top of .btn-primary (see common.css). The button
  * element also swaps to `btn-primary btn-download-model btn-danger` when a
  * custom model is selected (delete action), and to a disabled danger variant
- * while another model is downloading (model-manager.js:86/101). */
+ * while another model is downloading (model-manager.js). */
 .btn-download-model {
   white-space: nowrap;
   flex-shrink: 0;

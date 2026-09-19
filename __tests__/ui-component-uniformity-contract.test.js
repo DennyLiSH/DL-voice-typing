@@ -8,6 +8,7 @@ const read = (p) => readFileSync(new URL(p, import.meta.url)).toString('utf-8');
 // convention as ui-progress-contract.test.js).
 const blockOf = (css, selector) => {
     const s = css.indexOf(selector);
+    if (s === -1) throw new Error(`selector not found: ${selector}`);
     return css.slice(s, css.indexOf('}', s) + 1);
 };
 

@@ -412,4 +412,5 @@ button:disabled {
 
 .btn-danger:hover:not(:disabled) {
   background: #B91C1C;
+  box-shadow: none;
 }
