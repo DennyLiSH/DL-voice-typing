@@ -411,6 +411,30 @@ button:disabled {
 }
 
 /* --------------------------------------------------------------------------
+   Shared inline banners (settings error-banner / data-error-bar,
+   transcribe error-bar). Composition class: elements keep their behavioral
+   class (visibility toggles, margins, animations) and add
+   `banner banner-error` for the visual recipe. .data-error-bar.notice is the
+   single success-tinted variant (defined next to its consumer).
+   NOTE: no `display` on .banner — .error-banner toggles display via .visible
+   and .data-error-bar is flex; an author display here would break both.
+   -------------------------------------------------------------------------- */
+.banner {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--font-label);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.banner-error {
+  background: rgba(var(--error-rgb), 0.08);
+  border-color: rgba(var(--error-rgb), 0.15);
+  color: var(--error-text);
+}
+
+/* --------------------------------------------------------------------------
    Destructive-action button (confirm-dialog danger variant; formerly the
    legacy .btn-delete-model)
    -------------------------------------------------------------------------- */

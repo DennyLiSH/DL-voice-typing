@@ -35,14 +35,11 @@ body {
     font-weight: 600;
 }
 
+/* Visual recipe composed from the shared .banner base (colors, padding,
+ * radius, pre-line wrapping); this class only owns margin + entrance. */
 .error-bar {
     margin: var(--space-2) var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-sm);
-    background: rgba(var(--error-rgb), 0.12);
-    color: var(--error-text);
-    font-size: var(--font-label);
-    animation: banner-slide var(--duration-short) ease;
+    animation: banner-slide var(--duration-short) var(--ease-spring);
 }
 
 .rec-list {

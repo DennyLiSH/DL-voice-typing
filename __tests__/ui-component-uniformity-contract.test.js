@@ -120,3 +120,44 @@ describe('badge uniformity', () => {
         expect(css).toMatch(/^\.badge\[hidden\]\s*\{\s*display:\s*none;/m);
     });
 });
+
+describe('error banner uniformity', () => {
+    it('common.css owns the .banner/.banner-error recipe', () => {
+        const css = read('../ui/common.css');
+        const base = blockOf(css, '.banner {');
+        expect(base).toContain('border-radius: var(--radius-md)');
+        expect(base).toContain('white-space: pre-line');
+        const err = blockOf(css, '.banner-error {');
+        expect(err).toContain('rgba(var(--error-rgb), 0.08)');
+    });
+
+    it('window error bars carry no own color recipe (banner composition)', () => {
+        const s = read('../ui/settings.css');
+        expect(blockOf(s, '.error-banner {')).not.toContain('background');
+        expect(blockOf(s, '.data-error-bar {')).not.toContain('background');
+        const t = read('../ui/transcribe.css');
+        expect(blockOf(t, '.error-bar {')).not.toContain('background');
+    });
+
+    it('html error bars compose banner banner-error', () => {
+        expect(read('../ui/settings.html')).toContain(
+            'class="error-banner banner banner-error"',
+        );
+        expect(read('../ui/settings.html')).toContain(
+            'class="data-error-bar banner banner-error"',
+        );
+        expect(read('../ui/transcribe.html')).toContain(
+            'class="error-bar banner banner-error"',
+        );
+    });
+
+    it('notice variant fully overrides banner-error (green state, not green bg with red border)', () => {
+        const block = blockOf(
+            read('../ui/settings.css'),
+            '.data-error-bar.notice',
+        );
+        expect(block).toContain('rgba(var(--success-rgb), 0.08)');
+        expect(block).toContain('border-color');
+        expect(block).toContain('color: var(--success-text)');
+    });
+});
