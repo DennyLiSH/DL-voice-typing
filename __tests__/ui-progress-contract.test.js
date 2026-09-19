@@ -32,4 +32,10 @@ describe('progress bar scaleX contract', () => {
         expect(block).toContain('transform-origin: left');
         expect(block).not.toContain('transition: width');
     });
+    it('both windows use pill-shaped progress tracks (radius-full)', () => {
+        const s = blockOf(read('../ui/settings.css'), '.progress-bar-track');
+        const t = blockOf(read('../ui/transcribe.css'), '.progress-track');
+        expect(s).toContain('border-radius: var(--radius-full)');
+        expect(t).toContain('border-radius: var(--radius-full)');
+    });
 });
