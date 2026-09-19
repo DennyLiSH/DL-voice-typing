@@ -189,7 +189,7 @@ export function buildRecordingRow(entry, opts = {}) {
         // replaces the play button (442px row budget — both would overflow);
         // retry = the refresh button, which clears the failure set.
         const badge = document.createElement('span');
-        badge.className = 'audio-error-badge';
+        badge.className = 'badge badge-failed';
         badge.textContent = '音频加载失败';
         badge.title =
             '音频文件暂时无法读取（可能被其他程序占用），点「刷新」重试';
@@ -210,7 +210,7 @@ export function buildRecordingRow(entry, opts = {}) {
         // with the preview floor. The CSS drops the floor for this variant.
         row.classList.add('audio-missing');
         const badge = document.createElement('span');
-        badge.className = 'audio-missing-badge';
+        badge.className = 'badge badge-neutral';
         badge.textContent = '音频文件缺失';
         badge.title = '此录音没有音频文件（可能已被删除或当时未保存成功）';
         row.appendChild(badge);

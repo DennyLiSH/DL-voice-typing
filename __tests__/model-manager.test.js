@@ -256,9 +256,9 @@ describe('model-manager', () => {
 
     it('loadComputeMode badge matrix: gpu/cpu/other/failure', async () => {
         const cases = [
-            ['gpu', 'GPU 加速', 'mode-badge gpu'],
-            ['cpu', 'CPU 模式（未检测到 GPU）', 'mode-badge cpu'],
-            ['unloaded', '模型未加载', 'mode-badge unloaded'],
+            ['gpu', 'GPU 加速', 'badge mode-badge gpu'],
+            ['cpu', 'CPU 模式（未检测到 GPU）', 'badge mode-badge cpu'],
+            ['unloaded', '模型未加载', 'badge mode-badge unloaded'],
         ];
         for (const [mode, label, cls] of cases) {
             const mm = await loadFresh();

@@ -129,17 +129,17 @@ export async function loadComputeMode() {
         const mode = await call('get_compute_mode');
         if (mode === 'gpu') {
             badge.textContent = 'GPU 加速';
-            badge.className = 'mode-badge gpu';
+            badge.className = 'badge mode-badge gpu';
         } else if (mode === 'cpu') {
             badge.textContent = 'CPU 模式（未检测到 GPU）';
-            badge.className = 'mode-badge cpu';
+            badge.className = 'badge mode-badge cpu';
         } else {
             badge.textContent = '模型未加载';
-            badge.className = 'mode-badge unloaded';
+            badge.className = 'badge mode-badge unloaded';
         }
     } catch (_e) {
         badge.textContent = '检测失败';
-        badge.className = 'mode-badge unloaded';
+        badge.className = 'badge mode-badge unloaded';
         badge.title = '检测失败：切到其他设置页再切回本页可重试';
     }
 }

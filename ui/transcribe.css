@@ -138,11 +138,6 @@ body {
     height: 36px;
 }
 
-.audio-error-badge {
-    color: var(--error-text);
-    font-size: var(--font-label);
-}
-
 .action-row {
     display: flex;
     align-items: center;

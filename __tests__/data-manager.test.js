@@ -247,7 +247,7 @@ describe('audio load failure badge (P1 fix: render-state driven)', () => {
         await flush();
 
         const row = document.querySelector('.data-row');
-        expect(row.querySelector('.audio-error-badge').textContent).toBe(
+        expect(row.querySelector('.badge.badge-failed').textContent).toBe(
             '音频加载失败',
         );
         expect(row.querySelector('.btn-play')).toBeNull();

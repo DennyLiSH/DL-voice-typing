@@ -62,3 +62,56 @@ describe('button geometry uniformity', () => {
         expect(css).not.toContain('scale(0.96)');
     });
 });
+
+describe('badge uniformity', () => {
+    it('.mode-badge has no own geometry (badge base provides it)', () => {
+        const css = read('../ui/settings.css');
+        // 基础块必须整体删除（^ 锚定不误伤 .mode-badge.gpu 等变体选择器；
+        // blockOf 对不存在的 selector 现在会 throw，故用 not.toMatch 显式锁定删除态）
+        expect(css).not.toMatch(/^\.mode-badge\s*\{/m);
+        expect(blockOf(css, '.mode-badge.gpu')).not.toMatch(
+            /padding|border-radius|font-size|font-weight/,
+        );
+    });
+
+    it('mode-badge variants share the badge-done/warning/failed recipes (0.15 tint)', () => {
+        const css = read('../ui/settings.css');
+        expect(blockOf(css, '.mode-badge.gpu')).toContain(
+            'rgba(var(--success-rgb), 0.15)',
+        );
+        expect(blockOf(css, '.mode-badge.cpu')).toContain(
+            'rgba(var(--warning-rgb), 0.15)',
+        );
+        expect(blockOf(css, '.mode-badge.unloaded')).toContain(
+            'rgba(var(--error-rgb), 0.15)',
+        );
+    });
+
+    it('audio badges are gone as custom classes; JS emits badge-family classes', () => {
+        expect(read('../ui/settings.css')).not.toContain(
+            '.audio-missing-badge',
+        );
+        expect(read('../ui/settings.css')).not.toContain('.audio-error-badge');
+        expect(read('../ui/transcribe.css')).not.toContain(
+            '.audio-error-badge',
+        );
+        const dm = read('../ui/lib/data-management.js');
+        expect(dm).toContain(`'badge badge-failed'`);
+        expect(dm).toContain(`'badge badge-neutral'`);
+    });
+
+    it('.badge-neutral is the shared neutral variant', () => {
+        const block = blockOf(read('../ui/common.css'), '.badge-neutral,');
+        expect(block).toContain('var(--btn-secondary-bg)');
+        expect(block).toContain('var(--text-secondary)');
+    });
+
+    it('html badges compose the badge base', () => {
+        expect(read('../ui/settings.html')).toContain(
+            'class="badge mode-badge unloaded"',
+        );
+        expect(read('../ui/transcribe.html')).toContain(
+            'class="badge badge-failed"',
+        );
+    });
+});

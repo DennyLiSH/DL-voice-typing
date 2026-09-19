@@ -482,18 +482,10 @@ select:disabled, input:disabled {
 }
 
 /* --------------------------------------------------------------------------
-   Compute mode badge
+   Compute mode badge (geometry/weight provided by the shared .badge base)
    -------------------------------------------------------------------------- */
-.mode-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-hint);
-  font-weight: 600;
-}
-
 .mode-badge.gpu {
-  background: rgba(var(--success-rgb), 0.1);
+  background: rgba(var(--success-rgb), 0.15);
   color: var(--success-text);
 }
 
@@ -503,7 +495,7 @@ select:disabled, input:disabled {
 }
 
 .mode-badge.unloaded {
-  background: rgba(var(--error-rgb), 0.1);
+  background: rgba(var(--error-rgb), 0.15);
   color: var(--error-text);
 }
 
@@ -986,26 +978,6 @@ select:disabled, input:disabled {
     background: rgba(var(--error-rgb), 0.15);
     border-color: var(--error);
     color: var(--error-text);
-}
-
-.audio-missing-badge {
-    flex-shrink: 0;
-    font-size: 11px;
-    color: var(--text-secondary);
-    background: var(--progress-bg);
-    padding: 2px 6px;
-    border-radius: 4px;
-    cursor: not-allowed;
-}
-
-.audio-error-badge {
-    flex-shrink: 0;
-    font-size: 11px;
-    color: var(--error-text);
-    background: rgba(var(--error-rgb), 0.12);
-    padding: 2px 6px;
-    border-radius: 4px;
-    animation: banner-slide 200ms var(--ease-spring, ease);
 }
 
 .data-row-expanded {

@@ -368,6 +368,7 @@ button:disabled {
    Shared badges (settings data page + transcribe window)
    -------------------------------------------------------------------------- */
 .badge {
+  display: inline-block;
   flex-shrink: 0;
   padding: 2px var(--space-2);
   border-radius: var(--radius-sm);
@@ -396,6 +397,7 @@ button:disabled {
   color: var(--accent-text);
 }
 
+.badge-neutral,
 .badge-source-classic {
   background: var(--btn-secondary-bg);
   color: var(--text-secondary);

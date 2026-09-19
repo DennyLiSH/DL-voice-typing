@@ -171,7 +171,7 @@ describe('Data list — render contract', () => {
             '[data-filename="2026-06-23_10-15-42"]',
         );
         expect(missingRow.querySelector('.btn-play')).toBeNull();
-        expect(missingRow.querySelector('.audio-missing-badge')).not.toBeNull();
+        expect(missingRow.querySelector('.badge.badge-neutral')).not.toBeNull();
     });
 
     it('row IS the keyboard-reachable expand control (F4 evolved 2026-09-04)', () => {
@@ -420,7 +420,7 @@ describe('Data list — audio playback contract', () => {
         const missing = sampleEntries.find((e) => e.wav_size === 0);
         const row = buildRecordingRow(missing);
         expect(row.querySelector('.btn-play')).toBeNull();
-        expect(row.querySelector('.audio-missing-badge').textContent).toBe(
+        expect(row.querySelector('.badge.badge-neutral').textContent).toBe(
             '音频文件缺失',
         );
     });
