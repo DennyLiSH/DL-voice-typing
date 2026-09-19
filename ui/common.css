@@ -416,8 +416,10 @@ button:disabled {
    class (visibility toggles, margins, animations) and add
    `banner banner-error` for the visual recipe. .data-error-bar.notice is the
    single success-tinted variant (defined next to its consumer).
-   NOTE: no `display` on .banner — .error-banner toggles display via .visible
-   and .data-error-bar is flex; an author display here would break both.
+   NOTE: no `display` on .banner by contract (locked by test) — settings'
+   banners own display in their behavioral classes (.visible toggle / flex);
+   an author display here would defeat the UA [hidden] rule on transcribe
+   #list-error, whose class chain has no other author display.
    -------------------------------------------------------------------------- */
 .banner {
   padding: var(--space-2) var(--space-3);
@@ -425,6 +427,7 @@ button:disabled {
   border-radius: var(--radius-md);
   font-size: var(--font-label);
   overflow-wrap: anywhere;
+  /* pre-line: multi-line payloads (batch-delete file lists) break per line */
   white-space: pre-line;
 }
 

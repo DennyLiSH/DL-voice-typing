@@ -127,6 +127,7 @@ describe('error banner uniformity', () => {
         const base = blockOf(css, '.banner {');
         expect(base).toContain('border-radius: var(--radius-md)');
         expect(base).toContain('white-space: pre-line');
+        expect(base).not.toContain('display');
         const err = blockOf(css, '.banner-error {');
         expect(err).toContain('rgba(var(--error-rgb), 0.08)');
     });
