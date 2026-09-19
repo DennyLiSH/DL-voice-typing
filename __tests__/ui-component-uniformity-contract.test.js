@@ -162,3 +162,37 @@ describe('error banner uniformity', () => {
         expect(block).toContain('color: var(--success-text)');
     });
 });
+
+describe('input treatment uniformity', () => {
+    it('global input rule covers type=search', () => {
+        expect(read('../ui/settings.css')).toMatch(
+            /select, input\[type="text"\], input\[type="password"\], input\[type="search"\]/,
+        );
+    });
+
+    it('.data-search-input is layout-only (no own border recipe)', () => {
+        const block = blockOf(
+            read('../ui/settings.css'),
+            '.data-search-input {',
+        );
+        expect(block).not.toMatch(/border|background|padding|font-size|color/);
+    });
+
+    it('.segment-text uses inset ring and keeps keyboard focus visible', () => {
+        const css = read('../ui/transcribe.css');
+        const block = blockOf(css, '.segment-text {');
+        expect(block).toContain('box-shadow: inset 0 0 0 1px');
+        expect(blockOf(css, '.segment-text:focus')).not.toContain(
+            'outline: none',
+        );
+        expect(blockOf(css, '.segment-text:focus')).toContain('var(--accent)');
+    });
+
+    it('#merged gets the same focus treatment', () => {
+        const css = read('../ui/transcribe.css');
+        expect(blockOf(css, '#merged {')).toContain(
+            'box-shadow: inset 0 0 0 1px',
+        );
+        expect(blockOf(css, '#merged:focus')).toContain('var(--accent)');
+    });
+});

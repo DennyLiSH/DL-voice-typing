@@ -313,10 +313,14 @@ body {
     background: var(--accent-light);
 }
 
+/* Same inset-ring recipe as the settings global input rule: shadow border,
+ * no real border (边缘消融). :focus keeps only the inset accent ring — the
+ * keyboard focus ring is the global :focus-visible in common.css. */
 .segment-text {
     flex: 1;
     padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--border-subtle);
+    border: none;
+    box-shadow: inset 0 0 0 1px var(--border-subtle);
     border-radius: var(--radius-sm);
     background: var(--surface);
     color: var(--text-primary);
@@ -325,8 +329,7 @@ body {
 }
 
 .segment-text:focus {
-    outline: none;
-    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 
 .segments-empty {
@@ -350,13 +353,18 @@ body {
 #merged {
     width: 100%;
     padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border-subtle);
+    border: none;
+    box-shadow: inset 0 0 0 1px var(--border-subtle);
     border-radius: var(--radius-sm);
     background: var(--surface);
     color: var(--text-primary);
     font-size: var(--font-body);
     font-family: inherit;
     resize: vertical;
+}
+
+#merged:focus {
+    box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 
 .inject-row {

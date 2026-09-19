@@ -178,7 +178,7 @@ label {
   color: var(--text-secondary);
 }
 
-select, input[type="text"], input[type="password"] {
+select, input[type="text"], input[type="password"], input[type="search"] {
   width: 100%;
   height: 32px;
   padding: 0 10px;
@@ -700,20 +700,11 @@ select:disabled, input:disabled {
     white-space: nowrap;
 }
 
+/* Layout-only: the global input rule above (covers type="search") owns the
+ * border/focus/disabled recipe. */
 .data-search-input {
     flex: 1;
     min-width: 150px;
-    padding: 6px 10px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-size: var(--font-label);
-}
-
-.data-search-input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 
 /* Visual recipe composed from the shared .banner base (colors, padding,
