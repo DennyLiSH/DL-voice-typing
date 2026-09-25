@@ -255,10 +255,10 @@ pub(crate) fn open_window_impl<R: tauri::Runtime>(
     pt: &PendingTranscribe,
 ) -> Result<(), CommandError> {
     // Reject re-entry while a transcription is in flight.
-    if let Some(guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token") {
-        if guard.is_some() {
-            return Err(CommandError::state("转录进行中，请等待完成或取消"));
-        }
+    if let Some(guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token")
+        && guard.is_some()
+    {
+        return Err(CommandError::state("转录进行中，请等待完成或取消"));
     }
     // Capture the target HWND BEFORE showing our window (which would steal
     // the foreground). Overwrites any stale handle from a previous session.
@@ -281,10 +281,10 @@ pub(crate) fn on_transcribe_window_closed(pt: &PendingTranscribe) {
     if let Some(mut guard) = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd") {
         *guard = None;
     }
-    if let Some(mut guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token") {
-        if let Some(token) = guard.take() {
-            token.store(true, Ordering::SeqCst);
-        }
+    if let Some(mut guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token")
+        && let Some(token) = guard.take()
+    {
+        token.store(true, Ordering::SeqCst);
     }
 }
 
@@ -765,11 +765,11 @@ mod tests {
         let mut claimed = false;
         for _ in 0..1000 {
             tokio::task::yield_now().await;
-            if let Some(g) = crate::util::lock_mutex(&pt.cancel_token, "t") {
-                if g.is_some() {
-                    claimed = true;
-                    break;
-                }
+            if let Some(g) = crate::util::lock_mutex(&pt.cancel_token, "t")
+                && g.is_some()
+            {
+                claimed = true;
+                break;
             }
         }
         assert!(claimed, "slot must be claimed before the first await");

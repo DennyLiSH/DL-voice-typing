@@ -46,26 +46,18 @@ pub fn get_caret_screen_pos() -> (f64, f64) {
         // obtained from CoCreateInstance and its chain of method calls. Each call returns
         // a Result that we check before proceeding. The SAFEARRAY from GetBoundingRectangles
         // is passed to extract_first_rect_from_safearray which documents its safety requirements.
-        if let Ok(element) = unsafe { automation.GetFocusedElement() } {
-            if let Ok(text_pattern) = unsafe {
+        if let Ok(element) = unsafe { automation.GetFocusedElement() }
+            && let Ok(text_pattern) = unsafe {
                 element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
-            } {
-                if let Ok(ranges) = unsafe { text_pattern.GetSelection() } {
-                    if let Ok(count) = unsafe { ranges.Length() } {
-                        if count > 0 {
-                            if let Ok(range) = unsafe { ranges.GetElement(0) } {
-                                if let Ok(sa) = unsafe { range.GetBoundingRectangles() } {
-                                    if let Some((x, y)) =
-                                        unsafe { extract_first_rect_from_safearray(sa) }
-                                    {
-                                        return (x, y);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
+            && let Ok(ranges) = unsafe { text_pattern.GetSelection() }
+            && let Ok(count) = unsafe { ranges.Length() }
+            && count > 0
+            && let Ok(range) = unsafe { ranges.GetElement(0) }
+            && let Ok(sa) = unsafe { range.GetBoundingRectangles() }
+            && let Some((x, y)) = unsafe { extract_first_rect_from_safearray(sa) }
+        {
+            return (x, y);
         }
     }
 

@@ -190,21 +190,21 @@ fn validate_no_conflict(
 ) -> Result<(), AppError> {
     match self_slot {
         SlotKind::Primary => {
-            if let Some((other, _)) = &hs.record_only {
-                if *other == spec {
-                    return Err(AppError::Hotkey(
-                        "primary hotkey must differ from the record-only hotkey".to_string(),
-                    ));
-                }
+            if let Some((other, _)) = &hs.record_only
+                && *other == spec
+            {
+                return Err(AppError::Hotkey(
+                    "primary hotkey must differ from the record-only hotkey".to_string(),
+                ));
             }
         }
         SlotKind::RecordOnly => {
-            if let Some((other, _)) = &hs.primary {
-                if *other == spec {
-                    return Err(AppError::Hotkey(
-                        "record-only hotkey must differ from the primary hotkey".to_string(),
-                    ));
-                }
+            if let Some((other, _)) = &hs.primary
+                && *other == spec
+            {
+                return Err(AppError::Hotkey(
+                    "record-only hotkey must differ from the primary hotkey".to_string(),
+                ));
             }
         }
     }
@@ -272,10 +272,12 @@ enum HookAction {
 /// register time (`Arc::from(callback)`), same as today.
 fn route_event(hs: &mut HookState, ev: KeyEvent) -> HookAction {
     const VK_ESCAPE: u32 = 0x1B;
-    if ev.vk == VK_ESCAPE && ev.is_keydown && !ev.is_sys {
-        if let Some(cb) = hs.cancel_esc.clone() {
-            return HookAction::EscCancel(cb);
-        }
+    if ev.vk == VK_ESCAPE
+        && ev.is_keydown
+        && !ev.is_sys
+        && let Some(cb) = hs.cancel_esc.clone()
+    {
+        return HookAction::EscCancel(cb);
     }
     if let Some(cb) = dispatch_key_event(hs, ev.vk, ev.is_keydown) {
         return HookAction::Fire(
@@ -572,15 +574,17 @@ fn find_callback(
     mods: ModifiersDown,
     is_keydown: bool,
 ) -> Option<SlotCallback> {
-    if let Some((spec, cb)) = &hs.primary {
-        if spec.vk == vk && (!is_keydown || modifiers_match(spec, mods)) {
-            return Some(cb.clone());
-        }
+    if let Some((spec, cb)) = &hs.primary
+        && spec.vk == vk
+        && (!is_keydown || modifiers_match(spec, mods))
+    {
+        return Some(cb.clone());
     }
-    if let Some((spec, cb)) = &hs.record_only {
-        if spec.vk == vk && (!is_keydown || modifiers_match(spec, mods)) {
-            return Some(cb.clone());
-        }
+    if let Some((spec, cb)) = &hs.record_only
+        && spec.vk == vk
+        && (!is_keydown || modifiers_match(spec, mods))
+    {
+        return Some(cb.clone());
     }
     None
 }

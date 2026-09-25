@@ -250,14 +250,13 @@ impl RecordOnlySession {
             let rms_val = rms::calculate_rms(data);
             if let Some(mut last) =
                 crate::util::lock_mutex(&last_rms_for_cb, "record_only_rms_emit")
+                && last.elapsed() >= Duration::from_millis(RMS_EMIT_INTERVAL_MS)
             {
-                if last.elapsed() >= Duration::from_millis(RMS_EMIT_INTERVAL_MS) {
-                    *last = Instant::now();
-                    emitter_for_rms.emit(
-                        "audio-rms",
-                        serde_json::to_value(rms_val).unwrap_or_default(),
-                    );
-                }
+                *last = Instant::now();
+                emitter_for_rms.emit(
+                    "audio-rms",
+                    serde_json::to_value(rms_val).unwrap_or_default(),
+                );
             }
         });
 

@@ -95,10 +95,10 @@ impl EventEmitter for MockEmitter {
         // Fired while holding the on_event lock (a DIFFERENT lock than
         // `events`, so the callback may call take_events without
         // deadlocking). Callbacks must not re-enter set_on_event.
-        if let Some(guard) = crate::util::lock_mutex(&self.on_event, "MockEmitter::emit_on_event") {
-            if let Some(cb) = guard.as_ref() {
-                cb(event);
-            }
+        if let Some(guard) = crate::util::lock_mutex(&self.on_event, "MockEmitter::emit_on_event")
+            && let Some(cb) = guard.as_ref()
+        {
+            cb(event);
         }
     }
 }

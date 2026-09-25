@@ -831,12 +831,11 @@ mod tests {
     impl crate::commands::EventEmitter for MockEventEmitter {
         fn emit(&self, event: &str, payload: serde_json::Value) {
             // Only capture partial-transcription events with string payloads.
-            if event == "transcription-partial" {
-                if let serde_json::Value::String(text) = payload {
-                    if let Ok(mut events) = self.events.lock() {
-                        events.push(text);
-                    }
-                }
+            if event == "transcription-partial"
+                && let serde_json::Value::String(text) = payload
+                && let Ok(mut events) = self.events.lock()
+            {
+                events.push(text);
             }
         }
     }
@@ -1155,12 +1154,11 @@ mod tests {
         }
         impl crate::commands::EventEmitter for CapturingEmitter {
             fn emit(&self, event: &str, payload: serde_json::Value) {
-                if event == "transcription-partial" {
-                    if let serde_json::Value::String(s) = payload {
-                        if let Ok(mut e) = self.events.lock() {
-                            e.push(s);
-                        }
-                    }
+                if event == "transcription-partial"
+                    && let serde_json::Value::String(s) = payload
+                    && let Ok(mut e) = self.events.lock()
+                {
+                    e.push(s);
                 }
             }
         }

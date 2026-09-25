@@ -245,10 +245,10 @@ impl MockClipboard {
 
     /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn save_inner(&self) -> Result<(), AppError> {
-        if let Ok(guard) = self.save_error.lock() {
-            if let Some(msg) = guard.as_ref() {
-                return Err(AppError::Clipboard(msg.clone()));
-            }
+        if let Ok(guard) = self.save_error.lock()
+            && let Some(msg) = guard.as_ref()
+        {
+            return Err(AppError::Clipboard(msg.clone()));
         }
         self.saved.store(true, Ordering::SeqCst);
         Ok(())
@@ -256,10 +256,10 @@ impl MockClipboard {
 
     /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn inject_inner(&self, text: &str) -> Result<(), AppError> {
-        if let Ok(guard) = self.inject_error.lock() {
-            if let Some(msg) = guard.as_ref() {
-                return Err(AppError::Clipboard(msg.clone()));
-            }
+        if let Ok(guard) = self.inject_error.lock()
+            && let Some(msg) = guard.as_ref()
+        {
+            return Err(AppError::Clipboard(msg.clone()));
         }
         if let Some(mut guard) = crate::util::lock_mutex(&self.injected, "MockClipboard::injected")
         {
@@ -270,10 +270,10 @@ impl MockClipboard {
 
     /// Caller MUST hold the `op` lock; this helper does not re-acquire it.
     fn restore_inner(&self) -> Result<(), AppError> {
-        if let Ok(guard) = self.restore_error.lock() {
-            if let Some(msg) = guard.as_ref() {
-                return Err(AppError::Clipboard(msg.clone()));
-            }
+        if let Ok(guard) = self.restore_error.lock()
+            && let Some(msg) = guard.as_ref()
+        {
+            return Err(AppError::Clipboard(msg.clone()));
         }
         self.restored.store(true, Ordering::SeqCst);
         Ok(())

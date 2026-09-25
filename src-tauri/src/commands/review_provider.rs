@@ -31,10 +31,10 @@ impl TauriReviewProvider {
 
 impl ReviewProvider for TauriReviewProvider {
     fn store_text(&self, text: String) {
-        if let Some(pending) = self.app.try_state::<super::review::PendingReview>() {
-            if let Some(mut guard) = crate::util::lock_mutex(&pending.text, "pending_text") {
-                *guard = Some(text);
-            }
+        if let Some(pending) = self.app.try_state::<super::review::PendingReview>()
+            && let Some(mut guard) = crate::util::lock_mutex(&pending.text, "pending_text")
+        {
+            *guard = Some(text);
         }
     }
 
@@ -63,12 +63,11 @@ impl ReviewProvider for TauriReviewProvider {
     }
 
     fn set_shown_on_press(&self, value: bool) {
-        if let Some(pending) = self.app.try_state::<super::review::PendingReview>() {
-            if let Some(mut guard) =
+        if let Some(pending) = self.app.try_state::<super::review::PendingReview>()
+            && let Some(mut guard) =
                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
-            {
-                *guard = value;
-            }
+        {
+            *guard = value;
         }
     }
 }

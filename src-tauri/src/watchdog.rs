@@ -61,12 +61,10 @@ impl RecoveryActions for TauriRecoveryActions {
         if let Some(pending) = self
             .app
             .try_state::<super::commands::review::PendingReview>()
-        {
-            if let Some(mut guard) =
+            && let Some(mut guard) =
                 crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
-            {
-                *guard = false;
-            }
+        {
+            *guard = false;
         }
     }
 

@@ -2,7 +2,7 @@
 name = "dl-voice-typing"
 version = "26.9.3"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }

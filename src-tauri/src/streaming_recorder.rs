@@ -289,7 +289,7 @@ enum ShutdownFailure {
 fn try_send_block(sender: &mpsc::SyncSender<Vec<i16>>, block: Vec<i16>, dropped: &AtomicU64) {
     if sender.try_send(block).is_err() {
         let n = dropped.fetch_add(1, Ordering::Relaxed) + 1;
-        if n == 1 || n % 10 == 0 {
+        if n == 1 || n.is_multiple_of(10) {
             warn!("record-only writer backpressure: {n} block(s) dropped");
         }
     }

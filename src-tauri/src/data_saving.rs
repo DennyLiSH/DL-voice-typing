@@ -238,11 +238,19 @@ fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Resu
 pub(crate) fn generate_timestamp_filename() -> String {
     use time::format_description::well_known::Rfc3339;
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    // Format as "YYYY-MM-DD_HH-MM-SS" for filename safety.
-    let format = time::format_description::parse("[year]-[month]-[day]_[hour]-[minute]-[second]")
-        .unwrap_or_else(|_| time::format_description::parse("[year]-[month]-[day]").unwrap());
-    now.format(&format)
-        .unwrap_or_else(|_| now.format(&Rfc3339).unwrap())
+    // Format as "YYYY-MM-DD_HH-MM-SS" for filename safety. Both literals are
+    // statically valid; the fallback chain guards against time crate regressions.
+    let text = if let Ok(fmt) = time::format_description::parse_borrowed::<2>(
+        "[year]-[month]-[day]_[hour]-[minute]-[second]",
+    ) {
+        now.format(&fmt)
+    } else if let Ok(fmt) = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]") {
+        now.format(&fmt)
+    } else {
+        tracing::warn!(target: "data_saving", "format literals failed to parse; falling back to Rfc3339");
+        now.format(&Rfc3339)
+    };
+    text.unwrap_or_default()
 }
 
 /// Write JSON metadata atomically: temp file + rename, so a crash mid-write

@@ -124,7 +124,7 @@ Q8 量化版体积约为原版一半，准确率损失很小，推荐优先选�
 
 | 技术 | 用途 |
 |------|------|
-| Rust (edition 2024, MSRV 1.85) | 后端逻辑，状态机驱动整个管道 |
+| Rust (edition 2024, MSRV 1.88) | 后端逻辑，状态机驱动整个管道 |
 | Tauri 2 | 桌面框架，系统托盘，多窗口管理 |
 | whisper-rs (whisper.cpp) | 本地语音识别，Vulkan GPU / CPU fallback |
 | cpal | 音频采集，48kHz → 16kHz 重采样 |
@@ -182,7 +182,7 @@ Idle → Recording → Transcribing → [LLMRefining →] Injecting → Idle
 
 ### 前置条件
 
-- Rust 1.85+ (stable-x86_64-pc-windows-msvc)
+- Rust 1.88+ (stable-x86_64-pc-windows-msvc)
 - Vulkan SDK 1.4.341.1+
 - Visual Studio Build Tools 2022+（C++ 工作负载）
 - Node.js（前端测试）

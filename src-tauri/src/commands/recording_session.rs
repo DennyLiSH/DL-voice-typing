@@ -246,14 +246,13 @@ impl RecordingSession {
                     let rms_val = rms::calculate_rms(data);
                     if let Some(mut last) =
                         crate::util::lock_mutex(&last_rms_for_cb, "last_rms_emit")
+                        && last.elapsed() >= Duration::from_millis(33)
                     {
-                        if last.elapsed() >= Duration::from_millis(33) {
-                            *last = Instant::now();
-                            emitter_for_rms.emit(
-                                "audio-rms",
-                                serde_json::to_value(rms_val).unwrap_or_default(),
-                            );
-                        }
+                        *last = Instant::now();
+                        emitter_for_rms.emit(
+                            "audio-rms",
+                            serde_json::to_value(rms_val).unwrap_or_default(),
+                        );
                     }
                 }));
 
@@ -271,22 +270,21 @@ impl RecordingSession {
                 if matches!(
                     mode,
                     PipelineMode::RealtimeDirect | PipelineMode::RealtimeReview
-                ) {
-                    if let Some(sr) = ac_guard.sample_rate() {
-                        let audio = Arc::new(crate::realtime::AudioRingBufferSource::new(
-                            self.ps.ring_buffer(),
-                        ));
-                        let rt = crate::realtime::RealtimeTranscriber::start(
-                            audio,
-                            self.ps.engine(),
-                            self.ps.emitter(),
-                            sr,
-                            crate::realtime::RealtimePolicy {
-                                language: policy.language,
-                            },
-                        );
-                        self.ps.set_realtime_transcriber(rt);
-                    }
+                ) && let Some(sr) = ac_guard.sample_rate()
+                {
+                    let audio = Arc::new(crate::realtime::AudioRingBufferSource::new(
+                        self.ps.ring_buffer(),
+                    ));
+                    let rt = crate::realtime::RealtimeTranscriber::start(
+                        audio,
+                        self.ps.engine(),
+                        self.ps.emitter(),
+                        sr,
+                        crate::realtime::RealtimePolicy {
+                            language: policy.language,
+                        },
+                    );
+                    self.ps.set_realtime_transcriber(rt);
                 }
             }
 

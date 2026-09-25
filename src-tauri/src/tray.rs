@@ -41,23 +41,20 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
             "reset" => {
                 info!("Tray: user triggered manual reset");
                 // Reset state machine
-                if let Some(sm) = app.try_state::<Arc<Mutex<crate::state::StateMachine>>>() {
-                    if let Some(mut guard) =
+                if let Some(sm) = app.try_state::<Arc<Mutex<crate::state::StateMachine>>>()
+                    && let Some(mut guard) =
                         crate::util::lock_mutex(&sm, "state_machine_tray_reset")
-                    {
-                        guard.reset();
-                        info!("Tray: state machine reset to Idle");
-                    }
+                {
+                    guard.reset();
+                    info!("Tray: state machine reset to Idle");
                 }
                 // Stop audio capture if recording
                 if let Some(ac) =
                     app.try_state::<Arc<Mutex<dyn crate::audio::AudioCaptureProvider>>>()
-                {
-                    if let Some(mut guard) =
+                    && let Some(mut guard) =
                         crate::util::lock_mutex(&ac, "audio_capture_tray_reset")
-                    {
-                        guard.stop();
-                    }
+                {
+                    guard.stop();
                 }
                 // Hide all windows
                 if let Some(win) = app.get_webview_window("floating") {
@@ -86,10 +83,9 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
             "transcribe" => {
                 if let Some(pt) =
                     app.try_state::<crate::commands::transcribe_cmd::PendingTranscribe>()
+                    && let Err(e) = crate::commands::transcribe_cmd::open_window_impl(app, &pt)
                 {
-                    if let Err(e) = crate::commands::transcribe_cmd::open_window_impl(app, &pt) {
-                        info!("Tray: open transcribe window failed: {e}");
-                    }
+                    info!("Tray: open transcribe window failed: {e}");
                 }
             }
             "quit" => {

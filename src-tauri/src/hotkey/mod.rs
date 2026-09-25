@@ -114,10 +114,10 @@ fn title_case(name: &str) -> String {
     // Try longest match first.
     const SUFFIXES: &[&str] = &["escape", "shift", "ctrl", "alt"];
     for suf in SUFFIXES {
-        if let Some(prefix) = name.strip_suffix(suf) {
-            if !prefix.is_empty() {
-                return capitalize_first(prefix) + &capitalize_first(suf);
-            }
+        if let Some(prefix) = name.strip_suffix(suf)
+            && !prefix.is_empty()
+        {
+            return capitalize_first(prefix) + &capitalize_first(suf);
         }
     }
     // No compound split — uppercase the first letter.

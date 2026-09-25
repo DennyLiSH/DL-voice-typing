@@ -706,10 +706,10 @@ impl DeliveryController {
     /// cycle. Uses ClipboardProvider::was_saved() trait method (mirrors
     /// recover() usage in recording_session). No ctx parameter.
     fn restore_clipboard_if_saved(&self) {
-        if self.clipboard.was_saved() {
-            if let Err(e) = self.clipboard.restore() {
-                warn!(target: "delivery", "restore_clipboard_if_saved: restore failed: {e}");
-            }
+        if self.clipboard.was_saved()
+            && let Err(e) = self.clipboard.restore()
+        {
+            warn!(target: "delivery", "restore_clipboard_if_saved: restore failed: {e}");
         }
     }
 
@@ -829,10 +829,10 @@ impl DeliveryController {
             // inject_inner does not self-restore on failure — restore the
             // saved content explicitly. Unified exit covers both paste
             // failure and panic-after-save (no-op when nothing was saved).
-            if self.clipboard.was_saved() {
-                if let Err(re) = self.clipboard.restore() {
-                    warn!(target: "delivery", "inject_to_hwnd: clipboard restore failed: {re}");
-                }
+            if self.clipboard.was_saved()
+                && let Err(re) = self.clipboard.restore()
+            {
+                warn!(target: "delivery", "inject_to_hwnd: clipboard restore failed: {re}");
             }
             return Err(InjectError::Clipboard(e));
         }

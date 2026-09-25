@@ -219,14 +219,14 @@ pub fn delete_custom_model(
         .map_err(|e| CommandError::new("IO", format!("failed to delete {filename}: {e}")))?;
 
     let config = config_cache.read_cached();
-    if let WhisperModel::Custom(ref name) = config.whisper_model {
-        if name == &filename {
-            let mut config: AppConfig = (*config).clone();
-            config.whisper_model = WhisperModel::Base;
-            config_cache
-                .save_cached(&config)
-                .map_err(CommandError::from)?;
-        }
+    if let WhisperModel::Custom(ref name) = config.whisper_model
+        && name == &filename
+    {
+        let mut config: AppConfig = (*config).clone();
+        config.whisper_model = WhisperModel::Base;
+        config_cache
+            .save_cached(&config)
+            .map_err(CommandError::from)?;
     }
 
     Ok(())

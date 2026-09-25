@@ -226,18 +226,17 @@ impl PipelineState {
 
         if let Some(mut rt_guard) =
             crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+            && let Some(ref mut rt) = *rt_guard
         {
-            if let Some(ref mut rt) = *rt_guard {
-                rt.stop();
-                let text = rt.take_accumulated();
-                rt_guard.take();
-                info!(
-                    "stop_recording_resources: realtime accumulated={} chars",
-                    text.len()
-                );
-                if !text.is_empty() {
-                    return Some(text);
-                }
+            rt.stop();
+            let text = rt.take_accumulated();
+            rt_guard.take();
+            info!(
+                "stop_recording_resources: realtime accumulated={} chars",
+                text.len()
+            );
+            if !text.is_empty() {
+                return Some(text);
             }
         }
         None
@@ -253,11 +252,10 @@ impl PipelineState {
 
         if let Some(mut rt_guard) =
             crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+            && let Some(mut rt) = rt_guard.take()
         {
-            if let Some(mut rt) = rt_guard.take() {
-                info!("stop_recording_resources_graceful: stopping realtime thread");
-                rt.stop_and_wait();
-            }
+            info!("stop_recording_resources_graceful: stopping realtime thread");
+            rt.stop_and_wait();
         }
     }
 
@@ -420,11 +418,10 @@ impl PipelineState {
     pub(crate) fn stop_realtime_leftover(&self) {
         if let Some(mut rt_guard) =
             crate::util::lock_mutex(&self.realtime_transcriber, "realtime_transcriber")
+            && let Some(ref mut rt) = *rt_guard
         {
-            if let Some(ref mut rt) = *rt_guard {
-                rt.stop();
-                rt_guard.take();
-            }
+            rt.stop();
+            rt_guard.take();
         }
     }
 
@@ -546,10 +543,10 @@ impl PipelineState {
     pub(crate) fn sm_state(&self) -> Option<StateTag> {
         #[cfg(test)]
         {
-            if let Some(guard) = crate::util::lock_mutex(&self.forced_sm_state, "forced_sm_state") {
-                if let Some(tag) = *guard {
-                    return Some(tag);
-                }
+            if let Some(guard) = crate::util::lock_mutex(&self.forced_sm_state, "forced_sm_state")
+                && let Some(tag) = *guard
+            {
+                return Some(tag);
             }
         }
         crate::util::lock_mutex(&self.sm, "state_machine").map(|s| s.state())
