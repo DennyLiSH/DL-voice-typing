@@ -214,7 +214,9 @@ function hide(delay = 0) {
         return;
     }
     // Remove any lingering ripples
-    document.querySelectorAll('.ripple').forEach((r) => r.remove());
+    document.querySelectorAll('.ripple').forEach((r) => {
+        r.remove();
+    });
     stopRecordOnlyTimer();
     indicator.style.filter = '';
     indicator.classList.remove('visible', 'processing', 'record-only');

@@ -204,7 +204,9 @@ const FIELDS = SETTINGS_FIELDS.map(({ key }) => ({ key, ...DOM_DEFS[key] }));
 
 export function populateFields(config) {
     loadedConfig = config;
-    FIELDS.forEach(({ key, set }) => set(config[key]));
+    FIELDS.forEach(({ key, set }) => {
+        set(config[key]);
+    });
     updateApiUrlWarning();
 
     // In dev builds without DL_AUTOSTART=1, gray out the autostart toggle.

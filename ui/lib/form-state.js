@@ -29,7 +29,9 @@ export function onFormChange(cb) {
  * toggle, input value). Subscribers recompute their derived state.
  */
 export function notifyFormChange() {
-    changeListeners.forEach((cb) => cb());
+    changeListeners.forEach((cb) => {
+        cb();
+    });
 }
 
 /**
