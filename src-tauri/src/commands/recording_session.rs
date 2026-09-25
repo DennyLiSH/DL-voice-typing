@@ -1020,9 +1020,8 @@ mod tests_session_policy {
     #[test]
     fn known_unsnapshoted_fields_audit_anchor() {
         // Audit reference: adding a new AppConfig field requires either adding
-        // it to SessionPolicy OR documenting it here. The test simply asserts
-        // the constant remains non-empty and contains the canonical exclusions.
-        assert!(!KNOWN_UNSNAPSHOTED_FIELDS.is_empty());
+        // it to SessionPolicy OR documenting it here. The contains() asserts
+        // double as the non-emptiness check for the canonical exclusions.
         assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"llm_api_key"));
         assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"autostart"));
         assert!(KNOWN_UNSNAPSHOTED_FIELDS.contains(&"review_before_paste"));
@@ -1072,10 +1071,9 @@ mod tests_session_policy {
         for field in all_fields {
             assert!(
                 covered.contains(field),
-                "AppConfig field '{}' not covered by SessionPolicy or KNOWN_UNSNAPSHOTED_FIELDS \
+                "AppConfig field '{field}' not covered by SessionPolicy or KNOWN_UNSNAPSHOTED_FIELDS \
                  — add it to SessionPolicy::from_config for snapshot, or to \
-                 KNOWN_UNSNAPSHOTED_FIELDS for documented exclusion",
-                field
+                 KNOWN_UNSNAPSHOTED_FIELDS for documented exclusion"
             );
         }
     }

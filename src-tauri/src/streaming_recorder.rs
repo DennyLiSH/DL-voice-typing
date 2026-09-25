@@ -394,7 +394,7 @@ pub fn fix_wav_header(path: &Path) -> Result<HeaderFix, AppError> {
     if len < WAV_HEADER_LEN {
         return Err(AppError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("file too small for WAV header: {} bytes", len),
+            format!("file too small for WAV header: {len} bytes"),
         )));
     }
     let mut file = fs::OpenOptions::new().read(true).write(true).open(path)?;
