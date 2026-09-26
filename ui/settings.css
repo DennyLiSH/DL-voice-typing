@@ -454,6 +454,34 @@ select:disabled, input:disabled {
 }
 
 /* --------------------------------------------------------------------------
+   First-run hint banner (auto-opened settings window on missing model)
+   Visual recipe: shared .banner base + accent info treatment + flex layout.
+   Hidden by default; the backend `model_missing=1` query param toggles it on
+   in ui/lib/first-run-banner.js.
+   -------------------------------------------------------------------------- */
+.first-run-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  background: rgba(var(--accent-rgb), 0.08);
+  border-color: rgba(var(--accent-rgb), 0.25);
+  color: var(--text-primary);
+}
+
+.first-run-banner[hidden] {
+  display: none;
+}
+
+.first-run-banner #first-run-banner-text {
+  flex: 1;
+}
+
+.first-run-banner #first-run-banner-dismiss {
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
    Hint text
    -------------------------------------------------------------------------- */
 .hint {
