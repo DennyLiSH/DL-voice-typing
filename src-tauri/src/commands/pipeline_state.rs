@@ -905,6 +905,35 @@ mod sm_verb_tests {
     }
 
     #[test]
+    fn test_sm_call_verb_returns_false_on_poisoned_state_machine() {
+        // lock-poisoned branch of sm_call: util::lock_mutex returns None
+        // (after its own warn!), every sm_call verb must collapse to false,
+        // sm_state must report None, and the infallible sm_reset must not
+        // panic. Mirrors the catch_unwind + AssertUnwindSafe idiom of
+        // cancel_guard_drop_drains_token_slot_on_panic_unwind.
+        let ps = build_test_ps();
+        let sm = ps.test_components().sm;
+        let sm2 = sm.clone();
+        let sm_for_panic: *const std::sync::Mutex<StateMachine> = &*sm2;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = unsafe { &*sm_for_panic }.lock().unwrap();
+            panic!("deliberately poison the state machine mutex");
+        }));
+        assert!(result.is_err(), "poisoning panic must have propagated");
+
+        assert!(
+            !ps.sm_start_recording(),
+            "verb must return false under poison"
+        );
+        assert_eq!(
+            ps.sm_state(),
+            None,
+            "state query must report None under poison"
+        );
+        ps.sm_reset(); // infallible verb: silently drops, must not panic
+    }
+
+    #[test]
     fn test_sm_record_only_verbs() {
         let ps = build_test_ps();
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
