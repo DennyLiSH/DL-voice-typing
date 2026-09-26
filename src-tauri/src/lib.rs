@@ -329,7 +329,7 @@ fn open_settings_at_model_page(app: &tauri::AppHandle) {
     let built = tauri::webview::WebviewWindowBuilder::new(
         app,
         "settings",
-        tauri::WebviewUrl::App("settings.html".into()),
+        tauri::WebviewUrl::App("settings.html?model_missing=1".into()),
     )
     .title("语文兔语音输入法 - 设置")
     .inner_size(560.0, 620.0)
