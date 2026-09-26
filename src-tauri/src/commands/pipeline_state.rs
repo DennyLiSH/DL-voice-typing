@@ -854,6 +854,57 @@ mod sm_verb_tests {
     }
 
     #[test]
+    fn test_sm_call_name_pairs_with_state_machine_method() {
+        // Source-scrape pairing contract (same family as the frontend
+        // ui-copy-contract tests): every sm_call site must pair its log
+        // name with the StateMachine method it actually invokes, so a
+        // copy-paste cannot silently repoint warn! output at the wrong
+        // verb. Parses this file's own source.
+        //
+        // Self-reference guard: the separator below is assembled at
+        // compile time (concat!) so this test's own source never spells
+        // the contiguous token it scrapes for — a plain string literal
+        // here would split the scrape into a noise chunk that starts
+        // with a closing quote and slips past the leading-quote check.
+        // Keep comments in this test free of the contiguous token too.
+        const MARKER: &str = concat!("sm", "_call(");
+        let src = include_str!("pipeline_state.rs");
+        let mut pairs = 0usize;
+        // skip(1) drops everything before the fn definition; the
+        // definition's surviving signature chunk starts with "&self,"
+        // (not a leading quote) and is rejected by the check below.
+        for chunk in src.split(MARKER).skip(1) {
+            let chunk = chunk.trim_start();
+            let Some(rest) = chunk.strip_prefix('"') else {
+                continue; // fn definition signature — not a call site
+            };
+            let end = rest.find('"').expect("unterminated string literal");
+            let name = &rest[..end];
+            if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue; // noise chunk (scrape self-reference debris)
+            }
+            let idx = chunk
+                .find("StateMachine::")
+                .expect("sm_call site without a StateMachine method pointer");
+            let after = &chunk[idx + "StateMachine::".len()..];
+            let method: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            assert_eq!(
+                name,
+                format!("sm_{method}"),
+                "pairing broken at name {name:?}"
+            );
+            pairs += 1;
+        }
+        // Ratchet: 12 verbs go through sm_call (sm_cancel_transcribing_or_llm
+        // and sm_reset keep custom bodies — deliberately NOT counted).
+        // Update this number when adding/removing an sm_call verb.
+        assert_eq!(pairs, 12);
+    }
+
+    #[test]
     fn test_sm_record_only_verbs() {
         let ps = build_test_ps();
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
