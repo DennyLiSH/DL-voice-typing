@@ -38,3 +38,6 @@ pgo-data/
 
 # stray cargo target dir from CARGO_TARGET_DIR=t typos
 src-tauri/t/
+
+/DESIGN.md
+/PRODUCT.md
