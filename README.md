@@ -280,4 +280,4 @@ npm run test:watch                       # vitest watch
 
 ## 📜 License
 
-TBD
+[MIT](LICENSE) © 2026 Denny LI Guang
