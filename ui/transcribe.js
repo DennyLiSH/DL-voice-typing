@@ -302,6 +302,11 @@ function buildSegmentRow(index, seg) {
     input.className = 'segment-text';
     input.value = state.edits.has(index) ? state.edits.get(index) : seg.text;
     input.setAttribute('aria-label', `段落 ${index + 1}`);
+    // M1-a: while the user is editing the full merged text, segment inputs
+    // are disabled to prevent the merge from clobbering their edits.
+    if (document.body.classList.contains('merged-editing')) {
+        input.disabled = true;
+    }
     // Rule 5: edits feed the merged text only, never the segment.
     input.addEventListener('input', () => {
         state.edits.set(index, input.value);
@@ -329,6 +334,45 @@ function updateMerged() {
     if (merged) merged.value = mergeSegmentTexts(state.segments, state.edits);
     // BC(C5)#2: inject disabled refreshes live while editing (e.g. clearing
     // all text grays the button immediately).
+    syncUI();
+}
+
+// --- Merged-text edit mode (M1-a) ------------------------------------------
+// Default state: merged textarea is readonly; users edit segments one at a
+// time. To find/replace across the whole transcript, the user clicks
+// 「编辑」 which unlocks the merged textarea AND locks segment editing
+// (bidirectional write would clobber unsaved full-text edits when a
+// segment changes). 「完成」 returns to default state; final_text absorbs
+// the full-text edit (single direction: edit → final_text on inject).
+function enterMergedEditMode() {
+    const merged = $('merged');
+    const edit = $('btn-edit-merged');
+    const done = $('btn-done-edit-merged');
+    if (!merged || !edit || !done) return;
+    merged.readOnly = false;
+    merged.classList.add('editing');
+    edit.hidden = true;
+    done.hidden = false;
+    // Lock segment edits to prevent segment changes from clobbering the
+    // user's full-text edit (the mergeSegmentTexts call in updateMerged
+    // would otherwise overwrite whatever they typed).
+    document.body.classList.add('merged-editing');
+    merged.focus();
+}
+
+function exitMergedEditMode() {
+    const merged = $('merged');
+    const edit = $('btn-edit-merged');
+    const done = $('btn-done-edit-merged');
+    if (!merged || !edit || !done) return;
+    merged.readOnly = true;
+    merged.classList.remove('editing');
+    edit.hidden = false;
+    done.hidden = true;
+    document.body.classList.remove('merged-editing');
+    // final_text is captured from #merged.value at inject time; nothing
+    // to persist here. Trigger syncUI in case button states depend on
+    // emptiness (they do via mergedEmpty).
     syncUI();
 }
 
@@ -461,7 +505,13 @@ async function reloadSelectedDetail() {
 
 async function injectText() {
     if (state.phase !== PHASE.IDLE || !state.selected) return;
-    const text = mergeSegmentTexts(state.segments, state.edits);
+    // M1-a: when the user is editing the merged text, the textarea holds
+    // their authoritative version; segments + edits may be stale relative
+    // to it. Otherwise rebuild from segments (which respects per-segment
+    // edits via the state.edits map).
+    const text = document.body.classList.contains('merged-editing')
+        ? ($('merged')?.value ?? '')
+        : mergeSegmentTexts(state.segments, state.edits);
     if (text.trim() === '') return;
     setPhase(PHASE.INJECTING);
     try {
@@ -552,6 +602,8 @@ function wireEvents() {
     $('btn-transcribe')?.addEventListener('click', startTranscription);
     $('btn-cancel')?.addEventListener('click', cancelTranscription);
     $('btn-inject')?.addEventListener('click', injectText);
+    $('btn-edit-merged')?.addEventListener('click', enterMergedEditMode);
+    $('btn-done-edit-merged')?.addEventListener('click', exitMergedEditMode);
 
     const list = $('rec-list');
     if (list) {

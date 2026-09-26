@@ -58,7 +58,11 @@
                 <div id="segments-empty" class="segments-empty" hidden>转录未产生任何段落</div>
 
                 <div class="merged-row">
-                    <div class="merged-label">合并文本</div>
+                    <div class="merged-label">
+                        <span>合并文本</span>
+                        <button id="btn-edit-merged" type="button" class="btn-secondary btn-edit-merged">编辑</button>
+                        <button id="btn-done-edit-merged" type="button" class="btn-secondary btn-done-edit-merged" hidden>完成</button>
+                    </div>
                     <textarea id="merged" readonly rows="3" aria-label="合并文本"></textarea>
                 </div>
 
