@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MASKED_MARKER } from '../ui/lib/api-key-mask.js';
 import { sameSpec } from '../ui/lib/hotkeys.js';
 import {
+    apiUrlWarningText,
     hasCredentialInUrl,
     hotkeyConflictWarning,
     isConfigDirty,
@@ -368,5 +369,58 @@ describe('hotkeyConflictWarning', () => {
         expect(hotkeyConflictWarning('F5')).toBeNull();
         expect(hotkeyConflictWarning('B')).toBeNull();
         expect(hotkeyConflictWarning('')).toBeNull();
+    });
+});
+
+describe('apiUrlWarningText', () => {
+    const PERSISTENCE =
+        '检测到地址中嵌有密钥参数，建议将密钥填入下方「API 密钥」字段，并从地址中移除密钥参数。';
+    const PERSISTENCE_AND_TRANSPORT =
+        '检测到地址中嵌有密钥参数，建议将密钥填入下方「API 密钥」字段，并从地址中移除密钥参数。该地址使用 http 明文连接，密钥将以明文形式在网络上传输，可能被同一网络中的设备截获，建议改用 https。';
+
+    it('null without credential params, regardless of scheme/host', () => {
+        expect(apiUrlWarningText('http://192.168.1.5:1234/v1')).toBeNull();
+        expect(apiUrlWarningText('https://h.com/v1?model=gpt-4o')).toBeNull();
+        expect(apiUrlWarningText('')).toBeNull();
+    });
+
+    it('persistence advice only for https + credential param', () => {
+        expect(apiUrlWarningText('https://h.com/v1?key=sk-1')).toBe(
+            PERSISTENCE,
+        );
+    });
+
+    it('persistence advice only for scheme-less + credential param', () => {
+        expect(apiUrlWarningText('h.com/v1?key=sk-1')).toBe(PERSISTENCE);
+    });
+
+    it('appends transport warning for http + non-loopback + credential param', () => {
+        expect(apiUrlWarningText('http://192.168.1.5:1234/v1?key=sk-1')).toBe(
+            PERSISTENCE_AND_TRANSPORT,
+        );
+    });
+
+    it('transport warning fires case-insensitively (HTTP://, mixed-case host, port, fragment param)', () => {
+        expect(apiUrlWarningText('HTTP://Example.COM:8080/v1#api_key=x')).toBe(
+            PERSISTENCE_AND_TRANSPORT,
+        );
+    });
+
+    it('transport warning fires for non-loopback IPv6 literal with port', () => {
+        expect(apiUrlWarningText('http://[2001:db8::1]:1234/v1?key=x')).toBe(
+            PERSISTENCE_AND_TRANSPORT,
+        );
+    });
+
+    it('loopback hosts are exempt from the transport warning', () => {
+        for (const url of [
+            'http://localhost:1234/v1?key=x',
+            'http://127.0.0.1:1234/v1?key=x',
+            'http://127.1.2.3:1234/v1?key=x',
+            'http://[::1]:1234/v1?key=x',
+            'HTTP://LOCALHOST:1234/v1?key=x',
+        ]) {
+            expect(apiUrlWarningText(url)).toBe(PERSISTENCE);
+        }
     });
 });

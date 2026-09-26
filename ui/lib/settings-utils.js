@@ -52,6 +52,53 @@ export function hasCredentialInUrl(url) {
     return false;
 }
 
+const URL_CRED_PERSISTENCE_MSG =
+    '检测到地址中嵌有密钥参数，建议将密钥填入下方「API 密钥」字段，并从地址中移除密钥参数。';
+const URL_CRED_TRANSPORT_MSG =
+    '该地址使用 http 明文连接，密钥将以明文形式在网络上传输，可能被同一网络中的设备截获，建议改用 https。';
+
+/**
+ * True when the URL is an explicit `http://` address whose host is not a
+ * loopback address. Loopback (localhost / 127.x / [::1]) is exempt: local
+ * LLM servers (LM Studio, Ollama) are the common legitimate http case and
+ * the traffic never leaves the machine.
+ */
+function isPlaintextHttpNonLoopback(url) {
+    if (!/^http:\/\//i.test(url)) return false;
+    let host = url.slice(url.indexOf('//') + 2).split(/[/?#]/)[0];
+    if (host.startsWith('[')) {
+        // IPv6 literal: the colon inside brackets is not a port separator.
+        host = host.slice(0, host.indexOf(']') + 1);
+    } else {
+        host = host.split(':')[0];
+    }
+    const h = host.toLowerCase();
+    return (
+        h !== 'localhost' &&
+        h !== '::1' &&
+        h !== '[::1]' &&
+        !h.startsWith('127.')
+    );
+}
+
+/**
+ * Warning text for the LLM API URL, or null when the URL carries no known
+ * risk. Non-blocking advisory (never gates save):
+ *  - credential query param present → recommend the dedicated key field.
+ *    (The URL itself is DPAPI-encrypted at rest by the backend when it
+ *    embeds credentials — persistence.rs for_disk — so the advice is about
+ *    keeping the key out of the URL, not about config.json being plaintext.)
+ *  - additionally, http:// to a non-loopback host → the key travels the
+ *    network in cleartext (2026-09-17 credential-residue-hardening
+ *    registered residue).
+ */
+export function apiUrlWarningText(url) {
+    if (!hasCredentialInUrl(url)) return null;
+    return isPlaintextHttpNonLoopback(url)
+        ? URL_CRED_PERSISTENCE_MSG + URL_CRED_TRANSPORT_MSG
+        : URL_CRED_PERSISTENCE_MSG;
+}
+
 /**
  * Validate settings before save.
  * Returns { valid: boolean, error: string|null }.
