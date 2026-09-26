@@ -156,9 +156,7 @@ impl LLMClient {
             Ok(())
         } else {
             let status = response.status();
-            Err(AppError::Llm(format!(
-                "连接失败：服务端返回 HTTP {status}"
-            )))
+            Err(AppError::Llm(format!("连接失败：服务端返回 HTTP {status}")))
         }
     }
 
@@ -407,7 +405,10 @@ mod tests {
             "gpt-4".to_string(),
         );
         let result = client.test_connection().await;
-        assert!(result.is_err(), "connection to unreachable endpoint should fail");
+        assert!(
+            result.is_err(),
+            "connection to unreachable endpoint should fail"
+        );
         let err = format!("{}", result.unwrap_err());
         assert!(
             err.contains("连接失败"),
