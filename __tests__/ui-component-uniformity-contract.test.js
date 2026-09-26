@@ -61,6 +61,22 @@ describe('button geometry uniformity', () => {
         expect(blockOf(css, '.btn-cancel {')).not.toContain('padding');
         expect(css).not.toContain('scale(0.96)');
     });
+
+    it('.toggle-password centers via margin-top, no transform declaration (base press-scale owns transform)', () => {
+        const block = blockOf(read('../ui/settings.css'), '.toggle-password {');
+        expect(block).toContain('top: 50%');
+        expect(block).toMatch(/margin-top:\s*-16px/);
+        // Declaration-anchored on purpose: blockOf slices raw text INCLUDING
+        // comments, and the block's own comment legitimately mentions
+        // transform/translateY — only a transform declaration is the defect.
+        expect(block).not.toMatch(/^\s*transform\s*:/m);
+    });
+
+    it('settings.css declares no transform: translateY(-50%) centering (clobbered by button:active scale)', () => {
+        expect(read('../ui/settings.css')).not.toMatch(
+            /^\s*transform\s*:\s*translateY\(-50%\)/m,
+        );
+    });
 });
 
 describe('badge uniformity', () => {

@@ -367,7 +367,11 @@ select:disabled, input:disabled {
   position: absolute;
   right: 6px;
   top: 50%;
-  transform: translateY(-50%);
+  /* Vertical centering uses margin, not transform: the base button:active
+   * rule in common.css REPLACES transform with scale(0.97), which would
+   * drop a translateY(-50%) and shift the icon 16px on press.
+   * -16px = half the 32px button base height (common.css). */
+  margin-top: -16px;
   background: none;
   border: none;
   cursor: pointer;
