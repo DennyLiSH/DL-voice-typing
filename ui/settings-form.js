@@ -460,7 +460,15 @@ apiUrlInput.addEventListener('input', updateApiUrlWarning);
 
 // --- Save ---
 
-saveBtn.addEventListener('click', async () => {
+let saveInFlight = false;
+
+export async function saveSettings() {
+    // Shared re-entry guard for click + Ctrl+S. Note: we can't use
+    // saveBtn.disabled here — it's also true when the form is clean (no
+    // edits), which would block a redundant but valid save the test
+    // suite relies on. Use a dedicated in-flight flag instead.
+    if (saveInFlight) return;
+
     hideError();
     const config = getCurrentConfig();
 
@@ -473,6 +481,7 @@ saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中…';
     saveBtn.classList.add('saving');
+    saveInFlight = true;
 
     const prevHotkey = loadedConfig?.hotkey;
     try {
@@ -520,7 +529,24 @@ saveBtn.addEventListener('click', async () => {
     } finally {
         saveBtn.textContent = '保存';
         saveBtn.classList.remove('saving');
+        saveInFlight = false;
         saveBtn.disabled = !isFormDirty();
+    }
+}
+
+saveBtn.addEventListener('click', saveSettings);
+
+// Ctrl+S / Cmd+S saves (review.js precedent for keydown pattern).
+// IME guard: don't intercept while a composition session is active
+// (prevents stealing "select all" mid-pinyin entry).
+document.addEventListener('keydown', (e) => {
+    if (
+        (e.ctrlKey || e.metaKey) &&
+        e.key.toLowerCase() === 's' &&
+        !e.isComposing
+    ) {
+        e.preventDefault();
+        saveSettings();
     }
 });
 
