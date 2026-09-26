@@ -182,7 +182,7 @@ Idle → Recording → Transcribing → [LLMRefining →] Injecting → Idle
 
 ### 前置条件
 
-- Rust 1.88+ (stable-x86_64-pc-windows-msvc)
+- Rust 1.88+ —— 仓库经 `rust-toolchain.toml` 钉 1.88.0（与 CI 一致，rustup 自动切换；无需手动选工具链。首次进入本仓库且未装 1.88.0 的机器，rustup 会自动从官方签名源下载该工具链（minimal profile）。MSRV bump 前可用 `cargo +stable clippy --all-targets -- -D warnings` 预检新 lint）
 - Vulkan SDK 1.4.341.1+
 - Visual Studio Build Tools 2022+（C++ 工作负载）
 - Node.js（前端测试）
