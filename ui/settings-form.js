@@ -11,7 +11,7 @@ import {
 } from './lib/hotkeys.js';
 import { SETTINGS_FIELDS } from './lib/settings-schema.js';
 import {
-    hasCredentialInUrl,
+    apiUrlWarningText,
     hotkeyConflictWarning,
     isConfigDirty,
     validateSettings,
@@ -445,12 +445,15 @@ function updateHotkeyWarning(prefix) {
     warn.textContent = warning ?? '';
 }
 
-// Show the plaintext-persistence warning when the URL embeds credential-like
-// query params. Intentionally stays visible while the LLM toggle is off:
-// api_url is persisted to config.json regardless of llm_enabled, so the
-// exposure does not depend on the toggle.
+// Show the API-URL advisory: embedded credential param (recommend the
+// dedicated key field), plus the plaintext-transport sentence when the URL
+// is http:// to a non-loopback host. Intentionally stays visible while the
+// LLM toggle is off: api_url is persisted to config.json regardless of
+// llm_enabled, so the exposure does not depend on the toggle.
 function updateApiUrlWarning() {
-    apiUrlWarning.hidden = !hasCredentialInUrl(apiUrlInput.value.trim());
+    const text = apiUrlWarningText(apiUrlInput.value.trim());
+    apiUrlWarning.hidden = !text;
+    apiUrlWarning.textContent = text ?? '';
 }
 
 apiUrlInput.addEventListener('input', updateApiUrlWarning);

@@ -332,6 +332,19 @@ describe('api-url credential warning hint visibility', () => {
 
         expect(warning().hidden).toBe(false);
     });
+
+    it('appends the plaintext-transport sentence for http + non-loopback + key param', () => {
+        setInputValue('api-url', 'http://192.168.1.5:1234/v1?key=sk-1');
+        expect(warning().hidden).toBe(false);
+        expect(warning().textContent).toContain('http 明文连接');
+        expect(warning().textContent).toContain('「API 密钥」');
+    });
+
+    it('keeps persistence-only warning for http loopback hosts', () => {
+        setInputValue('api-url', 'http://localhost:1234/v1?key=sk-1');
+        expect(warning().hidden).toBe(false);
+        expect(warning().textContent).not.toContain('http 明文连接');
+    });
 });
 
 describe('help page recent-errors section', () => {
