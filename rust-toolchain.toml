@@ -1,0 +1,11 @@
+# Toolchain pin: every cargo/rustc invocation inside this repo uses 1.88.0,
+# identical to CI (.github/workflows/build.yml pins toolchain '1.88.0').
+# This kills the local-vs-CI clippy lint-set drift (uninlined_format_args etc.
+# changed lint groups between versions — 4 CI failures local pre-commit never saw).
+# When bumping MSRV, update THREE places together:
+#   1. this channel  2. src-tauri/Cargo.toml rust-version  3. build.yml toolchain pin
+# Use `cargo +stable clippy --all-targets -- -D warnings` manually before an MSRV bump to preview new lints.
+[toolchain]
+channel = "1.88.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
