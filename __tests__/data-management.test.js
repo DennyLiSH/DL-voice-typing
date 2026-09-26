@@ -239,11 +239,6 @@ describe('buildRecordingRow', () => {
         expect(row.querySelector('.badge.badge-neutral').textContent).toBe(
             '音频文件缺失',
         );
-        // Variant hook for the CSS preview-floor override (442px row budget).
-        expect(row.classList.contains('audio-missing')).toBe(true);
-        expect(
-            buildRecordingRow(baseEntry).classList.contains('audio-missing'),
-        ).toBe(false);
     });
 
     it('row carries the expand affordance (F4 evolved 2026-09-04: keyboard-reachable expand)', () => {

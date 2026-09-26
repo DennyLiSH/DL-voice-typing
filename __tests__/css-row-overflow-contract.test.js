@@ -20,8 +20,9 @@ const css = readFileSync(
     'utf8',
 );
 
-// Anchored at line start so the audio-missing variant selector
-// (`.data-row.audio-missing .data-row-preview`) cannot satisfy the match.
+// Anchored at line start so descendant variant selectors descending from
+// .data-row cannot satisfy the match — only the base .data-row-preview
+// rule counts.
 const BASE_RULE_RE = /^\.data-row-preview\s*\{[^}]*\}/m;
 
 describe('data row preview overflow contract', () => {
