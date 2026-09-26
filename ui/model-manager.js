@@ -1,5 +1,6 @@
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
+import { hideIfVisible } from './lib/first-run-banner.js';
 import { notifyFormChange } from './lib/form-state.js';
 import { showError } from './lib/ui-utils.js';
 
@@ -193,6 +194,7 @@ async function startDownload(size) {
         activeDownload = null;
         modelStatus[size] = true;
         updateModelAction();
+        hideIfVisible();
         notifyFormChange();
     } catch (e) {
         activeDownload = null;

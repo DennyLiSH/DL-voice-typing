@@ -1,6 +1,7 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog, isDialogOpen } from './lib/confirm-dialog.js';
+import { bindFirstRunBanner, showIfRequested } from './lib/first-run-banner.js';
 import { isFormDirty } from './lib/form-state.js';
 import { populateMainKeySelects } from './lib/hotkeys.js';
 import { showError } from './lib/ui-utils.js';
@@ -229,6 +230,8 @@ export async function init() {
         // writeSpecToUI call inside populateFields can locate the right
         // <option> for the loaded config's vk.
         populateMainKeySelects();
+        showIfRequested();
+        bindFirstRunBanner();
         setDirtyCheckEnabled(false);
         setSelectedModel(config.whisper_model);
         setModelStatus(modelsData.built_in);

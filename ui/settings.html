@@ -42,6 +42,12 @@
             <!-- Error banner -->
             <div class="error-banner banner banner-error" id="error-banner" role="alert"></div>
 
+            <!-- First-run hint: model missing auto-open (one-time, per launch) -->
+            <div class="first-run-banner" id="first-run-banner" role="status" hidden>
+                <span id="first-run-banner-text">语音识别模型尚未下载，语音输入暂不可用。请在当前页面选择并下载模型，完成后此提示自动消失。</span>
+                <button type="button" id="first-run-banner-dismiss">知道了</button>
+            </div>
+
             <!-- Page: General -->
             <div class="page-content active" id="page-general" role="tabpanel" aria-labelledby="tab-general">
                 <div class="page-title">通用设置</div>

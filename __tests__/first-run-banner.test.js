@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from 'vitest';
+
 import { readFileSync } from 'node:fs';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-    showIfRequested,
-    hideIfVisible,
     bindFirstRunBanner,
+    hideIfVisible,
+    showIfRequested,
 } from '../ui/lib/first-run-banner.js';
+
 // 环境声明沿用 settings.error_forwarding.test.js 先例（vitest.config.js
 // 无全局 environment，默认 node——缺此行则 document 未定义，4 例 DOM 用例全挂）
 
@@ -41,6 +43,13 @@ describe('first-run-banner', () => {
         hideIfVisible();
         hideIfVisible();
         expect(document.getElementById('first-run-banner').hidden).toBe(true);
+    });
+    it('banner copy contains model download guidance (scrapes settings.html)', () => {
+        const html = readFileSync('ui/settings.html', 'utf8');
+        const m = html.match(/id="first-run-banner-text"[^>]*>([^<]+)</);
+        expect(m).not.toBeNull();
+        expect(m[1]).toContain('模型');
+        expect(m[1]).toContain('下载');
     });
     it('backend param name contract: lib.rs uses model_missing=1', () => {
         // text-scrape 跨层契约（credential-words-contract / undo-window-contract 同族）；
