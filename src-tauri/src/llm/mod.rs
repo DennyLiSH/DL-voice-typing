@@ -147,7 +147,7 @@ impl LLMClient {
             // covers both the UI toast and the frontend-error log forwarder.
             .map_err(|e| {
                 AppError::Llm(format!(
-                    "connection test failed: {}",
+                    "连接失败：请检查网络与 API 配置（详情: {}）",
                     redact_error_detail(&e.to_string(), &self.api_key)
                 ))
             })?;
@@ -157,7 +157,7 @@ impl LLMClient {
         } else {
             let status = response.status();
             Err(AppError::Llm(format!(
-                "connection test failed: HTTP {status}"
+                "连接失败：服务端返回 HTTP {status}"
             )))
         }
     }
@@ -395,6 +395,28 @@ mod tests {
         let mock = MockCorrector::new("corrected text");
         assert_eq!(mock.correct_sync("raw text").unwrap(), "corrected text");
         assert!(mock.test_connection_sync().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_llm_connection_error_is_chinese_summary() {
+        // M4-a: connect failure error must start with 「连接失败」 (Chinese summary)
+        // and the redacted detail must not leak SECRET.
+        let client = LLMClient::new(
+            "http://127.0.0.1:1/v1/chat/completions".to_string(),
+            "SECRET".to_string(),
+            "gpt-4".to_string(),
+        );
+        let result = client.test_connection().await;
+        assert!(result.is_err(), "connection to unreachable endpoint should fail");
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("连接失败"),
+            "error must contain Chinese summary: got {err}"
+        );
+        assert!(
+            !err.contains("SECRET"),
+            "redacted detail must not leak the API key: got {err}"
+        );
     }
 
     #[test]
