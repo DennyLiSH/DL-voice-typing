@@ -122,32 +122,14 @@ const BUILT_IN_MODELS: &[ModelMeta] = &[
 
 impl Serialize for WhisperModel {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if let Some(meta) = BUILT_IN_MODELS.iter().find(|m| m.variant == *self) {
-            serializer.serialize_str(meta.serde_key)
-        } else if let Self::Custom(name) = self {
-            serializer.serialize_str(&format!("custom:{name}"))
-        } else {
-            unreachable!()
-        }
+        serializer.serialize_str(&self.to_id())
     }
 }
 
 impl<'de> Deserialize<'de> for WhisperModel {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        if let Some(meta) = BUILT_IN_MODELS.iter().find(|m| m.serde_key == s) {
-            Ok(meta.variant.clone())
-        } else if let Some(name) = s.strip_prefix("custom:") {
-            if name.is_empty() {
-                Err(serde::de::Error::custom(
-                    "custom model name cannot be empty",
-                ))
-            } else {
-                Ok(Self::Custom(name.to_string()))
-            }
-        } else {
-            Err(serde::de::Error::custom(format!("unknown model: {s}")))
-        }
+        Self::parse_id(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -211,6 +193,47 @@ impl WhisperModel {
     /// Returns the set of built-in model filenames (for scanner exclusion).
     pub fn built_in_filenames() -> std::collections::HashSet<&'static str> {
         BUILT_IN_MODELS.iter().map(|m| m.filename).collect()
+    }
+
+    /// Parse a model id string ("tiny", "base-q8_0", "custom:<filename>")
+    /// into a [`WhisperModel`]. Single authority for id resolution — the
+    /// serde `Deserialize` string arm delegates here. Custom names must be
+    /// plain filenames: the id can arrive from the frontend and ends up in
+    /// `models_dir().join(name)`, so path separators, drive letters and the
+    /// `..` parent component (whole-name match only — mid-name `..` in
+    /// `a..b.bin` is a legal NTFS filename with no traversal power) are
+    /// rejected.
+    pub fn parse_id(s: &str) -> Result<Self, crate::error::AppError> {
+        if let Some(name) = s.strip_prefix("custom:") {
+            if name.is_empty() {
+                return Err(crate::error::AppError::Config(
+                    "custom model name cannot be empty".to_string(),
+                ));
+            }
+            if name.contains(['\\', '/', ':']) || name == ".." {
+                return Err(crate::error::AppError::Config(format!(
+                    "custom model name must be a plain filename: {name:?}"
+                )));
+            }
+            return Ok(Self::Custom(name.to_string()));
+        }
+        BUILT_IN_MODELS
+            .iter()
+            .find(|m| m.serde_key == s)
+            .map(|m| m.variant.clone())
+            .ok_or_else(|| crate::error::AppError::Config(format!("unknown model: {s}")))
+    }
+
+    /// The id string for this model — inverse of [`parse_id`]. The serde
+    /// `Serialize` impl delegates here.
+    pub fn to_id(&self) -> String {
+        if let Some(meta) = BUILT_IN_MODELS.iter().find(|m| m.variant == *self) {
+            meta.serde_key.to_string()
+        } else if let Self::Custom(name) = self {
+            format!("custom:{name}")
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -793,6 +816,45 @@ mod tests {
         assert_eq!(WhisperModel::BaseQ8.size_str(), "base-q8_0");
         assert!(WhisperModel::BaseQ8.is_q8());
         assert!(!WhisperModel::Base.is_q8());
+    }
+
+    #[test]
+    fn test_parse_id_built_in_and_custom() {
+        assert_eq!(WhisperModel::parse_id("tiny").unwrap(), WhisperModel::Tiny);
+        assert_eq!(
+            WhisperModel::parse_id("base-q8_0").unwrap(),
+            WhisperModel::BaseQ8
+        );
+        assert_eq!(
+            WhisperModel::parse_id("custom:my-model.bin").unwrap(),
+            WhisperModel::Custom("my-model.bin".to_string())
+        );
+        // Mid-name ".." is a legal NTFS filename with no traversal power.
+        assert_eq!(
+            WhisperModel::parse_id("custom:a..b.bin").unwrap(),
+            WhisperModel::Custom("a..b.bin".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_id_rejects_unknown_and_path_like_custom() {
+        assert!(WhisperModel::parse_id("giant").is_err());
+        assert!(WhisperModel::parse_id("custom:").is_err());
+        assert!(WhisperModel::parse_id("custom:a/b.bin").is_err());
+        assert!(WhisperModel::parse_id("custom:a\\b.bin").is_err());
+        assert!(WhisperModel::parse_id("custom:..\\x.bin").is_err());
+        assert!(WhisperModel::parse_id("custom:C:\\x.bin").is_err());
+        // Whole-name ".." is the parent-directory traversal vector.
+        assert!(WhisperModel::parse_id("custom:..").is_err());
+    }
+
+    #[test]
+    fn test_to_id_roundtrip() {
+        for m in WhisperModel::all_built_in() {
+            assert_eq!(WhisperModel::parse_id(&m.to_id()).unwrap(), m.clone());
+        }
+        let c = WhisperModel::Custom("m.bin".to_string());
+        assert_eq!(WhisperModel::parse_id(&c.to_id()).unwrap(), c);
     }
 
     #[test]
