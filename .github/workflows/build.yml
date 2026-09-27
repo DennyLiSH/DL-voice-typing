@@ -99,7 +99,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2"
+        run: cargo install tauri-cli --version "^2.11"
 
       - name: Build release
         shell: pwsh
