@@ -117,12 +117,16 @@ pub(crate) fn set_segment_result(
     segments: &[crate::speech::Segment],
     transcription: &str,
     llm_corrected: Option<&str>,
+    model_used: Option<&crate::config::WhisperModel>,
 ) -> Result<(), AppError> {
     update_metadata_with(json_path, |m| {
         m.segments = segments.to_vec();
         m.transcription = Some(transcription.to_string());
         m.llm_corrected = llm_corrected.map(str::to_string);
         m.transcription_status = Some("done".to_string());
+        if let Some(model) = model_used {
+            m.whisper_model = Some(model.clone());
+        }
     })
 }
 

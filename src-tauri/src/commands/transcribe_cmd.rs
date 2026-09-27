@@ -11,6 +11,7 @@
 use crate::commands::data_management_cmd::resolve_child;
 use crate::commands::delivery_controller::{InjectError, WIN32_FOCUS_OPS};
 use crate::commands::pipeline_state::PipelineState;
+use crate::config::WhisperModel;
 use crate::error::CommandError;
 use crate::speech::Segment;
 use serde::Serialize;
@@ -78,9 +79,10 @@ pub async fn transcribe_recording(
     ps: tauri::State<'_, PipelineState>,
     filename: String,
     use_llm: bool,
+    model: Option<String>,
 ) -> Result<(), CommandError> {
     let ps_owned = ps.inner().clone();
-    transcribe_impl(&pt, ps_owned, filename, use_llm).await
+    transcribe_impl(&pt, ps_owned, filename, use_llm, model).await
 }
 
 /// Testable body of `transcribe_recording` (the command only adapts Tauri
@@ -100,6 +102,7 @@ async fn transcribe_impl(
     ps: PipelineState,
     filename: String,
     use_llm: bool,
+    model: Option<String>,
 ) -> Result<(), CommandError> {
     let token = begin_transcription(pt)?;
     let _slot = TranscribeSlotGuard(pt);
@@ -108,14 +111,57 @@ async fn transcribe_impl(
         let base = recordings_base_dir(&ps)?;
         let wav_path = resolve_child(&base, &filename, "wav")?;
         let json_path = resolve_child(&base, &filename, "json")?;
+
+        // Per-recording model override: whisper builds resolve to either
+        // the global engine or a temporary one; non-whisper builds always
+        // use the global engine and reject overrides (they have no
+        // WhisperEngine to load).
+        #[cfg(feature = "whisper")]
+        let resolved = resolve_request_engine(&ps, model.as_deref())?;
+        #[cfg(feature = "whisper")]
+        let (engine, model_used): (
+            &dyn crate::speech::SpeechEngine,
+            Option<&WhisperModel>,
+        ) = match &resolved {
+            RequestEngine::Default(arc) => (arc.as_ref(), None),
+            RequestEngine::Override { engine, model } => (engine.as_ref(), Some(model)),
+        };
+        #[cfg(not(feature = "whisper"))]
+        let default_engine_arc = ps.engine();
+        #[cfg(not(feature = "whisper"))]
+        let (engine, model_used): (
+            &dyn crate::speech::SpeechEngine,
+            Option<&WhisperModel>,
+        ) = {
+            if model.is_some() {
+                return Err(CommandError::validation(
+                    "按次模型覆盖在未启用 whisper 的构建中不可用",
+                ));
+            }
+            (default_engine_arc.as_ref(), None)
+        };
+
+        // Cancel gate after the (potentially long, override) model load:
+        // a Cancel issued during load must not run transcription on top.
+        if token_for_task.load(Ordering::Relaxed) {
+            info!("transcription_cancelled_after_model_load: {filename}");
+            ps.emitter().emit(
+                "transcription-cancelled",
+                serde_json::json!({"filename": filename}),
+            );
+            return Ok(());
+        }
+
         let (samples, _duration_ms) = read_wav_samples(&wav_path)?;
         run_transcription(
             &ps,
+            engine,
             &json_path,
             &filename,
             &samples,
             use_llm,
             token_for_task,
+            model_used,
         );
         Ok(())
     })
@@ -323,15 +369,97 @@ impl Drop for TranscribeSlotGuard<'_> {
     }
 }
 
+/// Which engine a transcription request should run on (pure resolution,
+/// no engine construction). `models_base` is injected for testability;
+/// production passes `config::models_dir()`.
+#[derive(Debug, PartialEq, Eq)]
+enum EngineChoice {
+    /// The globally loaded engine (current behavior).
+    Default,
+    /// Load a fresh engine for this recording only.
+    Override(WhisperModel),
+}
+
+/// The resolved engine a request will run on. `Default` holds the
+/// shared global engine; `Override` owns a temporary engine loaded for
+/// this recording only (dropped when the request ends).
+enum RequestEngine {
+    Default(std::sync::Arc<dyn crate::speech::SpeechEngine>),
+    #[cfg(feature = "whisper")]
+    Override {
+        engine: std::sync::Arc<crate::speech::whisper::WhisperEngine>,
+        model: WhisperModel,
+    },
+}
+
+fn resolve_transcribe_engine(
+    config_model: &WhisperModel,
+    requested: Option<&str>,
+    models_base: &Path,
+) -> Result<EngineChoice, CommandError> {
+    let Some(id) = requested else {
+        return Ok(EngineChoice::Default);
+    };
+    if id == config_model.to_id() {
+        return Ok(EngineChoice::Default);
+    }
+    let model = WhisperModel::parse_id(id).map_err(|e| CommandError::validation(e.to_string()))?;
+    let path = models_base.join(model.filename().as_ref());
+    if !path.is_file() {
+        return Err(CommandError::validation(format!(
+            "所选模型未下载：{}",
+            model.filename()
+        )));
+    }
+    Ok(EngineChoice::Override(model))
+}
+
+/// Resolve + (for overrides) load the engine for one transcription
+/// request. Whisper builds only; the non-whisper arm in the caller
+/// degrades to the global engine with a validation error on override.
+#[cfg(feature = "whisper")]
+fn resolve_request_engine(
+    ps: &crate::commands::pipeline_state::PipelineState,
+    requested: Option<&str>,
+) -> Result<RequestEngine, CommandError> {
+    let config_model = ps.config_cache().read_cached().whisper_model.clone();
+    match resolve_transcribe_engine(&config_model, requested, &crate::config::models_dir())? {
+        EngineChoice::Default => Ok(RequestEngine::Default(ps.engine())),
+        EngineChoice::Override(model) => {
+            let language = ps.config_cache().read_cached().language;
+            // Invariant: the is_file gate in resolve_transcribe_engine uses
+            // `models_base.join(filename())` with production models_dir(),
+            // byte-identical to model_path_for_size. Keep the two
+            // constructions in sync if either ever changes (validate-A /
+            // load-B divergence guard, 2026-09-27 Iter2 Stage 5).
+            let engine = crate::speech::whisper_factory::WhisperEngineFactory::create(
+                crate::config::model_path_for_size(&model),
+                language,
+            );
+            if let Err(e) = engine.load_model() {
+                error!("transcribe: override model load failed: {e}");
+                return Err(CommandError::new(
+                    "MODEL_LOAD",
+                    format!("模型加载失败：{e}"),
+                ));
+            }
+            Ok(RequestEngine::Override { engine, model })
+        }
+    }
+}
+
 /// The blocking transcription body. All user-facing outcomes are emitted as
 /// events; this function never returns an error to the command layer.
+#[allow(clippy::too_many_arguments)] // 8 args; merging engine+model_used into a struct obscures the call-site pairing with samples+json_path+filename+cancel.
 fn run_transcription(
     ps: &PipelineState,
+    engine: &dyn crate::speech::SpeechEngine,
     json_path: &Path,
     filename: &str,
     samples: &[f32],
     use_llm: bool,
     cancel: Arc<AtomicBool>,
+    model_used: Option<&WhisperModel>,
 ) {
     info!("transcription_requested: {filename} use_llm={use_llm}");
     let emitter = ps.emitter();
@@ -342,9 +470,7 @@ fn run_transcription(
         );
     });
 
-    let result = ps
-        .engine()
-        .transcribe_with_segments_sync(samples, cancel.clone(), progress);
+    let result = engine.transcribe_with_segments_sync(samples, cancel.clone(), progress);
 
     if cancel.load(Ordering::Relaxed) {
         info!("transcription_cancelled: {filename}");
@@ -401,6 +527,7 @@ fn run_transcription(
         &segments,
         &transcription,
         llm_corrected.as_deref(),
+        model_used,
     ) {
         error!("transcribe: failed to write results for {filename}: {e}");
         ps.emitter().emit(
@@ -757,7 +884,7 @@ mod tests {
         let stem = info.stem.clone();
 
         let handle =
-            tokio::spawn(async move { transcribe_impl(&pt_for_task, ps, stem, false).await });
+            tokio::spawn(async move { transcribe_impl(&pt_for_task, ps, stem, false, None).await });
 
         // Scheduler passes until the impl has claimed the slot: the claim
         // is the FIRST statement, so this resolves within a couple of
@@ -815,7 +942,7 @@ mod tests {
         let pt = PendingTranscribe::new();
 
         // Valid stem, missing wav file → the read fails inside the task.
-        let result = transcribe_impl(&pt, ps, "2026-08-18_10-30-00".to_string(), false).await;
+        let result = transcribe_impl(&pt, ps, "2026-08-18_10-30-00".to_string(), false, None).await;
         assert!(result.is_err());
         // The slot must be free again (window-open guard / next run).
         assert!(begin_transcription(&pt).is_ok());
@@ -860,11 +987,13 @@ mod tests {
 
         run_transcription(
             &ps,
+            ps.engine().as_ref(),
             &json_path,
             "2026-08-18_10-00-00",
             &samples,
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         );
 
         let events = event_names(&emitter);
@@ -894,11 +1023,13 @@ mod tests {
 
         run_transcription(
             &ps,
+            ps.engine().as_ref(),
             &json_path,
             "2026-08-18_10-00-01",
             &samples,
             false,
             cancel,
+            None,
         );
 
         let events = event_names(&emitter);
@@ -932,11 +1063,13 @@ mod tests {
 
         run_transcription(
             &ps,
+            ps.engine().as_ref(),
             &json_path,
             "2026-08-18_10-00-02",
             &samples,
             true,
             Arc::new(AtomicBool::new(false)),
+            None,
         );
 
         let events = event_names(&emitter);
@@ -974,11 +1107,13 @@ mod tests {
 
         run_transcription(
             &ps,
+            ps.engine().as_ref(),
             &json_path,
             "2026-08-18_10-00-03",
             &samples,
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         );
 
         // Zero segments is not an error: done, empty segments, empty text.
@@ -1040,11 +1175,13 @@ mod tests {
 
         run_transcription(
             &ps,
+            ps.engine().as_ref(),
             &json_path,
             "2026-08-18_10-00-04",
             &samples,
             true,
             Arc::new(AtomicBool::new(false)),
+            None,
         );
 
         let events = emitter.take_events();
@@ -1126,6 +1263,7 @@ mod tests {
                 &segments,
                 "原始转录",
                 Some("LLM纠正"),
+                None,
             )
             .is_ok()
         );
@@ -1231,11 +1369,13 @@ mod tests {
         assert!(samples.len() > 16000 - 2048 && samples.len() <= 16000 + 1024);
         run_transcription(
             &ps,
+            ps.engine().as_ref(),
             &json_path,
             &stem,
             &samples,
             false,
             Arc::new(AtomicBool::new(false)),
+            None,
         );
         let after = read_json(&json_path);
         assert_eq!(after["transcription_status"], "done");
@@ -1272,5 +1412,37 @@ mod tests {
         }
         // HWND 0 is never a valid window.
         assert_eq!(peek_inject_target(&pt), None);
+    }
+
+    #[test]
+    fn test_resolve_engine_none_and_same_id_use_default() {
+        assert_eq!(
+            resolve_transcribe_engine(&WhisperModel::Base, None, Path::new("/nonexistent"))
+                .unwrap(),
+            EngineChoice::Default
+        );
+        assert_eq!(
+            resolve_transcribe_engine(&WhisperModel::Base, Some("base"), Path::new("/nonexistent"))
+                .unwrap(),
+            EngineChoice::Default
+        );
+    }
+
+    #[test]
+    fn test_resolve_engine_override_requires_downloaded_file() {
+        let dir = std::env::temp_dir().join("dlvt_resolve_engine_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 文件缺失 → validation 错误
+        assert!(resolve_transcribe_engine(&WhisperModel::Base, Some("tiny"), &dir).is_err());
+        std::fs::write(dir.join("ggml-tiny.bin"), b"x").unwrap();
+        assert_eq!(
+            resolve_transcribe_engine(&WhisperModel::Base, Some("tiny"), &dir).unwrap(),
+            EngineChoice::Override(WhisperModel::Tiny)
+        );
+        // 路径样 custom 名在 fs 访问前即被拒
+        assert!(
+            resolve_transcribe_engine(&WhisperModel::Base, Some("custom:../x.bin"), &dir).is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
