@@ -202,6 +202,12 @@ impl TextCorrector for LLMClient {
 /// `sig`/`hmac`) are a known boundary — layer 2 below only catches values
 /// equal to the configured key.
 ///
+/// Acceptance rationale (ADR-0021, local _Project/adr/, not committed):
+/// tokenizing `code` would also hit error_code/status_code; short tokens
+/// (sig/hmac) have real non-credential uses; the api_key-value-equal
+/// replace layer backstops any param name. Re-open on: real leak report,
+/// a sig/hmac-query endpoint, or structured redaction in reqwest.
+///
 /// Layer 2 of `redact_error_detail` (api_key value replace) catches
 /// unlisted parameter names whose value equals the configured key.
 /// Over-redaction is the safe direction; do NOT remove a marker on a
