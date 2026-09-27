@@ -52,8 +52,22 @@ export function hasCredentialInUrl(url) {
     return false;
 }
 
+/**
+ * True when the URL embeds userinfo (`scheme://user[:pass]@host/…`).
+ * Mirrors backend `llm/mod.rs::url_contains_userinfo` — fixture parity
+ * guarded by `__tests__/userinfo-detection-contract.test.js`. Parity
+ * holds for well-formed absolute URLs only; on malformed input this
+ * anchored regex under-warns while the backend over-detects — both are
+ * the safe direction for their layer.
+ */
+export function hasUserinfoInUrl(url) {
+    return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(url);
+}
+
 const URL_CRED_PERSISTENCE_MSG =
     '检测到地址中嵌有密钥参数，建议将密钥填入下方「API 密钥」字段，并从地址中移除密钥参数。';
+const URL_USERINFO_MSG =
+    '检测到地址中嵌有用户名密码，建议从地址中移除，密钥改用下方「API 密钥」字段。';
 const URL_CRED_TRANSPORT_MSG =
     '该地址使用 http 明文连接，密钥将以明文形式在网络上传输，可能被同一网络中的设备截获，建议改用 https。';
 
@@ -83,20 +97,43 @@ function isPlaintextHttpNonLoopback(url) {
 
 /**
  * Warning text for the LLM API URL, or null when the URL carries no known
- * risk. Non-blocking advisory (never gates save):
+ * risk. Non-blocking advisory (never gates save). Up to three sentences
+ * are concatenated in fixed order (persistence → userinfo → transport):
  *  - credential query param present → recommend the dedicated key field.
  *    (The URL itself is DPAPI-encrypted at rest by the backend when it
  *    embeds credentials — persistence.rs for_disk — so the advice is about
  *    keeping the key out of the URL, not about config.json being plaintext.)
+ *  - userinfo (`scheme://user[:pass]@host/…`) present → recommend
+ *    moving auth to the dedicated key field. Independent of query-cred
+ *    detection: an HTTP basic-auth URL embeds no `?key=`, yet the
+ *    username/password still travels the network and lands on disk
+ *    (now DPAPI-encrypted at rest by the same conditional branch).
  *  - additionally, http:// to a non-loopback host → the key travels the
- *    network in cleartext (2026-09-17 credential-residue-hardening
- *    registered residue).
+ *    network in cleartext. The dedicated key field is treated as
+ *    "carrying a secret" too (it ends up in the `Authorization` header),
+ *    so a non-loopback http URL also fires the transport warning when a
+ *    key is configured.
+ *
+ * @param {string} url             — the LLM API URL the user typed
+ * @param {boolean} [hasDedicatedKey=false] — true when the dedicated
+ *   API-key field already has a value (typed or saved). Defaults to
+ *   false so the single-arg call remains byte-identical to the
+ *   pre-extension behavior.
+ * @returns {string|null}
  */
-export function apiUrlWarningText(url) {
-    if (!hasCredentialInUrl(url)) return null;
-    return isPlaintextHttpNonLoopback(url)
-        ? URL_CRED_PERSISTENCE_MSG + URL_CRED_TRANSPORT_MSG
-        : URL_CRED_PERSISTENCE_MSG;
+export function apiUrlWarningText(url, hasDedicatedKey = false) {
+    const hasQueryCred = hasCredentialInUrl(url);
+    const hasUserinfo = hasUserinfoInUrl(url);
+    const parts = [];
+    if (hasQueryCred) parts.push(URL_CRED_PERSISTENCE_MSG);
+    if (hasUserinfo) parts.push(URL_USERINFO_MSG);
+    if (
+        isPlaintextHttpNonLoopback(url) &&
+        (hasQueryCred || hasUserinfo || hasDedicatedKey)
+    ) {
+        parts.push(URL_CRED_TRANSPORT_MSG);
+    }
+    return parts.length ? parts.join('') : null;
 }
 
 /**

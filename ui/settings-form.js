@@ -449,14 +449,25 @@ function updateHotkeyWarning(prefix) {
 // dedicated key field), plus the plaintext-transport sentence when the URL
 // is http:// to a non-loopback host. Intentionally stays visible while the
 // LLM toggle is off: api_url is persisted to config.json regardless of
-// llm_enabled, so the exposure does not depend on the toggle.
+// llm_enabled, so the exposure does not depend on the toggle. The
+// transport branch also fires when a dedicated key is set (typed or
+// saved via MASKED_MARKER) — the key still travels the network in the
+// `Authorization` header regardless of whether the URL itself carries
+// credentials.
 function updateApiUrlWarning() {
-    const text = apiUrlWarningText(apiUrlInput.value.trim());
+    const hasKey =
+        apiKeyInput.value.trim() !== '' ||
+        loadedConfig?.llm_api_key === MASKED_MARKER;
+    const text = apiUrlWarningText(apiUrlInput.value.trim(), hasKey);
     apiUrlWarning.hidden = !text;
     apiUrlWarning.textContent = text ?? '';
 }
 
 apiUrlInput.addEventListener('input', updateApiUrlWarning);
+// The API-key field gates the transport-only warning (dedicated key + http
+// non-loopback URL with no embedded credential). Refresh on every keystroke
+// so the warning appears / disappears as the user types or clears the key.
+apiKeyInput.addEventListener('input', updateApiUrlWarning);
 
 // --- Save ---
 

@@ -227,21 +227,88 @@ const CREDENTIAL_QUERY_WORDS: [&str; 11] = [
 ];
 
 /// Redact an LLM error string before it reaches the tracing log:
-/// 1. replace `?name=value` / `&name=value` / `#name=value` query/fragment
+/// 1. replace `://userinfo@` spans with `://***@` (the userinfo scan
+///    terminates at `/`, `?`, `#`, or ASCII whitespace; `)` is NOT a
+///    terminator — see [`redact_userinfo`]);
+/// 2. replace `?name=value` / `&name=value` / `#name=value` query/fragment
 ///    credentials (token of `name` matches [`CREDENTIAL_QUERY_WORDS`],
 ///    ASCII-case-insensitive) with `***`;
-/// 2. replace any occurrence of `api_key` with `[REDACTED]` (skipped when
+/// 3. replace any occurrence of `api_key` with `[REDACTED]` (skipped when
 ///    empty — `str::replace("", x)` would insert between every char);
-/// 3. truncate to 500 chars (multi-byte safe, applied last so truncation
+/// 4. truncate to 500 chars (multi-byte safe, applied last so truncation
 ///    never cuts through un-redacted text).
 pub(crate) fn redact_error_detail(s: &str, api_key: &str) -> String {
-    let redacted = redact_query_credentials(s);
+    let redacted = redact_userinfo(s);
+    let redacted = redact_query_credentials(&redacted);
     let redacted = if api_key.is_empty() {
         redacted
     } else {
         redacted.replace(api_key, "[REDACTED]")
     };
     redacted.chars().take(500).collect()
+}
+
+/// Replace `://userinfo@` spans with `://***@`. The userinfo scan
+/// terminates at `/`, `?`, `#`, or ASCII whitespace; `)` is NOT a
+/// terminator — RFC 3986 allows `)` unencoded in userinfo, so a valid
+/// URL may contain one, and swallowing it is the conservative
+/// over-redaction direction (same convention as
+/// `redact_query_credentials`). Applied before query redaction so a
+/// URL carrying both forms is scrubbed in one pass.
+///
+/// Malformed-input boundary: the detector (`url_contains_userinfo`)
+/// splits the authority on `/ ? #` only, so input whose authority
+/// contains whitespace before an `@` is detected (and conditionally
+/// encrypted) but NOT redacted here (the scan aborts at whitespace) —
+/// accepted residual; reqwest error Display never emits such a
+/// malformed URL.
+fn redact_userinfo(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Scan for the next "://" separator. ASCII-only, so byte indices
+        // are char boundaries.
+        if i + 2 < bytes.len() && bytes[i] == b':' && bytes[i + 1] == b'/' && bytes[i + 2] == b'/' {
+            // Copy "://" verbatim and advance.
+            out.push_str(&s[i..i + 3]);
+            let scan_start = i + 3;
+            let mut k = scan_start;
+            let mut at_idx: Option<usize> = None;
+            while k < bytes.len() {
+                let c = bytes[k];
+                if c == b'@' {
+                    at_idx = Some(k);
+                    break;
+                }
+                if c == b'/' || c == b'?' || c == b'#' || c.is_ascii_whitespace() {
+                    break;
+                }
+                k += 1;
+            }
+            if let Some(at) = at_idx {
+                // Replace [scan_start..at] with "***" — both ends are
+                // ASCII byte indices on a UTF-8 string (the bytes before
+                // `@` are scanned as ASCII bytes only), so the slice is
+                // guaranteed to land on char boundaries.
+                out.push_str("***");
+                out.push('@');
+                i = at + 1;
+            } else {
+                // No `@` before a terminator — copy the remainder of the
+                // authority (or up to the terminator) verbatim and continue.
+                let copy_end = if k < bytes.len() { k } else { bytes.len() };
+                out.push_str(&s[scan_start..copy_end]);
+                i = copy_end;
+            }
+            continue;
+        }
+        // Copy one char to the output (multi-byte safe).
+        let size = s[i..].chars().next().map_or(1, |c| c.len_utf8());
+        out.push_str(&s[i..i + size]);
+        i += size;
+    }
+    out
 }
 
 /// Replace query credential values with `***`. The value runs to the next
@@ -323,6 +390,24 @@ pub(crate) fn url_contains_credential_query(url: &str) -> bool {
     url.split(['?', '#', '&'])
         .skip(1)
         .any(|pair| name_matches_credential_word(pair.split('=').next().unwrap_or_default()))
+}
+
+/// True when the URL embeds userinfo (`scheme://user[:pass]@host/…`).
+/// Detection: substring after `://` up to the first `/`, `?`, or `#`
+/// (the authority) contains `@`. Mirrors frontend
+/// `ui/lib/settings-utils.js::hasUserinfoInUrl` — fixture parity guarded
+/// by `__tests__/userinfo-detection-contract.test.js`. Parity is only
+/// guaranteed for well-formed absolute URLs: on malformed input (missing
+/// or non-alpha-leading scheme, leading whitespace) the frontend regex
+/// is anchored and under-warns while this substring search over-detects —
+/// both are the safe direction for their layer.
+pub(crate) fn url_contains_userinfo(url: &str) -> bool {
+    let Some(scheme_end) = url.find("://") else {
+        return false;
+    };
+    let authority = &url[scheme_end + 3..];
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
+    authority.contains('@')
 }
 
 /// Mock corrector for testing.
@@ -591,6 +676,27 @@ mod tests {
         assert!(!url_contains_credential_query(""));
     }
 
+    /// Shared fixture table (also embedded in
+    /// `__tests__/userinfo-detection-contract.test.js`): backend and
+    /// frontend detectors must agree on every URL. Each literal must
+    /// appear unchanged in this file — the contract test scans for it.
+    #[test]
+    fn test_url_contains_userinfo_fixtures() {
+        // Positive cases (URL embeds userinfo → true)
+        assert!(url_contains_userinfo("http://user:pass@host/v1"));
+        assert!(url_contains_userinfo("https://user@h.com/v1"));
+        assert!(url_contains_userinfo("http://u:p@[2001:db8::1]:8080/v1"));
+        assert!(url_contains_userinfo("http://user:pass@host"));
+        assert!(url_contains_userinfo("https://u:p@h.com/v1?key=abc#frag"));
+
+        // Negative cases (no userinfo → false)
+        assert!(!url_contains_userinfo("http://host/v1"));
+        assert!(!url_contains_userinfo("http://host/v1?next=@x"));
+        assert!(!url_contains_userinfo("https://h.com/v1#frag@ment"));
+        assert!(!url_contains_userinfo("mailto:user@host"));
+        assert!(!url_contains_userinfo("http://[::1]:8080/v1"));
+    }
+
     /// `)` is deliberately not a value terminator: reqwest wraps URLs as
     /// `url (…)`, so the trailing `)` is swallowed along with the value —
     /// readability loss only, the safe direction.
@@ -632,5 +738,83 @@ mod tests {
     fn test_redact_multibyte_no_panic() {
         let out = redact_error_detail("错误信息：连接失败 请重试", "");
         assert_eq!(out, "错误信息：连接失败 请重试");
+    }
+
+    #[test]
+    fn test_redact_userinfo_basic() {
+        // Trailing `)` is preserved (the userinfo scan terminates on `@`,
+        // not on `)`, so only the userinfo span is replaced).
+        assert_eq!(
+            redact_error_detail(
+                "error sending request for url (http://user:pass@h.com/v1)",
+                ""
+            ),
+            "error sending request for url (http://***@h.com/v1)"
+        );
+    }
+
+    #[test]
+    fn test_redact_userinfo_combined_with_query_and_key() {
+        // userinfo + query credential + api_key value — all three layers
+        // hit. The trailing `)` after `SECRET` is swallowed by the query
+        // redaction layer (the existing
+        // `redact_query_credentials` value scan breaks on `&` / whitespace
+        // only — `)` is intentionally NOT a terminator to avoid leaking
+        // values that legitimately contain `)`). Userinfo alone preserves
+        // a bare `)` (see `test_redact_userinfo_basic`).
+        assert_eq!(
+            redact_error_detail("url (https://u:p@h.com/v1?key=SECRET) sk-123", "sk-123"),
+            "url (https://***@h.com/v1?key=*** [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn test_redact_userinfo_no_userinfo_unchanged() {
+        // Query-only URL: userinfo layer is a no-op (no `://...@`),
+        // query layer handles `key=x`.
+        assert_eq!(
+            redact_error_detail("http://host/v1?key=x", ""),
+            "http://host/v1?key=***"
+        );
+        // IPv6 literal without userinfo: untouched by either layer.
+        assert_eq!(
+            redact_error_detail("http://[::1]:8080/v1", ""),
+            "http://[::1]:8080/v1"
+        );
+    }
+
+    #[test]
+    fn test_redact_userinfo_multiple_urls() {
+        assert_eq!(
+            redact_error_detail("first http://a:b@x.com/v1 then https://c@d.com/v2 end", ""),
+            "first http://***@x.com/v1 then https://***@d.com/v2 end"
+        );
+    }
+
+    #[test]
+    fn test_redact_userinfo_nested_scheme_separator() {
+        // The replace must resume AFTER `@` so a subsequent `://...@`
+        // span in the same string is also scrubbed. Without the
+        // post-replace resume, "b://c@d" would leak.
+        assert_eq!(
+            redact_userinfo("x http://a@b://c@d y"),
+            "x http://***@b://***@d y"
+        );
+    }
+
+    #[test]
+    fn test_redact_userinfo_whitespace_terminates_scan() {
+        // Whitespace in the authority aborts the scan: no `@` before
+        // the terminator means no redaction. The trailing `user@x` is
+        // not URL userinfo (no preceding `://`), so it stays put.
+        assert_eq!(
+            redact_userinfo("http://host see user@x"),
+            "http://host see user@x"
+        );
+        // `@` hits before whitespace: replace and keep the trailing text.
+        assert_eq!(
+            redact_userinfo("see http://u:p@h.com/v1 next"),
+            "see http://***@h.com/v1 next"
+        );
     }
 }

@@ -4,6 +4,7 @@ import { sameSpec } from '../ui/lib/hotkeys.js';
 import {
     apiUrlWarningText,
     hasCredentialInUrl,
+    hasUserinfoInUrl,
     hotkeyConflictWarning,
     isConfigDirty,
     validateSettings,
@@ -421,6 +422,76 @@ describe('apiUrlWarningText', () => {
             'HTTP://LOCALHOST:1234/v1?key=x',
         ]) {
             expect(apiUrlWarningText(url)).toBe(PERSISTENCE);
+        }
+    });
+
+    // --- Extended matrix (userinfo + dedicated-key transport) ---
+
+    const USERINFO =
+        '检测到地址中嵌有用户名密码，建议从地址中移除，密钥改用下方「API 密钥」字段。';
+    const TRANSPORT =
+        '该地址使用 http 明文连接，密钥将以明文形式在网络上传输，可能被同一网络中的设备截获，建议改用 https。';
+
+    it('userinfo-only https → just the userinfo message', () => {
+        expect(apiUrlWarningText('https://user:pass@h.com/v1')).toBe(USERINFO);
+    });
+
+    it('userinfo + http non-loopback → userinfo + transport', () => {
+        expect(apiUrlWarningText('http://user:pass@192.168.1.5:1234/v1')).toBe(
+            USERINFO + TRANSPORT,
+        );
+    });
+
+    it('query + userinfo + http non-loopback → all three segments', () => {
+        expect(apiUrlWarningText('http://user@h.com/v1?key=sk-1')).toBe(
+            PERSISTENCE + USERINFO + TRANSPORT,
+        );
+    });
+
+    it('dedicated key + http non-loopback + clean URL → just transport', () => {
+        expect(apiUrlWarningText('http://192.168.1.5:1234/v1', true)).toBe(
+            TRANSPORT,
+        );
+    });
+
+    it('dedicated key + http loopback → null (loopback exempts transport)', () => {
+        expect(apiUrlWarningText('http://127.0.0.1:1234/v1', true)).toBeNull();
+        expect(apiUrlWarningText('http://localhost:1234/v1', true)).toBeNull();
+    });
+
+    it('no key + http non-loopback + clean URL → null', () => {
+        expect(apiUrlWarningText('http://192.168.1.5/v1', false)).toBeNull();
+    });
+});
+
+describe('hasUserinfoInUrl', () => {
+    // Shared fixture table — must match the table embedded in
+    // `src-tauri/src/llm/mod.rs::test_url_contains_userinfo_fixtures` and
+    // in `__tests__/userinfo-detection-contract.test.js`.
+    const POSITIVE = [
+        'http://user:pass@host/v1',
+        'https://user@h.com/v1',
+        'http://u:p@[2001:db8::1]:8080/v1',
+        'http://user:pass@host',
+        'https://u:p@h.com/v1?key=abc#frag',
+    ];
+    const NEGATIVE = [
+        'http://host/v1',
+        'http://host/v1?next=@x',
+        'https://h.com/v1#frag@ment',
+        'mailto:user@host',
+        'http://[::1]:8080/v1',
+    ];
+
+    it('matches positive fixtures', () => {
+        for (const url of POSITIVE) {
+            expect(hasUserinfoInUrl(url), url).toBe(true);
+        }
+    });
+
+    it('does not match negative fixtures', () => {
+        for (const url of NEGATIVE) {
+            expect(hasUserinfoInUrl(url), url).toBe(false);
         }
     });
 });

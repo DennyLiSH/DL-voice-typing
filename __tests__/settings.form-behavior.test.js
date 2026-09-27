@@ -345,6 +345,37 @@ describe('api-url credential warning hint visibility', () => {
         expect(warning().hidden).toBe(false);
         expect(warning().textContent).not.toContain('http 明文连接');
     });
+
+    it('fires the transport warning for saved key + http non-loopback URL with no embedded credential', async () => {
+        // Wire the loader to return a saved config whose key is the MASKED
+        // marker (placeholder shows "API Key 已设置", input stays empty)
+        // and a clean http non-loopback URL. populateFields → updateApiUrlWarning
+        // must surface the transport-only warning (no persistence / userinfo
+        // segments because the URL carries neither credential form).
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'get_config') {
+                const config = await originalImpl(cmd, args);
+                return {
+                    ...config,
+                    llm_api_url: 'http://192.168.1.5:1234/v1',
+                    llm_api_key: '__MASKED__',
+                };
+            }
+            return originalImpl(cmd, args);
+        });
+
+        vi.resetModules();
+        await import('../ui/settings.js');
+        await flush();
+
+        const warn = warning();
+        expect(warn.hidden).toBe(false);
+        expect(warn.textContent).toContain('http 明文连接');
+        // No persistence / userinfo segment — the URL is credential-free.
+        expect(warn.textContent).not.toContain('用户名密码');
+        expect(warn.textContent).not.toContain('密钥参数');
+    });
 });
 
 describe('help page recent-errors section', () => {

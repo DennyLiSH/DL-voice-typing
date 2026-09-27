@@ -58,11 +58,12 @@ impl AppConfig {
                 .map_err(|e| AppError::Crypto(format!("llm_api_key encrypt failed: {e}")))?;
         }
         if !for_disk.llm_api_url.is_empty()
-            && crate::llm::url_contains_credential_query(&for_disk.llm_api_url)
+            && (crate::llm::url_contains_credential_query(&for_disk.llm_api_url)
+                || crate::llm::url_contains_userinfo(&for_disk.llm_api_url))
         {
             for_disk.llm_api_url = crypto::encrypt(&for_disk.llm_api_url)
                 .map_err(|e| AppError::Crypto(format!("llm_api_url encrypt failed: {e}")))?;
-            tracing::info!(target: "config", "llm_api_url encrypted at rest (credential query detected)");
+            tracing::info!(target: "config", "llm_api_url encrypted at rest (credential detected)");
         }
         Ok(for_disk)
     }
@@ -242,6 +243,34 @@ mod tests {
         let mut loaded = for_disk;
         loaded.decrypt_at_load()?;
         assert_eq!(loaded.llm_api_url, "https://x.com/v1?key=abc&model=gpt");
+        Ok(())
+    }
+
+    #[test]
+    fn test_for_disk_conditionally_encrypts_api_url_with_userinfo()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Userinfo in the URL triggers the same conditional encryption
+        // path (parity with the query-credential branch). Auto-migrate
+        // works through the existing decrypt_at_load branch — no load-side
+        // change needed.
+        let config = AppConfig {
+            llm_api_url: "http://user:pass@x.com/v1".to_string(),
+            ..Default::default()
+        };
+        let for_disk = config.for_disk()?;
+        assert!(for_disk.llm_api_url.starts_with("DPAPI:"));
+        let mut loaded = for_disk;
+        loaded.decrypt_at_load()?;
+        assert_eq!(loaded.llm_api_url, "http://user:pass@x.com/v1");
+
+        // Reverse: a non-credential URL (only diagnostic params) stays
+        // plaintext — the extension does not over-encrypt.
+        let config = AppConfig {
+            llm_api_url: "https://x.com/v1?error_code=E1".to_string(),
+            ..Default::default()
+        };
+        let for_disk = config.for_disk()?;
+        assert_eq!(for_disk.llm_api_url, "https://x.com/v1?error_code=E1");
         Ok(())
     }
 
