@@ -442,6 +442,7 @@ async function startTranscription() {
         await call('transcribe_recording', {
             filename: state.selected,
             useLlm: Boolean($('chk-llm')?.checked),
+            model: $('transcribe-model')?.value || null,
         });
         // Outcome arrives via transcription-* events.
     } catch (e) {
@@ -666,6 +667,22 @@ wireEvents();
 loadList();
 refreshInjectTarget();
 refreshLlmAvailability();
+initModelSelect();
+
+async function initModelSelect() {
+    const select = $('transcribe-model');
+    if (!select) return;
+    try {
+        const models = await call('get_whisper_models', {});
+        populateTranscribeModelSelect(select, buildModelOptions(models));
+    } catch (_e) {
+        // 可见反馈而非静默降级（全局规则 Prefer Errors Over Silent
+        // Degradation）：隐藏下拉 + toast 告知；核心转录不受影响。错误
+        // 已由 call() 自动转发 log_frontend_error，本处不重复。
+        select.hidden = true;
+        showToast('模型列表加载失败，使用默认模型', true);
+    }
+}
 
 // --- Backend events --------------------------------------------------------
 //

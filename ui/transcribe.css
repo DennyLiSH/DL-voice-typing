@@ -428,3 +428,13 @@ body {
   font-size: var(--font-hint);
   text-align: center;
 }
+
+#transcribe-model {
+    height: 32px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-size: var(--font-body);
+}
