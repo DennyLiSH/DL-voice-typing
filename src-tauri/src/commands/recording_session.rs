@@ -388,6 +388,14 @@ impl RecordingSession {
                 let resampled = match preprocess_audio(&audio_data, native_rate) {
                     Some(r) => r,
                     None => {
+                        if audio_data.is_empty() {
+                            warn!(
+                                target: "hotkey",
+                                "hotkey release with empty buffer: no press started this \
+                                 session (keydown modifier-rejected or orphan keyup); pair \
+                                 with target=hotkey rejection warns to adjudicate"
+                            );
+                        }
                         info!(
                             "hotkey release: preprocess_audio returned None (silent?), samples={}",
                             audio_data.len()
