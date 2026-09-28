@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, KBDLLHOOKSTRUCT_FLAGS, LLKHF_INJECTED,
     SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
@@ -99,27 +102,64 @@ type CancelSlot = Arc<dyn Fn() -> bool + Send + Sync>;
 /// Global state shared between WindowsHotkeyManager and the hook procedure.
 /// Three slots (primary voice-input hotkey + record-only hotkey + cancel-Esc
 /// dispatcher) dispatched from a single low-level hook.
-#[derive(Default)]
 struct HookState {
     primary: Option<(HotkeySpec, SlotCallback)>,
     record_only: Option<(HotkeySpec, SlotCallback)>,
     cancel_esc: Option<CancelSlot>,
-    /// Modifier down state accumulated ACROSS key events. The hook proc
-    /// updates it on every modifier press/release via `update_modifiers`
-    /// inside `dispatch_key_event`. Lives here (not as a hook-proc local)
-    /// because a combo like Ctrl+Shift+A arrives as separate events —
-    /// the "A down" event must still see ctrl=true from the earlier
-    /// Ctrl-down event. Stays process-local — never crosses threads.
-    mods: ModifiersDown,
+    /// keydown 匹配时咨询的 modifier 采样器。默认 OS 真相探针（生产）；
+    /// 测试必须经 `with_probe` 注入合成实现——Default 装的是真实键盘状态。
+    mods_probe: ModsProbe,
 }
 
-/// Per-modifier down state, accumulated in `HookState::mods` across key
-/// events. Stays process-local — never crosses threads.
+impl HookState {
+    fn with_probe(mods_probe: ModsProbe) -> Self {
+        Self {
+            primary: None,
+            record_only: None,
+            cancel_esc: None,
+            mods_probe,
+        }
+    }
+}
+
+impl Default for HookState {
+    fn default() -> Self {
+        Self::with_probe(Arc::new(os_modifiers_held))
+    }
+}
+
+/// 按键时刻实际按着的 modifier 快照，取自 OS 异步键状态
+/// （`GetAsyncKeyState`，family 级：左右 Ctrl/Shift/Alt 合并）。2026-09-28
+/// 替换跨事件累积器：LL hook 对注入 keyup（LLKHF_INJECTED 守卫提前过滤）
+/// 与安全桌面 keyup（UAC / Ctrl+Alt+Del 绕过 LL hook）结构性不可见，累积
+/// 器必然漂移成 stale-true 并静默压制全部 keydown（v26.9.4 press 失效根因）。
+/// OS async key state 对注入路径免疫（SendInput/keybd_event 同样更新它）；
+/// 安全桌面场景依赖系统对输入状态的复位行为——即便短暂 stale，也只持续到
+/// 下一次真实按键，不会像累积器那样永久卡死。Stays process-local。
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
-struct ModifiersDown {
+struct ModifiersHeld {
     ctrl: bool,
     shift: bool,
     alt: bool,
+}
+
+/// Live modifier sampler. A trait-object seam so tests can drive synthetic
+/// held-state without a real keyboard; production reads OS truth.
+type ModsProbe = Arc<dyn Fn() -> ModifiersHeld + Send + Sync>;
+
+/// Production probe: OS async key state is updated by the system for ALL
+/// input — physical and injected — so a lost keyup cannot stale it.
+fn os_modifiers_held() -> ModifiersHeld {
+    // SAFETY: GetAsyncKeyState 是线程无关的异步键状态纯查询，无句柄、不
+    // 合成输入，可安全地在 hook 线程调用。
+    fn down(vk: i32) -> bool {
+        (unsafe { GetAsyncKeyState(vk) } as u16) & 0x8000 != 0
+    }
+    ModifiersHeld {
+        ctrl: down(VK_CONTROL.0 as i32),
+        shift: down(VK_SHIFT.0 as i32),
+        alt: down(VK_MENU.0 as i32),
+    }
 }
 
 fn is_ctrl_vk(vk: u32) -> bool {
@@ -132,41 +172,29 @@ fn is_alt_vk(vk: u32) -> bool {
     vk == 0xA4 || vk == 0xA5
 }
 
-/// Update the modifier down state for one key event. Pure function — the
-/// hook proc calls it on every event. Key-repeat (consecutive keydowns for
-/// the same modifier) is idempotent. Non-modifier keys are a no-op.
-fn update_modifiers(mods: &mut ModifiersDown, vk: u32, is_keydown: bool) {
-    if is_ctrl_vk(vk) {
-        mods.ctrl = is_keydown;
-    } else if is_shift_vk(vk) {
-        mods.shift = is_keydown;
-    } else if is_alt_vk(vk) {
-        mods.alt = is_keydown;
-    }
-}
-
 /// True iff the held modifiers satisfy `spec`'s modifier flags.
 ///
 /// Self-family exclusion: if `spec.vk` IS a Ctrl key, do not compare
-/// `mods.ctrl` — because pressing the spec's own vk sets `mods.ctrl`,
-/// the default RightCtrl-alone config would never match without this.
+/// `mods.ctrl` — because holding the spec's own vk registers as Ctrl held
+/// at the OS level (GetAsyncKeyState(VK_CONTROL) 反映左右任一 Ctrl), the
+/// default RightCtrl-alone config would never match without this.
 /// Symmetric for shift / alt.
-fn modifiers_match(spec: &HotkeySpec, mods: ModifiersDown) -> bool {
+fn modifiers_match(spec: &HotkeySpec, mods: ModifiersHeld) -> bool {
     spec.ctrl == (mods.ctrl && !is_ctrl_vk(spec.vk))
         && spec.shift == (mods.shift && !is_shift_vk(spec.vk))
         && spec.alt == (mods.alt && !is_alt_vk(spec.vk))
 }
 
-/// Process one key event against the accumulated modifier state and return
-/// the matched slot's callback (if any). Mutates `hs.mods` so the state
-/// persists ACROSS events — this is the whole point: a Ctrl+Shift+A combo
-/// arrives as three separate hook events and the final "A down" event must
-/// still observe ctrl+shift from the earlier modifier-down events.
-/// Pure function on `&mut HookState` so tests can drive multi-event
-/// sequences without touching the process-level `HOOK_STATE` static.
-fn dispatch_key_event(hs: &mut HookState, vk: u32, is_keydown: bool) -> Option<SlotCallback> {
-    update_modifiers(&mut hs.mods, vk, is_keydown);
-    find_callback(hs, vk, hs.mods, is_keydown)
+/// Process one key event: sample live modifier state from the probe, then
+/// match against the slot specs. Keydown requires full spec match (vk +
+/// modifier flags); keyup fires on the main vk alone — modifier drift must
+/// not stall recording-stop (the user lifting a modifier before the spec
+/// key would otherwise deadlock the press/release pairing). Pure function
+/// on `&HookState` so tests can drive multi-event sequences without
+/// touching the process-level `HOOK_STATE` static.
+fn dispatch_key_event(hs: &HookState, vk: u32, is_keydown: bool) -> Option<SlotCallback> {
+    let mods = (hs.mods_probe)();
+    find_callback(hs, vk, mods, is_keydown)
 }
 
 /// Three-slot emptiness check used to decide whether the underlying
@@ -270,7 +298,7 @@ enum HookAction {
 /// windows.rs:96-97 (`Arc<dyn Fn(HotkeyEvent)…>` / `Arc<dyn Fn() -> bool…>`)
 /// — the trait's boxed `HotkeyCallback` params are wrapped into them at
 /// register time (`Arc::from(callback)`), same as today.
-fn route_event(hs: &mut HookState, ev: KeyEvent) -> HookAction {
+fn route_event(hs: &HookState, ev: KeyEvent) -> HookAction {
     const VK_ESCAPE: u32 = 0x1B;
     if ev.vk == VK_ESCAPE
         && ev.is_keydown
@@ -512,9 +540,9 @@ unsafe extern "system" fn keyboard_hook_proc(
             // happens after release (deadlock-safe; the prior convention —
             // the cancel path used to do this inline, now both arms do).
             let action = {
-                let mut state = HOOK_STATE.lock();
-                match state.as_mut() {
-                    Ok(guard) => guard.as_mut().map(|hs| route_event(hs, ev)),
+                let state = HOOK_STATE.lock();
+                match state.as_ref() {
+                    Ok(guard) => guard.as_ref().map(|hs| route_event(hs, ev)),
                     Err(_) => None,
                 }
             };
@@ -534,10 +562,10 @@ unsafe extern "system" fn keyboard_hook_proc(
                     // hotkey registered on Esc must still fire. Esc is not a
                     // modifier, so the first pass updated no modifier state.
                     let action = {
-                        let mut state = HOOK_STATE.lock();
-                        match state.as_mut() {
+                        let state = HOOK_STATE.lock();
+                        match state.as_ref() {
                             Ok(guard) => guard
-                                .as_mut()
+                                .as_ref()
                                 .and_then(|hs| dispatch_key_event(hs, ev.vk, ev.is_keydown)),
                             Err(_) => None,
                         }
@@ -568,23 +596,40 @@ unsafe extern "system" fn keyboard_hook_proc(
 /// on the main vk alone — modifier drift must not stall recording-stop
 /// (the user lifting a modifier before the spec key would otherwise
 /// deadlock the press/release pairing).
+///
+/// A keydown whose vk matches but modifiers don't is LOUD: the 2026-09-28
+/// incident shipped precisely because this rejection was silent. 已接受的
+/// 权衡：主键若配置为常用打字键，日常 modifier 组合会高频触发本 warn
+/// （含击键时间元数据，本地日志文件）——可观测性优先，节流留待后续。
 fn find_callback(
     hs: &HookState,
     vk: u32,
-    mods: ModifiersDown,
+    mods: ModifiersHeld,
     is_keydown: bool,
 ) -> Option<SlotCallback> {
     if let Some((spec, cb)) = &hs.primary
         && spec.vk == vk
-        && (!is_keydown || modifiers_match(spec, mods))
     {
-        return Some(cb.clone());
+        if !is_keydown || modifiers_match(spec, mods) {
+            return Some(cb.clone());
+        }
+        tracing::warn!(
+            target: "hotkey",
+            "primary keydown rejected: key={} held={mods:?} spec={spec}",
+            crate::hotkey::vk_to_key_name(vk)
+        );
     }
     if let Some((spec, cb)) = &hs.record_only
         && spec.vk == vk
-        && (!is_keydown || modifiers_match(spec, mods))
     {
-        return Some(cb.clone());
+        if !is_keydown || modifiers_match(spec, mods) {
+            return Some(cb.clone());
+        }
+        tracing::warn!(
+            target: "hotkey",
+            "record-only keydown rejected: key={} held={mods:?} spec={spec}",
+            crate::hotkey::vk_to_key_name(vk)
+        );
     }
     None
 }
@@ -627,6 +672,20 @@ mod tests {
         }
     }
 
+    fn probe_returning(mods: ModifiersHeld) -> ModsProbe {
+        Arc::new(move || mods)
+    }
+
+    /// Mutable probe cell: tests flip the reported held-state between
+    /// dispatch calls without a real keyboard.
+    fn probe_cell(initial: ModifiersHeld) -> (Arc<Mutex<ModifiersHeld>>, ModsProbe) {
+        let cell = Arc::new(Mutex::new(initial));
+        let cell_for_probe = Arc::clone(&cell);
+        let probe: ModsProbe =
+            Arc::new(move || *cell_for_probe.lock().expect("probe cell poisoned"));
+        (cell, probe)
+    }
+
     // ---- HookState slot semantics ----
 
     #[test]
@@ -637,11 +696,11 @@ mod tests {
             primary: Some((default_primary(), primary_cb.clone())),
             record_only: Some((default_record_only(), record_cb.clone())),
             cancel_esc: None,
-            mods: ModifiersDown::default(),
+            mods_probe: probe_returning(ModifiersHeld::default()),
         };
-        let found_primary = find_callback(&hs, 0xA3, ModifiersDown::default(), true);
+        let found_primary = find_callback(&hs, 0xA3, ModifiersHeld::default(), true);
         assert!(found_primary.is_some());
-        let found_record = find_callback(&hs, 0xA5, ModifiersDown::default(), true);
+        let found_record = find_callback(&hs, 0xA5, ModifiersHeld::default(), true);
         assert!(found_record.is_some());
         // Distinct slots: the two callbacks are different allocations.
         if let (Some(p), Some(r)) = (found_primary, found_record) {
@@ -657,25 +716,25 @@ mod tests {
             primary: Some((default_primary(), dummy_callback())),
             record_only: Some((default_record_only(), dummy_callback())),
             cancel_esc: None,
-            mods: ModifiersDown::default(),
+            mods_probe: probe_returning(ModifiersHeld::default()),
         };
-        assert!(find_callback(&hs, 0x70, ModifiersDown::default(), true).is_none());
+        assert!(find_callback(&hs, 0x70, ModifiersHeld::default(), true).is_none());
     }
 
     #[test]
     fn test_find_callback_handles_empty_slots() {
         let hs = HookState::default();
-        assert!(find_callback(&hs, 0xA3, ModifiersDown::default(), true).is_none());
+        assert!(find_callback(&hs, 0xA3, ModifiersHeld::default(), true).is_none());
 
         let only_record = HookState {
             primary: None,
             record_only: Some((default_record_only(), dummy_callback())),
             cancel_esc: None,
-            mods: ModifiersDown::default(),
+            mods_probe: probe_returning(ModifiersHeld::default()),
         };
         assert!(only_record.primary.is_none());
-        assert!(find_callback(&only_record, 0xA3, ModifiersDown::default(), true).is_none());
-        assert!(find_callback(&only_record, 0xA5, ModifiersDown::default(), true).is_some());
+        assert!(find_callback(&only_record, 0xA3, ModifiersHeld::default(), true).is_none());
+        assert!(find_callback(&only_record, 0xA5, ModifiersHeld::default(), true).is_some());
     }
 
     // ---- Cross-event modifier accumulation (P0 regression guard) ----
@@ -684,104 +743,129 @@ mod tests {
     // The "A down" event must still observe ctrl=true from the earlier event,
     // so the modifier state has to live in HookState and persist across
     // dispatch_key_event calls. These tests fail against the old per-event
-    // `ModifiersDown::default()` local, where no combo ever fired.
+    // `ModifiersHeld::default()` local, where no combo ever fired.
 
     #[test]
-    fn dispatch_accumulates_modifiers_across_events_combo_fires() {
+    fn combo_fires_from_live_probe_modifiers() {
         let spec = HotkeySpec {
             ctrl: true,
             shift: false,
             alt: false,
             vk: 0x41, // A
         };
-        let mut hs = HookState {
-            primary: Some((spec, dummy_callback())),
-            ..Default::default()
-        };
-        // Ctrl down: no match (vk is 0xA2, spec.vk is 0x41), but state persists.
-        assert!(dispatch_key_event(&mut hs, 0xA2, true).is_none());
-        assert_eq!(
-            hs.mods,
-            ModifiersDown {
-                ctrl: true,
-                shift: false,
-                alt: false
-            }
-        );
-        // A down WITH ctrl held from the earlier event: combo matches.
-        assert!(dispatch_key_event(&mut hs, 0x41, true).is_some());
+        let mut hs = HookState::with_probe(probe_returning(ModifiersHeld {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        }));
+        hs.primary = Some((spec, dummy_callback()));
+        // Ctrl 实际按着（探针=OS 真相）：A down 组合命中。
+        assert!(dispatch_key_event(&hs, 0x41, true).is_some());
         // Keyup fires on the main vk alone (modifier drift must not stall stop).
-        assert!(dispatch_key_event(&mut hs, 0x41, false).is_some());
+        assert!(dispatch_key_event(&hs, 0x41, false).is_some());
     }
 
     #[test]
-    fn dispatch_two_modifier_combo_requires_both_events() {
+    fn combo_requires_full_modifier_set_from_probe() {
         let spec = HotkeySpec {
             ctrl: true,
             shift: true,
             alt: false,
             vk: 0x41, // A
         };
-        let mut hs = HookState {
-            primary: Some((spec, dummy_callback())),
-            ..Default::default()
+        let (cell, probe) = probe_cell(ModifiersHeld {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        });
+        let mut hs = HookState::with_probe(probe);
+        hs.primary = Some((spec, dummy_callback()));
+        // 只按着 Ctrl：Ctrl+Shift+A 不命中。
+        assert!(dispatch_key_event(&hs, 0x41, true).is_none());
+        // Shift 加入：完整组合命中。
+        *cell.lock().expect("cell poisoned") = ModifiersHeld {
+            ctrl: true,
+            shift: true,
+            alt: false,
         };
-        // Only Ctrl held: A down must NOT match a Ctrl+Shift spec.
-        assert!(dispatch_key_event(&mut hs, 0xA2, true).is_none());
-        assert!(dispatch_key_event(&mut hs, 0x41, true).is_none());
-        // Shift joins: now the full combo matches.
-        assert!(dispatch_key_event(&mut hs, 0xA0, true).is_none());
-        assert!(dispatch_key_event(&mut hs, 0x41, true).is_some());
+        assert!(dispatch_key_event(&hs, 0x41, true).is_some());
     }
 
     #[test]
-    fn dispatch_modifier_release_clears_state_next_event_unmatched() {
+    fn combo_stops_matching_once_modifier_released() {
         let spec = HotkeySpec {
             ctrl: true,
             shift: false,
             alt: false,
             vk: 0x41, // A
         };
-        let mut hs = HookState {
-            primary: Some((spec, dummy_callback())),
-            ..Default::default()
-        };
-        assert!(dispatch_key_event(&mut hs, 0xA2, true).is_none());
-        // Ctrl released BEFORE the main key: A down no longer matches.
-        assert!(dispatch_key_event(&mut hs, 0xA2, false).is_none());
-        assert_eq!(hs.mods, ModifiersDown::default());
-        assert!(dispatch_key_event(&mut hs, 0x41, true).is_none());
+        let (cell, probe) = probe_cell(ModifiersHeld {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        });
+        let mut hs = HookState::with_probe(probe);
+        hs.primary = Some((spec, dummy_callback()));
+        assert!(dispatch_key_event(&hs, 0x41, true).is_some());
+        // Ctrl 松开（OS 真相变化）：A down 不再命中。
+        *cell.lock().expect("cell poisoned") = ModifiersHeld::default();
+        assert!(dispatch_key_event(&hs, 0x41, true).is_none());
     }
 
     #[test]
     fn dispatch_bare_key_still_fires_without_modifiers() {
-        // The default config (RightCtrl alone) must keep working: the
-        // self-family exclusion means pressing RightCtrl itself matches
-        // even though it sets mods.ctrl in the same event.
-        let mut hs = HookState {
+        // 默认配置（RightCtrl 裸键）必须持续可用：按下 RightCtrl 本身会让
+        // OS 报 ctrl held，self-family 排除让匹配仍然成立。
+        let mut hs = HookState::with_probe(probe_returning(ModifiersHeld::default()));
+        hs.primary = Some((default_primary(), dummy_callback()));
+        assert!(dispatch_key_event(&hs, 0xA3, true).is_some());
+        assert!(dispatch_key_event(&hs, 0xA3, false).is_some());
+        // OS 报 ctrl=true（RightCtrl 正被按着的真实形态）：仍必须命中。
+        let hs_ctrl_held = HookState {
             primary: Some((default_primary(), dummy_callback())),
-            ..Default::default()
+            record_only: None,
+            cancel_esc: None,
+            mods_probe: probe_returning(ModifiersHeld {
+                ctrl: true,
+                shift: false,
+                alt: false,
+            }),
         };
-        assert!(dispatch_key_event(&mut hs, 0xA3, true).is_some());
-        assert!(dispatch_key_event(&mut hs, 0xA3, false).is_some());
-        // The RightCtrl keyup event itself clears the ctrl state.
-        assert_eq!(hs.mods, ModifiersDown::default());
+        assert!(dispatch_key_event(&hs_ctrl_held, 0xA3, true).is_some());
     }
 
     #[test]
     fn dispatch_stray_modifier_suppresses_bare_key_exact_match_semantics() {
-        // A bare spec (no modifiers) is an EXACT match: holding an unrelated
-        // modifier (LeftCtrl) while tapping the bare key (RightAlt) is a
-        // DIFFERENT combination and must not fire the bare slot.
-        let mut hs = HookState {
-            record_only: Some((default_record_only(), dummy_callback())),
-            ..Default::default()
-        };
-        assert!(dispatch_key_event(&mut hs, 0xA2, true).is_none());
-        assert!(dispatch_key_event(&mut hs, 0xA5, true).is_none());
-        // Without the stray modifier the bare key fires normally.
-        assert!(dispatch_key_event(&mut hs, 0xA2, false).is_none());
-        assert!(dispatch_key_event(&mut hs, 0xA5, true).is_some());
+        // 裸 spec（无 modifier）是精确匹配：按着无关 modifier（Ctrl）时敲
+        // 裸键（RightAlt）是另一个组合，不得触发裸槽。
+        let mut hs = HookState::with_probe(probe_returning(ModifiersHeld {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        }));
+        hs.record_only = Some((default_record_only(), dummy_callback()));
+        assert!(dispatch_key_event(&hs, 0xA5, true).is_none());
+        // 无杂 modifier 时裸键正常触发。
+        let mut hs_clean = HookState::with_probe(probe_returning(ModifiersHeld::default()));
+        hs_clean.record_only = Some((default_record_only(), dummy_callback()));
+        assert!(dispatch_key_event(&hs_clean, 0xA5, true).is_some());
+    }
+
+    #[test]
+    fn bare_key_fires_when_modifier_keyup_never_arrived() {
+        // 2026-09-28 v26.9.4 回归：一次从未送达 hook 的 Shift keyup（注入
+        // keyup 被 LLKHF_INJECTED 过滤、或安全桌面 keyup 绕过 LL hook）曾让
+        // 跨事件累积器永久卡在 shift=true，此后裸键 keydown 全部被压制。
+        // 现在匹配状态直接采样 OS 真相：事件本身无法污染它。
+        let mut hs = HookState::with_probe(probe_returning(ModifiersHeld::default()));
+        hs.primary = Some((default_primary(), dummy_callback()));
+        // Shift 按下事件到达，其 keyup 永远没有送达……
+        assert!(dispatch_key_event(&hs, 0xA0, true).is_none());
+        // ……OS 真相说没有 modifier 按着：裸键 keydown 必须照常触发。
+        assert!(
+            dispatch_key_event(&hs, 0xA3, true).is_some(),
+            "lost modifier keyup must not suppress the bare hotkey keydown"
+        );
     }
 
     // ---- P1 Esc-cancel: swallow key down only when a cancel callback handled it ----
@@ -817,53 +901,45 @@ mod tests {
         // Default config spec: RightCtrl alone, no modifier flags.
         let spec = default_primary();
         // No modifiers held + RightCtrl pressed -> match.
-        let mut mods = ModifiersDown::default();
-        assert!(modifiers_match(&spec, mods));
-        update_modifiers(&mut mods, 0xA3, true);
-        // RightCtrl itself just set mods.ctrl — self-family exclusion: still match.
-        // (Without the exclusion, mods.ctrl would equal true vs spec.ctrl=false
-        // and the default config would never trigger.)
-        assert!(modifiers_match(&spec, mods));
-        // User now ALSO presses Shift — spec.shift=false vs mods.shift=true ->
-        // Shift is NOT in the self-family (spec.vk is ctrl, not shift), so we
-        // do compare; spec.shift=false vs true -> no match.
-        update_modifiers(&mut mods, 0xA0, true);
+        assert!(modifiers_match(&spec, ModifiersHeld::default()));
+        // RightCtrl 本身让 OS 报 ctrl held —— self-family：仍匹配。
+        // （无排除则 mods.ctrl=true vs spec.ctrl=false，默认配置永不触发。）
+        assert!(modifiers_match(
+            &spec,
+            ModifiersHeld {
+                ctrl: true,
+                shift: false,
+                alt: false
+            }
+        ));
+        // 同时还按着 Shift：非 self-family，参与比较，false vs true -> 不匹配。
         assert!(
-            !modifiers_match(&spec, mods),
+            !modifiers_match(
+                &spec,
+                ModifiersHeld {
+                    ctrl: true,
+                    shift: true,
+                    alt: false
+                }
+            ),
             "extra shift held -> no match (strict)"
         );
-        // Both-direction Ctrl self-exclusion: a LeftCtrl spec must match
-        // when RightCtrl is held (and vice versa). Both vks live in the
-        // ctrl family, so the self-exclusion treats them symmetrically —
-        // a config using LeftCtrl (0xA2) would be dead without this.
+        // Self-family 双向：LeftCtrl spec 在 RightCtrl 按着时也匹配（同族
+        // vk 一律豁免族比较，双向对称）。
         let left_ctrl_spec = HotkeySpec {
             ctrl: false,
             shift: false,
             alt: false,
             vk: 0xA2,
         };
-        let mut mods = ModifiersDown::default();
-        // RightCtrl held while spec is LeftCtrl -> match (self-family).
-        update_modifiers(&mut mods, 0xA3, true);
-        assert!(
-            modifiers_match(&left_ctrl_spec, mods),
-            "LeftCtrl spec matches RightCtrl press (self-family both directions)"
-        );
-        // Inverse: LeftCtrl spec still matches when LeftCtrl is pressed.
-        let mut mods = ModifiersDown::default();
-        update_modifiers(&mut mods, 0xA2, true);
-        assert!(
-            modifiers_match(&left_ctrl_spec, mods),
-            "LeftCtrl spec matches LeftCtrl press (own vk)"
-        );
-        // And RightCtrl spec matches when LeftCtrl is pressed (the reverse
-        // direction of the existing first assertion).
-        let mut mods = ModifiersDown::default();
-        update_modifiers(&mut mods, 0xA2, true);
-        assert!(
-            modifiers_match(&spec, mods),
-            "RightCtrl spec matches LeftCtrl press (self-family both directions)"
-        );
+        assert!(modifiers_match(
+            &left_ctrl_spec,
+            ModifiersHeld {
+                ctrl: true,
+                shift: false,
+                alt: false
+            }
+        ));
     }
 
     #[test]
@@ -876,21 +952,21 @@ mod tests {
             vk: 0x41,
         };
         // Both modifiers held -> match.
-        let mods = ModifiersDown {
+        let mods = ModifiersHeld {
             ctrl: true,
             shift: true,
             alt: false,
         };
         assert!(modifiers_match(&spec, mods));
         // Only ctrl held -> no match.
-        let mods = ModifiersDown {
+        let mods = ModifiersHeld {
             ctrl: true,
             shift: false,
             alt: false,
         };
         assert!(!modifiers_match(&spec, mods));
         // All three held -> no match (over-modifier rejected).
-        let mods = ModifiersDown {
+        let mods = ModifiersHeld {
             ctrl: true,
             shift: true,
             alt: true,
@@ -898,7 +974,7 @@ mod tests {
         assert!(!modifiers_match(&spec, mods));
         // Ctrl+Shift+A spec against Ctrl+Shift held: not self-family (A is not
         // a modifier), so the regular comparison applies.
-        let mods = ModifiersDown {
+        let mods = ModifiersHeld {
             ctrl: true,
             shift: true,
             alt: false,
@@ -916,10 +992,10 @@ mod tests {
             primary: Some((spec, dummy_callback())),
             record_only: None,
             cancel_esc: None,
-            mods: ModifiersDown::default(),
+            mods_probe: probe_returning(ModifiersHeld::default()),
         };
         // RightCtrl pressed + modifier drift: shift still held.
-        let mods = ModifiersDown {
+        let mods = ModifiersHeld {
             ctrl: false,
             shift: true,
             alt: false,
@@ -963,7 +1039,7 @@ mod tests {
             primary: Some((a_ctrl, dummy_callback())),
             record_only: None,
             cancel_esc: None,
-            mods: ModifiersDown::default(),
+            mods_probe: probe_returning(ModifiersHeld::default()),
         };
         let err = validate_no_conflict(a_ctrl, &hs_with_primary, SlotKind::RecordOnly)
             .expect_err("record_only == primary must error");
@@ -1004,7 +1080,7 @@ mod tests {
             primary: None,
             record_only: Some((spec_b, dummy_callback())),
             cancel_esc: None,
-            mods: ModifiersDown::default(),
+            mods_probe: probe_returning(ModifiersHeld::default()),
         };
         let err = validate_no_conflict(spec_b, &hs_with_record, SlotKind::Primary)
             .expect_err("primary == record_only must error");
@@ -1018,45 +1094,6 @@ mod tests {
             validate_no_conflict(spec_a, &hs_with_record, SlotKind::Primary).is_ok(),
             "different vk does not collide"
         );
-    }
-
-    // ---- P2 write-side modifier table: pure function, table-driven ----
-
-    #[test]
-    fn update_modifiers_table_driven() {
-        // Keydown sets the bit; keyup clears it. Left/right symmetric.
-        for vk in [0xA2u32, 0xA3] {
-            let mut m = ModifiersDown::default();
-            update_modifiers(&mut m, vk, true);
-            assert!(m.ctrl, "keydown 0x{vk:x} -> ctrl set");
-            update_modifiers(&mut m, vk, false);
-            assert!(!m.ctrl, "keyup 0x{vk:x} -> ctrl cleared");
-        }
-        for vk in [0xA0u32, 0xA1] {
-            let mut m = ModifiersDown::default();
-            update_modifiers(&mut m, vk, true);
-            assert!(m.shift);
-            update_modifiers(&mut m, vk, false);
-            assert!(!m.shift);
-        }
-        for vk in [0xA4u32, 0xA5] {
-            let mut m = ModifiersDown::default();
-            update_modifiers(&mut m, vk, true);
-            assert!(m.alt);
-            update_modifiers(&mut m, vk, false);
-            assert!(!m.alt);
-        }
-        // Key repeat (consecutive keydowns) is idempotent.
-        let mut m = ModifiersDown::default();
-        update_modifiers(&mut m, 0xA3, true);
-        update_modifiers(&mut m, 0xA3, true);
-        update_modifiers(&mut m, 0xA3, true);
-        assert!(m.ctrl);
-        // Non-modifier keys no-op.
-        update_modifiers(&mut m, 0x41, true);
-        assert!(!m.shift && !m.alt);
-        update_modifiers(&mut m, 0x20, false);
-        assert!(!m.shift && !m.alt);
     }
 
     // ---- P2 unregister_primary three-slot semantics (default config scenario) ----
@@ -1074,7 +1111,7 @@ mod tests {
             } else {
                 None
             },
-            mods: ModifiersDown::default(),
+            mods_probe: probe_returning(ModifiersHeld::default()),
         }
     }
 
@@ -1134,10 +1171,8 @@ mod tests {
 
     #[test]
     fn route_event_esc_cancels_before_slot_table() {
-        let mut hs = HookState {
-            cancel_esc: Some(Arc::new(|| true)),
-            ..Default::default()
-        };
+        let mut hs = HookState::with_probe(probe_returning(ModifiersHeld::default()));
+        hs.cancel_esc = Some(Arc::new(|| true));
         // Primary slot ALSO registered on Esc — cancel routing must win:
         // route_event returns EscCancel (the cancel branch runs BEFORE the
         // slot table), never Fire(primary).
@@ -1151,7 +1186,7 @@ mod tests {
             Arc::new(|_| {}),
         ));
         let action = route_event(
-            &mut hs,
+            &hs,
             KeyEvent {
                 vk: 0x1B,
                 is_keydown: true,
@@ -1167,10 +1202,8 @@ mod tests {
         // returns false (no active pipeline) the proc re-enters slot
         // dispatch. This test pins the fallback: after an EscCancel route,
         // dispatch_key_event still matches a primary slot registered on Esc.
-        let mut hs = HookState {
-            cancel_esc: Some(Arc::new(|| false)),
-            ..Default::default()
-        };
+        let mut hs = HookState::with_probe(probe_returning(ModifiersHeld::default()));
+        hs.cancel_esc = Some(Arc::new(|| false));
         hs.primary = Some((
             HotkeySpec {
                 ctrl: false,
@@ -1181,7 +1214,7 @@ mod tests {
             Arc::new(|_| {}),
         ));
         let action = route_event(
-            &mut hs,
+            &hs,
             KeyEvent {
                 vk: 0x1B,
                 is_keydown: true,
@@ -1189,7 +1222,7 @@ mod tests {
             },
         );
         assert!(matches!(action, HookAction::EscCancel(_)));
-        let cb = dispatch_key_event(&mut hs, 0x1B, true); // proc's 2nd pass
+        let cb = dispatch_key_event(&hs, 0x1B, true); // proc's 2nd pass
         assert!(
             cb.is_some(),
             "Esc-down must still match the primary spec after a non-handled cancel"
@@ -1198,14 +1231,16 @@ mod tests {
 
     #[test]
     fn route_event_excludes_syskeydown_from_esc_cancel() {
-        let mut hs = HookState {
+        let hs = HookState {
+            primary: None,
+            record_only: None,
             cancel_esc: Some(Arc::new(|| true)),
-            ..Default::default()
+            mods_probe: probe_returning(ModifiersHeld::default()),
         };
         // Alt+Esc (WM_SYSKEYDOWN) is the window-cycle shortcut — never a
         // cancel candidate; with no slot matching it, routing is Pass.
         let action = route_event(
-            &mut hs,
+            &hs,
             KeyEvent {
                 vk: 0x1B,
                 is_keydown: true,
