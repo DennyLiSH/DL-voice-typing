@@ -1,31 +1,95 @@
 use std::sync::{Arc, Mutex};
-use tracing::info;
+use tracing::{info, warn};
 
 use tauri::{
-    App, Emitter, Manager, Runtime,
+    App, AppHandle, Emitter, Manager, Runtime,
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     webview::WebviewWindowBuilder,
 };
 
+/// Tray id used by both `TrayIconBuilder::with_id` (when present) and
+/// `tray_by_id` lookups. The shipped binary defaults to Tauri 2's "main"
+/// id, but the existing tray code has long queried "default" for tooltip
+/// updates (committed line 81 of the prior version). Keep the string in
+/// one constant so `set_mistouch_undo` does not guess.
+const TRAY_ID: &str = "default";
+
+/// Build the tray menu. `mistouch_undo = Some(batch_id)` prepends the
+/// M2-a 「撤销误触丢弃」item (id carries the batch id; the 5s finalize
+/// window is the only time it exists — restoring or finalizing rebuilds
+/// without it). MVP: only the most recent mistouch batch is offered
+/// (rapid double-mistouch within the window keeps only the latest —
+/// registered deviation, design review 2026-09-29 finding B).
+fn build_tray_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    mistouch_undo: Option<u64>,
+) -> Result<Menu<R>, Box<dyn std::error::Error>> {
+    let mut items: Vec<Box<dyn IsMenuItem<R>>> = Vec::new();
+    if let Some(id) = mistouch_undo {
+        items.push(Box::new(MenuItem::with_id(
+            app,
+            format!("undo-mistouch:{id}"),
+            "撤销误触丢弃",
+            true,
+            None::<&str>,
+        )?));
+        items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    }
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        "reset",
+        "重置状态",
+        true,
+        None::<&str>,
+    )?));
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        "transcribe",
+        "录音转录...",
+        true,
+        None::<&str>,
+    )?));
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        "settings",
+        "设置...",
+        true,
+        None::<&str>,
+    )?));
+    items.push(Box::new(PredefinedMenuItem::separator(app)?));
+    items.push(Box::new(MenuItem::with_id(
+        app,
+        "quit",
+        "退出",
+        true,
+        None::<&str>,
+    )?));
+    let refs: Vec<&dyn IsMenuItem<R>> = items.iter().map(|b| b.as_ref()).collect();
+    Ok(Menu::with_items(app, &refs)?)
+}
+
+/// Show/hide the tray mistouch-undo item by rebuilding the menu (the
+/// `on_menu_event` handler set at setup persists across `set_menu` calls).
+pub(crate) fn set_mistouch_undo<R: Runtime>(app: &AppHandle<R>, mistouch_undo: Option<u64>) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        warn!("set_mistouch_undo: tray not found");
+        return;
+    };
+    match build_tray_menu(app, mistouch_undo) {
+        Ok(menu) => {
+            if let Err(e) = tray.set_menu(Some(menu)) {
+                warn!("set_mistouch_undo: set_menu failed: {e}");
+            }
+        }
+        Err(e) => warn!("set_mistouch_undo: build menu failed: {e}"),
+    }
+}
+
 /// Setup the system tray.
 pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Error>> {
-    let reset = MenuItem::with_id(app, "reset", "重置状态", true, None::<&str>)?;
-    let transcribe = MenuItem::with_id(app, "transcribe", "录音转录...", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置...", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-
-    let menu = Menu::with_items(
-        app,
-        &[
-            &reset as &dyn tauri::menu::IsMenuItem<R>,
-            &transcribe as &dyn tauri::menu::IsMenuItem<R>,
-            &settings as &dyn tauri::menu::IsMenuItem<R>,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
+    let menu = build_tray_menu(app.handle(), None)?;
 
     let icon_bytes = include_bytes!("../icons/32x32.png");
     let icon = image::load_from_memory(icon_bytes)
@@ -76,7 +140,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 // Emit event
                 let _ = app.emit("tray-reset", ());
                 // Update tooltip
-                if let Some(tray) = app.tray_by_id("default") {
+                if let Some(tray) = app.tray_by_id(TRAY_ID) {
                     let _ = tray.set_tooltip(Some("语文兔 - 就绪"));
                 }
             }
@@ -121,6 +185,28 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                         }
                     }
                 }
+            }
+            id if id.starts_with("undo-mistouch:") => {
+                let batch_id: u64 = id
+                    .strip_prefix("undo-mistouch:")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                info!("Tray: undo mistouch discard batch {batch_id}");
+                let pending = app
+                    .state::<Arc<crate::commands::data_management_cmd::PendingDeletes>>()
+                    .inner()
+                    .clone();
+                if let Err(e) = pending.restore_with_id(batch_id) {
+                    // Restore failure must not be silent to the user (data-page
+                    // restore surfaces via error bar; tray path has only tooltip).
+                    warn!("undo mistouch restore failed: {e:?}");
+                    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                        let _ = tray.set_tooltip(Some(
+                            "撤销失败：录音未能恢复，可在数据目录 .dl_pending 手动找回",
+                        ));
+                    }
+                }
+                set_mistouch_undo(app, None);
             }
             _ => {}
         })

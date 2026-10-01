@@ -1058,6 +1058,7 @@ mod sm_verb_tests {
                 language: crate::config::Language::Zh,
                 whisper_model: crate::config::WhisperModel::default(),
             },
+            std::time::Instant::now(),
         );
         ps.set_record_only_session(session);
         let taken = ps.take_record_only_session();

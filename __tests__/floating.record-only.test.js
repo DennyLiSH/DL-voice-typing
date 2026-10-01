@@ -217,6 +217,20 @@ describe('record-only level feedback (盲录电平)', () => {
         expect(indicator().style.filter).toBe('');
     });
 
+    it('record-only-discarded shows the mistouch copy and clears the level filter', () => {
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['audio-rms']({ payload: 0.4 });
+        expect(indicator().style.filter).not.toBe('');
+        listeners['record-only-discarded']({
+            payload: { stem: 'x', dir: 'y' },
+        });
+        const ind = document.getElementById('indicator');
+        const text = document.getElementById('transcript-text');
+        expect(ind.classList.contains('record-only')).toBe(false);
+        expect(ind.style.filter).toBe('');
+        expect(text.textContent).toContain('录音太短，已自动丢弃');
+    });
+
     it('hide() backstop clears the level filter (injection-complete path)', () => {
         listeners['record-only-started']({ payload: { stem: 'x' } });
         listeners['audio-rms']({ payload: 0.4 });

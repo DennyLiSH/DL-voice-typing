@@ -1341,6 +1341,12 @@ mod tests {
         if let Some(mut ac) = crate::util::lock_mutex(&ps.audio_capture(), "audio_capture") {
             ac.deliver(&vec![0.4f32; 48_000]);
         }
+        // M2-a: backdate the press so this fast test pair classifies as
+        // Normal (elapsed >= MISTOUCH_THRESHOLD) and emits finished.
+        if let Some(mut s) = ps.take_record_only_session() {
+            s.backdate_press_for_test();
+            ps.set_record_only_session(s);
+        }
         RecordOnlySession::recover(&ps);
         assert_eq!(ps.sm_state(), Some(crate::state::StateTag::Idle));
 

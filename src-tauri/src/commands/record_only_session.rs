@@ -30,6 +30,59 @@ const MONITOR_POLL_MS: u64 = 250;
 /// would ship ~54k IPC events at the classic pipeline's 33ms rate.
 const RMS_EMIT_INTERVAL_MS: u64 = 100;
 
+/// Mistouch threshold: press→release shorter than this is an accidental
+/// tap — the recording is discarded (soft-deleted into `.dl_pending`, 5s
+/// undo window via the tray menu). Fixed, not configurable (product
+/// decision 2026-09-26 M2-a). Exemptions in classify_release keep
+/// backpressure stops and finalize failures on the keep path.
+const MISTOUCH_THRESHOLD: Duration = Duration::from_millis(1500);
+
+/// Release classification for the mistouch discard (M2-a). Pure so the
+/// timing/exemption matrix is testable without statics or sleeps.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReleaseClass {
+    /// Deliberate hold (or an exempted stop): keep the recording.
+    Normal,
+    /// Accidental tap under MISTOUCH_THRESHOLD with a healthy finalize:
+    /// discard into the soft-delete pending dir.
+    Mistouch,
+}
+
+fn classify_release(elapsed: Duration, dropped_blocks: u64, finalize_failed: bool) -> ReleaseClass {
+    if finalize_failed || dropped_blocks > 0 || elapsed >= MISTOUCH_THRESHOLD {
+        ReleaseClass::Normal
+    } else {
+        ReleaseClass::Mistouch
+    }
+}
+
+// ---- M2-a mistouch scheduling (non-IPC; I2-S5 security ruling) ----
+//
+// The destructive half of the mistouch discard (soft-delete + tray undo)
+// must NOT ride the Tauri event bus: `core:event:default` transitively
+// grants allow-emit to every webview, so any JS could forge the payload
+// and drive file deletion. Instead the app side registers one scheduler
+// at startup; recover() calls it directly. The `record-only-discarded`
+// EVENT still fires, but only carries the floating-window copy (a
+// forged event can at worst change indicator text — no side effects).
+//
+// Tests never register a scheduler (None => dispatch no-ops), so the
+// integration tests exercise emit + classification without touching
+// files; scheduler invocation is covered by the on-device checks 8.3-1/3.
+type MistouchScheduler = Arc<dyn Fn(&str, &str) + Send + Sync>;
+static MISTOUCH_SCHEDULER: std::sync::OnceLock<MistouchScheduler> = std::sync::OnceLock::new();
+
+/// Register the app-side mistouch scheduler (lib.rs setup, once).
+pub(crate) fn set_mistouch_scheduler(f: MistouchScheduler) {
+    let _ = MISTOUCH_SCHEDULER.set(f);
+}
+
+fn dispatch_mistouch(stem: &str, dir: &str) {
+    if let Some(f) = MISTOUCH_SCHEDULER.get() {
+        f(stem, dir);
+    }
+}
+
 /// Session-level config snapshot taken at press time, so mid-session
 /// settings changes cannot affect an in-flight recording.
 #[derive(Clone)]
@@ -54,6 +107,7 @@ pub(crate) struct ActiveRecordOnly {
     recorder: StreamingRecorder,
     policy: RecordOnlyPolicy,
     push_cell: PushCell,
+    pressed_at: Instant,
 }
 
 impl ActiveRecordOnly {
@@ -77,12 +131,32 @@ impl ActiveRecordOnly {
 
     /// Test-only constructor (fields are private to this module).
     #[cfg(test)]
-    pub(crate) fn new_for_test(recorder: StreamingRecorder, policy: RecordOnlyPolicy) -> Self {
+    pub(crate) fn new_for_test(
+        recorder: StreamingRecorder,
+        policy: RecordOnlyPolicy,
+        pressed_at: Instant,
+    ) -> Self {
         Self {
             recorder,
             policy,
             push_cell: Arc::new(Mutex::new(None)),
+            pressed_at,
         }
+    }
+
+    /// Test-only: backdate the press so a fast press→recover test pair
+    /// classifies as Normal (elapsed ≥ MISTOUCH_THRESHOLD). Per-session
+    /// state — no statics, parallel-test safe. The 2026-09-26 batch failed
+    /// on cfg(test) threshold hacks and static flags (see its 偏差登记);
+    /// this lives outside pipeline_state.rs so the pub-fn ratchet is
+    /// untouched.
+    #[cfg(test)]
+    pub(crate) fn backdate_press_for_test(&mut self) {
+        // Subtract a safe margin so a freshly created test fixture always
+        // satisfies elapsed >= MISTOUCH_THRESHOLD even under fast CI runners.
+        self.pressed_at = Instant::now()
+            .checked_sub(MISTOUCH_THRESHOLD + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
     }
 }
 
@@ -188,6 +262,35 @@ impl RecordOnlySession {
             error!("record-only: finalize failed for {stem}: {e}");
         }
 
+        // M2-a mistouch discard: a healthy finalize under the threshold with no
+        // dropped blocks is an accidental tap. No business JSON; the WAV moves
+        // to .dl_pending via the app-side listener (soft-delete infra + 5s
+        // tray undo), keeping the pipeline layer free of Tauri-managed state.
+        let elapsed = session.pressed_at.elapsed();
+        let dropped_now = outcome.as_ref().map(|i| i.dropped_blocks).unwrap_or(0);
+        if classify_release(elapsed, dropped_now, outcome.is_err()) == ReleaseClass::Mistouch {
+            ps.emitter().emit(
+                "record-only-discarded",
+                serde_json::json!({
+                    "stem": stem,
+                    "dir": session.policy.data_saving_path,
+                }),
+            );
+            // Non-IPC side: drive soft-delete + tray undo. The IPC event above
+            // only carries floating-window text (see MISTOUCH_SCHEDULER doc).
+            dispatch_mistouch(&stem, &session.policy.data_saving_path);
+            info!(
+                "record_only_mistouch_discarded: {stem} elapsed_ms={} dropped={dropped_now}",
+                elapsed.as_millis()
+            );
+            ps.window_controller().set_tray_tooltip("语文兔 - 就绪");
+            if !ps.sm_finish_record_only() {
+                warn!("recover: sm_finish_record_only failed; forcing reset");
+                ps.sm_reset();
+            }
+            return;
+        }
+
         if let Err(e) = Self::write_session_json(&session.policy, &stem, &outcome) {
             error!("record-only: failed to write metadata for {stem}: {e}");
             ps.emitter().emit(
@@ -282,6 +385,7 @@ impl RecordOnlySession {
             recorder,
             policy: policy.clone(),
             push_cell,
+            pressed_at: Instant::now(),
         });
         Self::spawn_backpressure_monitor(ps.clone(), dropped);
         // Best-effort in-flight indicator (symmetric with the classic
@@ -387,6 +491,17 @@ mod tests {
     use crate::commands::{EventEmitter, MockEmitter};
     use crate::config::{AppConfig, ConfigCache};
     use crate::llm::MockCorrector;
+
+    /// Test helper: backdate the press on the current session so the next
+    /// recover classifies as Normal. Per-session state — no statics, so
+    /// parallel tests stay isolated.
+    #[cfg(test)]
+    fn backdate_press(ps: &PipelineState) {
+        if let Some(mut s) = ps.take_record_only_session() {
+            s.backdate_press_for_test();
+            ps.set_record_only_session(s);
+        }
+    }
     use crate::perf::PerfHistory;
     use crate::speech::mock::MockEngine;
     use crate::state::StateMachine;
@@ -565,6 +680,7 @@ mod tests {
         assert!(stem.is_some());
         let Some(stem) = stem else { return };
 
+        backdate_press(&ps);
         RecordOnlySession::recover(&ps);
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
         assert!(ps.take_record_only_session().is_none());
@@ -600,6 +716,7 @@ mod tests {
         // cannot be removed by remove_file nor overwritten by rename.
         assert!(fs::create_dir(dir.join(format!("{stem}.json"))).is_ok());
 
+        backdate_press(&ps);
         RecordOnlySession::recover(&ps);
         assert_eq!(ps.sm_state(), Some(StateTag::Idle));
         assert!(ps.take_record_only_session().is_none());
@@ -696,6 +813,7 @@ mod tests {
         let wc = Arc::new(CallTrayWindowController::new());
         let (ps, emitter) = build_ps_with_wc(record_only_config(&dir), wc.clone());
         RecordOnlySession::on_press(&ps);
+        backdate_press(&ps);
         RecordOnlySession::recover(&ps);
         let calls = wc.take_calls();
         assert!(!calls.contains(&("hide_floating", None)));
@@ -893,5 +1011,103 @@ mod tests {
         assert_eq!(parsed["duration_seconds"], 0.0);
         assert_eq!(parsed["dropped_blocks"], 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- M2-a mistouch classification (pure function; no statics/sleeps) ----
+
+    #[test]
+    fn test_classify_release_mistouch_under_threshold() {
+        let c = super::classify_release(Duration::from_millis(400), 0, false);
+        assert_eq!(c, super::ReleaseClass::Mistouch);
+    }
+
+    #[test]
+    fn test_classify_release_normal_at_or_over_threshold() {
+        assert_eq!(
+            super::classify_release(Duration::from_millis(1500), 0, false),
+            super::ReleaseClass::Normal
+        );
+        assert_eq!(
+            super::classify_release(Duration::from_secs(90), 0, false),
+            super::ReleaseClass::Normal
+        );
+    }
+
+    #[test]
+    fn test_classify_release_exempts_backpressure() {
+        // dropped_blocks>0 (controlled backpressure stop): audio was lost —
+        // the WAV must survive for the user, never discarded as mistouch.
+        assert_eq!(
+            super::classify_release(Duration::from_millis(100), 51, false),
+            super::ReleaseClass::Normal
+        );
+    }
+
+    #[test]
+    fn test_classify_release_exempts_finalize_failure() {
+        // IO failure: we could not finalize the WAV — nothing safe to
+        // discard; the existing error path owns the outcome.
+        assert_eq!(
+            super::classify_release(Duration::from_millis(100), 0, true),
+            super::ReleaseClass::Normal
+        );
+    }
+
+    // ---- M2-a mistouch integration (emit + classification, no scheduler) ----
+
+    #[test]
+    fn test_mistouch_discard_skips_json_and_emits_event() {
+        let dir = temp_dir("mistouch-discard");
+        let (ps, emitter) = build_ps(record_only_config(&dir));
+        RecordOnlySession::on_press(&ps);
+        // No backdate: elapsed ≈ 0 < 1500ms → Mistouch.
+        RecordOnlySession::recover(&ps);
+
+        // No business JSON for the mistouch stem.
+        let jsons: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            })
+            .collect();
+        assert!(jsons.is_empty(), "mistouch must not write business JSON");
+
+        // The discard event carries stem + dir for the app-side soft-delete.
+        let discarded: Vec<_> = emitter
+            .take_events()
+            .iter()
+            .filter(|(e, _)| e == "record-only-discarded")
+            .cloned()
+            .collect();
+        assert_eq!(discarded.len(), 1);
+        assert!(ps.sm_state() != Some(StateTag::RecordOnly));
+
+        RecordOnlySession::recover(&ps); // idempotent cleanup
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_normal_press_does_not_emit_discarded_event() {
+        let dir = temp_dir("normal-no-discard");
+        let (ps, emitter) = build_ps(record_only_config(&dir));
+        RecordOnlySession::on_press(&ps);
+        backdate_press(&ps);
+        RecordOnlySession::recover(&ps);
+
+        // Happy path emits finished (still expected) but NOT discarded.
+        let events = emitter.take_events();
+        assert!(
+            events.iter().any(|(e, _)| e == "record-only-finished"),
+            "normal press must still emit finished event"
+        );
+        assert!(
+            events.iter().all(|(e, _)| e != "record-only-discarded"),
+            "normal press must not emit discarded event"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

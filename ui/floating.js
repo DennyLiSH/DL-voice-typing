@@ -401,3 +401,20 @@ listen('record-only-error', (event) => {
     transcriptText.classList.add('visible', 'error');
     hide(4500);
 });
+
+// M2-a mistouch discard: the backend skipped the business JSON and the
+// app-side listener soft-deletes the WAV. Mirrors the finished handler's
+// non-failed branch (timer stop, announcement, class cleanup, delayed
+// hide). A new press during the 2.5s window is safe: show() clears the
+// pending hideTimeout and showRecordOnly() rewrites the text (design
+// review 2026-09-29 finding A).
+listen('record-only-discarded', () => {
+    stopRecordOnlyTimer();
+    setTranscriptAnnouncement('polite');
+    indicator.classList.remove('record-only');
+    indicator.style.filter = '';
+    transcriptText.textContent = '录音太短，已自动丢弃';
+    transcriptText.classList.remove('error');
+    transcriptText.classList.add('visible');
+    hide(2500);
+});
