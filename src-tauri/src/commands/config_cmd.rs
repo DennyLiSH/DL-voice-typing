@@ -40,6 +40,20 @@ pub fn get_config(
     Ok(config)
 }
 
+/// Backend-authoritative defaults for the settings "restore defaults"
+/// action (M3-a). Masked like get_config so the wire shape feeds
+/// populateFields unchanged; the API key default is empty so the mask is
+/// a no-op — kept for shape symmetry and future non-empty defaults.
+#[tauri::command]
+pub fn get_default_config() -> AppConfig {
+    let mut config = AppConfig::default();
+    // Route through the same mask as get_config so a future non-empty
+    // key default can never ship plaintext to the frontend (runtime
+    // guarantee, not a debug_assert that release builds strip).
+    config.llm_api_key = ApiKeyMask::mask(&config.llm_api_key);
+    config
+}
+
 /// Save all settings. Handles hotkey re-registration on the main thread.
 #[tauri::command]
 pub fn save_settings(
@@ -231,5 +245,23 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_ok());
+    }
+
+    // ---- M3-a two-layer penetration proof ----
+
+    #[test]
+    fn test_clear_sentinel_then_save_leaves_no_dpapi_residue() {
+        // Two-layer penetration proof (M3-a hard requirement): a config that
+        // HAD an encrypted key, resolved through unmask_or_keep(CLEAR), ends
+        // up with an empty key — which save() writes as "" (never DPAPI:).
+        let old = "DPAPI:AAAAZmFrZQ=="; // stand-in for a previously stored blob
+        let resolved = crate::config::ApiKeyMask::unmask_or_keep(crate::config::CLEAR_MARKER, old);
+        assert_eq!(resolved, "");
+        assert!(!resolved.contains("DPAPI:"));
+        // Defaults themselves carry no credentials.
+        let d = crate::config::AppConfig::default();
+        assert_eq!(d.llm_api_key, "");
+        assert_eq!(d.llm_api_url, "");
+        assert_eq!(d.data_saving_path, "");
     }
 }

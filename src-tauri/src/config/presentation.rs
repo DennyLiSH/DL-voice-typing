@@ -5,6 +5,11 @@
 /// perform cryptography.
 pub const MASKED_MARKER: &str = "__MASKED__";
 
+/// Explicit clear sentinel for the settings restore-defaults flow (M3-a).
+/// An empty string from the frontend KEEPS the stored key (existing
+/// semantics), so wiping the key on restore needs an unambiguous marker.
+pub const CLEAR_MARKER: &str = "__CLEAR__";
+
 /// Adapter for masking API keys at the presentation boundary.
 pub struct ApiKeyMask;
 
@@ -21,12 +26,18 @@ impl ApiKeyMask {
 
     /// Resolve the API key that should be persisted.
     ///
+    /// - If the frontend sent `CLEAR_MARKER` (restore-defaults flow), wipe
+    ///   the stored key (audit log emitted — destructive safety action is
+    ///   traceable).
     /// - If the frontend sent the masked marker, keep the existing key.
     /// - If the frontend sent an empty string but a key already exists, keep
     ///   the existing key (empty input does not delete the saved key).
     /// - Otherwise, use the incoming value (new key or intentional clear).
     pub fn unmask_or_keep(incoming: &str, current: &str) -> String {
-        if incoming == MASKED_MARKER || (incoming.is_empty() && !current.is_empty()) {
+        if incoming == CLEAR_MARKER {
+            tracing::info!(target: "config", "llm_api_key cleared via restore-defaults sentinel");
+            String::new()
+        } else if incoming == MASKED_MARKER || (incoming.is_empty() && !current.is_empty()) {
             current.to_string()
         } else {
             incoming.to_string()
@@ -37,6 +48,34 @@ impl ApiKeyMask {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- M3-a CLEAR sentinel (settings restore-defaults path) ----
+
+    #[test]
+    fn clear_marker_wipes_existing_key() {
+        // The one legal way for the frontend to clear a stored key: the
+        // restore-defaults flow sends CLEAR_MARKER explicitly. Empty string
+        // must keep the old key (existing semantics — see test below).
+        assert_eq!(
+            ApiKeyMask::unmask_or_keep(CLEAR_MARKER, "sk-old"),
+            String::new()
+        );
+    }
+
+    #[test]
+    fn empty_incoming_still_keeps_existing_key() {
+        // Manual-clear path semantics are UNCHANGED by the sentinel: empty
+        // input + stored key keeps the stored key.
+        assert_eq!(
+            ApiKeyMask::unmask_or_keep("", "sk-old"),
+            "sk-old".to_string()
+        );
+    }
+
+    #[test]
+    fn clear_marker_constant_is_stable() {
+        assert_eq!(CLEAR_MARKER, "__CLEAR__");
+    }
 
     #[test]
     fn test_mask_empty_returns_empty() {

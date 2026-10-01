@@ -1,5 +1,6 @@
 import { call } from './lib/api.js';
-import { MASKED_MARKER } from './lib/api-key-mask.js';
+import { CLEAR_MARKER, MASKED_MARKER } from './lib/api-key-mask.js';
+import { confirmDialog } from './lib/confirm-dialog.js';
 import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
 import {
     DEFAULT_PRIMARY_SPEC,
@@ -36,6 +37,9 @@ const llmFields = document.getElementById('llm-fields');
 const apiUrlInput = document.getElementById('api-url');
 const apiUrlWarning = document.getElementById('api-url-warning');
 const apiKeyInput = document.getElementById('api-key');
+const resetDefaultsBtn = document.getElementById('reset-defaults-btn');
+let apiKeyResetPending = false;
+let apiKeyHadExistingAtReset = false; // Stage 6 F1: snapshot channel
 const modelInput = document.getElementById('model');
 const toggleKeyBtn = document.getElementById('toggle-key');
 const testBtn = document.getElementById('test-btn');
@@ -117,9 +121,21 @@ const DOM_DEFS = {
     llm_api_key: {
         get: () => {
             const v = apiKeyInput.value.trim();
+            // Dual channel (Stage 6 F1): with keepBaseline the LIVE check keeps
+            // reading the pre-reset baseline; the SNAPSHOT channel remains as
+            // defense-in-depth (and covers any future populate caller that
+            // forgets keepBaseline).
             const hasExistingKey =
-                loadedConfig && loadedConfig.llm_api_key === MASKED_MARKER;
-            return v || (hasExistingKey ? MASKED_MARKER : '');
+                loadedConfig?.llm_api_key === MASKED_MARKER ||
+                (apiKeyResetPending && apiKeyHadExistingAtReset);
+            if (v) return v;
+            // Restore-defaults intent: wiping a stored key needs the explicit
+            // sentinel (empty input alone KEEPS the stored key — backend
+            // unmask_or_keep semantics).
+            if (apiKeyResetPending && hasExistingKey) return CLEAR_MARKER;
+            return loadedConfig?.llm_api_key === MASKED_MARKER
+                ? MASKED_MARKER
+                : '';
         },
         set: (v) => {
             // Handle masked API key: clear input, show placeholder
@@ -202,12 +218,19 @@ const DOM_DEFS = {
 
 const FIELDS = SETTINGS_FIELDS.map(({ key }) => ({ key, ...DOM_DEFS[key] }));
 
-export function populateFields(config) {
-    loadedConfig = config;
+export function populateFields(config, { keepBaseline = false } = {}) {
+    if (!keepBaseline) {
+        loadedConfig = config;
+    }
     FIELDS.forEach(({ key, set }) => {
         set(config[key]);
     });
     updateApiUrlWarning();
+    if (!keepBaseline) {
+        // Re-loading the real config invalidates any in-flight CLEAR intent.
+        apiKeyResetPending = false;
+        apiKeyHadExistingAtReset = false;
+    }
 
     // In dev builds without DL_AUTOSTART=1, gray out the autostart toggle.
     // Probe is in populateFields (not in FIELDS) because it is a one-shot
@@ -489,6 +512,9 @@ export async function saveSettings() {
         return;
     }
 
+    apiKeyResetPending = false;
+    apiKeyHadExistingAtReset = false;
+
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中…';
     saveBtn.classList.add('saving');
@@ -601,4 +627,48 @@ export function setDirtyCheckEnabled(enabled) {
 
 export function getLoadedAutostart() {
     return loadedAutostart;
+}
+
+if (resetDefaultsBtn) {
+    resetDefaultsBtn.addEventListener('click', async () => {
+        const ok = await confirmDialog({
+            title: '恢复全部默认设置？',
+            message:
+                '将清空 API Key、接口地址与数据保存路径，密钥需重新获取粘贴（不可找回）。恢复后不会自动保存，请核对后手动保存。',
+            danger: true,
+        });
+        if (!ok) return;
+        try {
+            const defaults = await call('get_default_config', {});
+            const hadExisting = loadedConfig?.llm_api_key === MASKED_MARKER;
+            // keepBaseline: the dirty baseline (loadedConfig) stays = the REAL
+            // saved config, so dirty = "defaults vs saved" lights for ANY
+            // divergence (incl. no-key users with non-default settings).
+            populateFields(
+                { ...defaults, llm_api_key: '' },
+                { keepBaseline: true },
+            );
+            apiKeyHadExistingAtReset = hadExisting;
+            apiKeyResetPending = true;
+            updateDirtyState();
+            updateHotkeyPreview('hotkey');
+            updateHotkeyPreview('record-only-hotkey');
+            setSaveStatus('已恢复默认值，请核对后保存', 'success');
+            armClearStatusOnInteract();
+        } catch (_e) {
+            setSaveStatus('✗ 恢复默认失败，请重试', 'error');
+        }
+    });
+}
+
+// Any user edit (including type-then-delete-all) takes control away from
+// the reset intent — otherwise silent fallback to "keep the old key" while
+// the reset notice still promises a wipe.
+if (apiKeyInput) {
+    apiKeyInput.addEventListener('input', () => {
+        apiKeyResetPending = false;
+        if (saveStatus.textContent.includes('已恢复默认值')) {
+            saveStatus.textContent = '';
+        }
+    });
 }
