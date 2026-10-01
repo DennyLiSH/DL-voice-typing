@@ -153,6 +153,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::config_cmd::get_config,
+            commands::config_cmd::get_default_config,
             commands::config_cmd::save_settings,
             commands::config_cmd::is_autostart_available,
             commands::config_cmd::get_compute_mode,
