@@ -105,16 +105,10 @@ impl EventEmitter for MockEmitter {
     }
 }
 
-// Re-export all public items so `lib.rs` requires no changes.
-pub use config_cmd::{get_compute_mode, get_config, is_autostart_available, save_settings};
-pub use download::{
-    DownloadState, ModelsResponse, cancel_download, delete_custom_model, download_whisper_model,
-    get_whisper_models,
-};
-pub use error_history::get_last_errors;
+// Type re-exports used by lib.rs / tests + the hotkey callback ctor.
+// Command functions are always referenced by full path in
+// generate_handler; do not re-add function re-exports.
+pub use download::{DownloadState, ModelsResponse};
 pub(crate) use hotkey_pipeline::make_hotkey_callback;
-pub use llm_cmd::test_llm_connection;
-pub use log_cmd::log_frontend_error;
-pub use perf_cmd::get_perf_history;
-pub use review::{PendingReview, cancel_review, confirm_inject, get_review_text};
+pub use review::PendingReview;
 pub use window_controller::WindowController;
