@@ -1,16 +1,23 @@
-// Display sizes only. Single source of truth: BUILT_IN_MODELS in
-// src-tauri/src/config/schema.rs (same mirror convention as
-// ui/model-manager.js MODEL_SIZES). Keep in sync manually.
-const MODEL_LABELS = [
-    ['tiny', 'Tiny (75MB)'],
-    ['tiny-q8_0', 'Tiny Q8_0 (~40MB)'],
-    ['base', 'Base (142MB)'],
-    ['base-q8_0', 'Base Q8_0 (~75MB)'],
-    ['small', 'Small (466MB)'],
-    ['small-q8_0', 'Small Q8_0 (~250MB)'],
-    ['medium', 'Medium (1.5GB)'],
-    ['medium-q8_0', 'Medium Q8_0 (~800MB)'],
+// Single source of truth for built-in whisper model metadata on the
+// frontend. Mirrored with src-tauri/src/config/schema.rs BUILT_IN_MODELS
+// — drift is pinned by __tests__/model-table-contract.test.js (id set
+// must equal Rust serde_key set). Adding a model = one entry here; the
+// Rust side mirror must follow.
+export const MODELS = [
+    { id: 'tiny', name: 'Tiny', size: '75MB' },
+    { id: 'tiny-q8_0', name: 'Tiny Q8_0', size: '~40MB', tag: '量化' },
+    { id: 'base', name: 'Base', size: '142MB' },
+    { id: 'base-q8_0', name: 'Base Q8_0', size: '~75MB', tag: '量化' },
+    { id: 'small', name: 'Small', size: '466MB' },
+    { id: 'small-q8_0', name: 'Small Q8_0', size: '~250MB', tag: '量化' },
+    { id: 'medium', name: 'Medium', size: '1.5GB' },
+    { id: 'medium-q8_0', name: 'Medium Q8_0', size: '~800MB', tag: '量化' },
 ];
+
+const MODEL_LABELS = MODELS.map(({ id, name, size }) => [
+    id,
+    `${name} (${size})`,
+]);
 
 /**
  * Build select options from a get_whisper_models payload

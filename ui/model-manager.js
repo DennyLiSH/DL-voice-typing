@@ -2,6 +2,7 @@ import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
 import { hideIfVisible } from './lib/first-run-banner.js';
 import { notifyFormChange } from './lib/form-state.js';
+import { MODELS } from './lib/transcribe-models.js';
 import { showError } from './lib/ui-utils.js';
 
 const { listen } = window.__TAURI__.event;
@@ -23,19 +24,9 @@ let activeDownload = null;
 
 // --- Model Select ---
 
-// Display sizes only. Single source of truth: BUILT_IN_MODELS in
-// src-tauri/src/config/schema.rs (verified 8/8 identical 2026-09-05).
-// Keep the two in sync manually — no compile/test guard exists.
-const MODEL_SIZES = [
-    { id: 'tiny', name: 'Tiny', size: '75MB' },
-    { id: 'tiny-q8_0', name: 'Tiny Q8_0', size: '~40MB', tag: '量化' },
-    { id: 'base', name: 'Base', size: '142MB' },
-    { id: 'base-q8_0', name: 'Base Q8_0', size: '~75MB', tag: '量化' },
-    { id: 'small', name: 'Small', size: '466MB' },
-    { id: 'small-q8_0', name: 'Small Q8_0', size: '~250MB', tag: '量化' },
-    { id: 'medium', name: 'Medium', size: '1.5GB' },
-    { id: 'medium-q8_0', name: 'Medium Q8_0', size: '~800MB', tag: '量化' },
-];
+// Single source of truth: MODELS in ui/lib/transcribe-models.js,
+// mirrored with src-tauri/src/config/schema.rs BUILT_IN_MODELS — drift
+// is pinned by __tests__/model-table-contract.test.js.
 
 export function populateModelSelect() {
     whisperModelSelect.innerHTML = '';
@@ -43,7 +34,7 @@ export function populateModelSelect() {
     // Built-in group
     const builtInGroup = document.createElement('optgroup');
     builtInGroup.label = '内置模型';
-    for (const m of MODEL_SIZES) {
+    for (const m of MODELS) {
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = m.tag

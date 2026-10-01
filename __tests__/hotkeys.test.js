@@ -2,7 +2,7 @@
 //
 // Unit tests for ui/lib/hotkeys.js — frontend mirror of the backend
 // NAMED_KEYS table (src-tauri/src/hotkey/mod.rs). The two sides carry
-// pointer-comments to each other (MODEL_SIZES ↔ BUILT_IN_MODELS convention).
+// pointer-comments to each other (MODELS ↔ BUILT_IN_MODELS convention).
 //
 // Coverage:
 //   - MAIN_KEYS contains all canonical key names (canonical form only;

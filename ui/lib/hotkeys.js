@@ -1,6 +1,6 @@
 // Mirror of the backend NAMED_KEYS table + ASCII letter/digit rules at
 // src-tauri/src/hotkey/mod.rs. Both sides carry pointer-comments to
-// each other (same convention as MODEL_SIZES ↔ BUILT_IN_MODELS).
+// each other (same convention as MODELS ↔ BUILT_IN_MODELS).
 //
 // Frontend responsibilities:
 //   - Drive the two <select> widgets on the hotkey page.
