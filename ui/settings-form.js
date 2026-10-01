@@ -16,6 +16,7 @@ import {
 import { SETTINGS_FIELDS } from './lib/settings-schema.js';
 import {
     apiUrlWarningText,
+    crossSlotConflicts,
     hotkeyConflictWarning,
     isConfigDirty,
     validateSettings,
@@ -269,6 +270,12 @@ export function populateFields(config, { keepBaseline = false } = {}) {
         set(cfg[key]);
     });
     updateApiUrlWarning();
+    // Initial conflict-warning refresh on EVERY populate call (including
+    // the restore-defaults keepBaseline path — DR-1.2: hooking only the
+    // page-load entry would leave a stale conflict div up after reset,
+    // and a legacy config that already carries a conflicting pair shows
+    // the warning immediately on load).
+    updateHotkeyWarnings();
     if (!keepBaseline) {
         // Re-loading the real config invalidates any in-flight CLEAR intent.
         apiKeyResetPending = false;
@@ -464,14 +471,22 @@ modelInput.addEventListener('input', updateDirtyState);
 // of the two combos. The form fetches the spec via specFromUI(); any of
 // these 8 inputs being toggled must mark the form dirty AND refresh the
 // live preview label (spec: 预览文本 "Ctrl+Shift+A").
-for (const prefix of ['hotkey', 'record-only-hotkey']) {
+for (const prefix of [
+    'hotkey',
+    'record-only-hotkey',
+    'open-settings-hotkey',
+    'open-transcribe-hotkey',
+]) {
+    // Optional-chaining matches populateMainKeySelects' missing-element
+    // tolerance: module-init must not crash when a host DOM lacks the
+    // open-* controls (test fixtures, embedded reuse).
     document
         .getElementById(prefix)
-        .addEventListener('change', onHotkeyComboChange);
+        ?.addEventListener('change', onHotkeyComboChange);
     for (const mod of ['ctrl', 'shift', 'alt']) {
         document
             .getElementById(`${prefix}-${mod}`)
-            .addEventListener('change', onHotkeyComboChange);
+            ?.addEventListener('change', onHotkeyComboChange);
     }
 }
 
@@ -484,6 +499,46 @@ function onHotkeyComboChange() {
         'open-transcribe-hotkey',
     ]) {
         updateHotkeyPreview(prefix);
+    }
+    updateHotkeyWarnings();
+}
+
+/**
+ * Cross-slot conflict warnings (M6-a): one dedicated conflict div per slot
+ * (`#<prefix>-conflict-warning`), fully cleared and rewritten on every
+ * call — this function is their ONLY writer, so the F1/F12 advisory
+ * channel (`#<prefix>-warning`, written by updateHotkeyWarning) is never
+ * touched and the two warning kinds coexist without swallowing each
+ * other. Blame direction follows crossSlotConflicts' DR-2.3 order
+ * invariant (never the primary slot).
+ */
+function updateHotkeyWarnings() {
+    const config = getCurrentConfig();
+    const conflicts = crossSlotConflicts({
+        hotkey: config.hotkey,
+        record_only_hotkey: config.record_only_hotkey,
+        open_settings_hotkey: config.open_settings_hotkey,
+        open_transcribe_hotkey: config.open_transcribe_hotkey,
+    });
+    // First conflict message per slot (a slot colliding with several
+    // others shows its first pair — enough to direct the user).
+    const hit = new Map();
+    for (const c of conflicts) {
+        if (!hit.has(c.slot)) hit.set(c.slot, c.message);
+    }
+    for (const slot of [
+        'hotkey',
+        'record_only_hotkey',
+        'open_settings_hotkey',
+        'open_transcribe_hotkey',
+    ]) {
+        const el = document.getElementById(
+            `${slot.replaceAll('_', '-')}-conflict-warning`,
+        );
+        if (!el) continue;
+        const message = hit.get(slot);
+        el.hidden = !message;
+        el.textContent = message ?? '';
     }
 }
 

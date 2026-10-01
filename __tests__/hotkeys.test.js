@@ -19,10 +19,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     MAIN_KEYS,
+    optionalSpecFromUI,
     populateMainKeySelects,
     sameSpec,
     specFromUI,
     specLabel,
+    writeOptionalSpecToUI,
     writeSpecToUI,
 } from '../ui/lib/hotkeys.js';
 
@@ -285,5 +287,72 @@ describe('sameSpec', () => {
                 },
             ),
         ).toBe(false);
+    });
+    it('is null-safe: null vs null is true, null vs spec is false', () => {
+        expect(sameSpec(null, null)).toBe(true);
+        expect(
+            sameSpec(null, { ctrl: false, shift: false, alt: false, vk: 163 }),
+        ).toBe(false);
+        expect(
+            sameSpec({ ctrl: false, shift: false, alt: false, vk: 163 }, null),
+        ).toBe(false);
+    });
+});
+
+// ---- M6-a optional-slot helpers (feature lock — functions pre-exist) ----
+
+describe('optional slots (M6-a)', () => {
+    beforeEach(() => {
+        document.body.innerHTML = '';
+        const prefix = 'open-settings-hotkey';
+        for (const mod of ['ctrl', 'shift', 'alt']) {
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.id = `${prefix}-${mod}`;
+            document.body.appendChild(cb);
+        }
+        const sel = document.createElement('select');
+        sel.id = prefix;
+        sel.innerHTML =
+            '<option value=""></option><option value="S">S</option><option value="T">T</option>';
+        document.body.appendChild(sel);
+    });
+
+    afterEach(() => {
+        document.body.innerHTML = '';
+    });
+
+    it('optionalSpecFromUI returns null when the key select is empty', () => {
+        document.getElementById('open-settings-hotkey').value = '';
+        expect(optionalSpecFromUI('open-settings-hotkey')).toBeNull();
+    });
+
+    it('optionalSpecFromUI returns a spec when a key is selected', () => {
+        const sel = document.getElementById('open-settings-hotkey');
+        sel.value = 'S';
+        document.getElementById('open-settings-hotkey-ctrl').checked = true;
+        expect(optionalSpecFromUI('open-settings-hotkey')).toEqual({
+            ctrl: true,
+            shift: false,
+            alt: false,
+            vk: 0x53,
+        });
+    });
+
+    it('writeOptionalSpecToUI(null) unchecks modifiers and clears the select', () => {
+        const sel = document.getElementById('open-settings-hotkey');
+        sel.value = 'S';
+        document.getElementById('open-settings-hotkey-ctrl').checked = true;
+        writeOptionalSpecToUI('open-settings-hotkey', null);
+        expect(sel.value).toBe('');
+        for (const mod of ['ctrl', 'shift', 'alt']) {
+            expect(
+                document.getElementById(`open-settings-hotkey-${mod}`).checked,
+            ).toBe(false);
+        }
+    });
+
+    it('specLabel(null) renders as 未启用', () => {
+        expect(specLabel(null)).toBe('未启用');
     });
 });

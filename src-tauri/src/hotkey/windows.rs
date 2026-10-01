@@ -201,12 +201,16 @@ fn dispatch_key_event(hs: &HookState, vk: u32, is_keydown: bool) -> Option<SlotC
     find_callback(hs, vk, mods, is_keydown)
 }
 
-/// Three-slot emptiness check used to decide whether the underlying
-/// Windows hook can be removed. Pure function — operates on a local
-/// `HookState` so tests do not need to touch the process-level
-/// `HOOK_STATE` static.
+/// Five-slot emptiness check (4 spec slots + cancel_esc) used to decide
+/// whether the underlying Windows hook can be removed. Pure function —
+/// operates on a local `HookState` so tests do not need to touch the
+/// process-level `HOOK_STATE` static.
 fn all_slots_empty(hs: &HookState) -> bool {
-    hs.primary.is_none() && hs.record_only.is_none() && hs.cancel_esc.is_none()
+    hs.primary.is_none()
+        && hs.record_only.is_none()
+        && hs.cancel_esc.is_none()
+        && hs.open_settings.is_none()
+        && hs.open_transcribe.is_none()
 }
 
 /// Symmetric cross-slot conflict check. Called from both `register()`
@@ -1232,7 +1236,7 @@ mod tests {
     }
 
     #[test]
-    fn all_slots_empty_returns_true_only_when_all_three_clear() {
+    fn all_slots_empty_returns_true_only_when_all_five_clear() {
         // Only primary -> not empty (cancel_esc/record_only missing but the
         // emptiness check counts them too).
         let hs = hook_state_with(Some(default_primary()), None, false);
@@ -1240,9 +1244,76 @@ mod tests {
         // Cancel_esc only -> not empty.
         let hs = hook_state_with(None, None, true);
         assert!(!all_slots_empty(&hs), "cancel_esc alone is not empty");
-        // All three None -> empty.
+        // Open-window slots only -> not empty (M6-a: the emptiness check
+        // must count all five slots, or unregister_primary tears the hook
+        // down while an open-window hotkey is still live).
+        let hs = HookState {
+            open_settings: Some((default_primary(), dummy_callback())),
+            ..hook_state_with(None, None, false)
+        };
+        assert!(!all_slots_empty(&hs), "open_settings alone is not empty");
+        let hs = HookState {
+            open_transcribe: Some((default_primary(), dummy_callback())),
+            ..hook_state_with(None, None, false)
+        };
+        assert!(!all_slots_empty(&hs), "open_transcribe alone is not empty");
+        // All five None -> empty.
         let hs = HookState::default();
         assert!(all_slots_empty(&hs));
+    }
+
+    // ---- M6-a conflict matrix feature lock: 4 spec slots, pairwise ----
+
+    #[test]
+    fn open_settings_conflicting_with_primary_is_rejected() {
+        let spec = default_primary();
+        let hs = HookState {
+            primary: Some((spec, dummy_callback())),
+            ..hook_state_with(None, None, false)
+        };
+        let err = validate_no_conflict(spec, &hs, SlotKind::OpenSettings)
+            .expect_err("open_settings == primary must error");
+        assert!(err.to_string().contains("primary"), "got: {err}");
+    }
+
+    #[test]
+    fn open_settings_vs_open_transcribe_conflict_is_rejected() {
+        let spec = default_primary();
+        let hs = HookState {
+            open_transcribe: Some((spec, dummy_callback())),
+            ..hook_state_with(None, None, false)
+        };
+        assert!(validate_no_conflict(spec, &hs, SlotKind::OpenSettings).is_err());
+    }
+
+    #[test]
+    fn record_only_vs_open_settings_conflict_is_rejected() {
+        // 补齐 6 对冲突矩阵中无既有用例覆盖的对子类（primary×record_only 在
+        // windows.rs 既有用例已有覆盖；本用例覆盖 record_only×open_* 两对的
+        // 对子类——slots 数组若写错顺序，仅靠前两用例（都含 primary/open_*）
+        // 检测不到）。
+        let spec = default_primary();
+        let hs = HookState {
+            record_only: Some((spec, dummy_callback())),
+            ..hook_state_with(None, None, false)
+        };
+        assert!(validate_no_conflict(spec, &hs, SlotKind::OpenSettings).is_err());
+    }
+
+    #[test]
+    fn none_slots_never_conflict() {
+        let hs = hook_state_with(None, None, false);
+        assert!(validate_no_conflict(default_primary(), &hs, SlotKind::OpenSettings).is_ok());
+        assert!(validate_no_conflict(default_primary(), &hs, SlotKind::OpenTranscribe).is_ok());
+    }
+
+    #[test]
+    fn dispatch_fires_open_settings_slot() {
+        let hs = HookState {
+            open_settings: Some((default_primary(), dummy_callback())),
+            ..hook_state_with(None, None, false)
+        };
+        assert!(find_callback(&hs, 0xA3, ModifiersHeld::default(), true).is_some());
     }
 
     // ---- Step 3.1: route_event pure router contract ----

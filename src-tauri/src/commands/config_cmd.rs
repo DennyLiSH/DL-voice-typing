@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
+use tracing::warn;
 
 /// Whether autostart is available in the current build.
 /// - Release: always true.
@@ -68,6 +69,9 @@ pub fn save_settings(
     // Load old config to detect hotkey change and preserve API key if masked.
     let old_config = config_cache.read_cached();
     let hotkey_changed = config.hotkey != old_config.hotkey;
+    let open_settings_changed = config.open_settings_hotkey != old_config.open_settings_hotkey;
+    let open_transcribe_changed =
+        config.open_transcribe_hotkey != old_config.open_transcribe_hotkey;
 
     // If the frontend sent the masked marker, preserve the existing decrypted key.
     let mut config = config;
@@ -136,7 +140,7 @@ pub fn save_settings(
 
         // Wait for the main thread callback to complete.
         match rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 // Hotkey error — config is saved but hotkey didn't change.
                 // This emit bypasses the trait emitter, so record it into the
@@ -154,62 +158,115 @@ pub fn save_settings(
                     );
                 }
                 let _ = app.emit("hotkey-error", &e);
-                Err(CommandError::new("HOTKEY", e))
+                return Err(CommandError::new("HOTKEY", e));
             }
-            Err(_) => Err(CommandError::new(
-                "HOTKEY",
-                "hotkey re-registration timed out",
-            )),
-        }
-    } else {
-        // M6-a optional open-windows slots: live re-register on change.
-        // Synchronous path (not main-thread) — tests cover this branch and the
-        // operation is cheap (unregister + re-register on the OS hook).
-        if config.open_settings_hotkey != old_config.open_settings_hotkey {
-            let hm_state = app.state::<Mutex<WindowsHotkeyManager>>();
-            if let Ok(mut hm) = hm_state.lock() {
-                let _ = hm.unregister_open_settings();
-                if let Some(spec) = config.open_settings_hotkey {
-                    let cb =
-                        super::make_open_window_callback(app.clone(), super::WindowKind::Settings);
-                    if let Err(e) = hm.register_open_settings(spec, cb) {
-                        tracing::warn!("open-settings re-registration failed: {e}");
-                        // Revert to OLD spec (if it existed).
-                        if let Some(old) = old_config.open_settings_hotkey {
-                            let cb = super::make_open_window_callback(
-                                app.clone(),
-                                super::WindowKind::Settings,
-                            );
-                            let _ = hm.register_open_settings(old, cb);
-                        }
-                    }
-                }
+            Err(_) => {
+                return Err(CommandError::new(
+                    "HOTKEY",
+                    "hotkey re-registration timed out",
+                ));
             }
         }
-        if config.open_transcribe_hotkey != old_config.open_transcribe_hotkey {
-            let hm_state = app.state::<Mutex<WindowsHotkeyManager>>();
-            if let Ok(mut hm) = hm_state.lock() {
-                let _ = hm.unregister_open_transcribe();
-                if let Some(spec) = config.open_transcribe_hotkey {
-                    let cb = super::make_open_window_callback(
-                        app.clone(),
-                        super::WindowKind::Transcribe,
-                    );
-                    if let Err(e) = hm.register_open_transcribe(spec, cb) {
-                        tracing::warn!("open-transcribe re-registration failed: {e}");
-                        if let Some(old) = old_config.open_transcribe_hotkey {
-                            let cb = super::make_open_window_callback(
-                                app.clone(),
-                                super::WindowKind::Transcribe,
-                            );
-                            let _ = hm.register_open_transcribe(old, cb);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
     }
+    if open_settings_changed || open_transcribe_changed {
+        let (tx, rx) = mpsc::channel();
+        let app_clone = app.clone();
+        let new_s = config.open_settings_hotkey;
+        let new_t = config.open_transcribe_hotkey;
+        let old_s = old_config.open_settings_hotkey;
+        let old_t = old_config.open_transcribe_hotkey;
+        let _ = app.run_on_main_thread(move || {
+            let hm_state = app_clone.state::<Mutex<WindowsHotkeyManager>>();
+            let Ok(mut hm) = hm_state.lock() else {
+                let _ = tx.send(Err("lock failed".to_string()));
+                return;
+            };
+            let mut failures: Vec<String> = Vec::new();
+            if open_settings_changed {
+                let _ = hm.unregister_open_settings();
+                let result = match new_s {
+                    Some(spec) => {
+                        let cb = super::make_open_window_callback(
+                            app_clone.clone(),
+                            super::WindowKind::Settings,
+                        );
+                        hm.register_open_settings(spec, cb)
+                            .map_err(|e| format!("open-settings: {e}"))
+                    }
+                    None => Ok(()),
+                };
+                if let Err(msg) = result {
+                    failures.push(msg);
+                    // Single revert sequence: re-register the OLD spec so
+                    // the slot never goes dead; log if the revert itself
+                    // fails (slot dead until restart — distinct log line).
+                    if let Some(old) = old_s {
+                        let cb = super::make_open_window_callback(
+                            app_clone.clone(),
+                            super::WindowKind::Settings,
+                        );
+                        if let Err(e2) = hm.register_open_settings(old, cb) {
+                            warn!(
+                                "open-settings revert ALSO failed; slot dead until restart: {e2}"
+                            );
+                        }
+                    }
+                }
+            }
+            if open_transcribe_changed {
+                let _ = hm.unregister_open_transcribe();
+                let result = match new_t {
+                    Some(spec) => {
+                        let cb = super::make_open_window_callback(
+                            app_clone.clone(),
+                            super::WindowKind::Transcribe,
+                        );
+                        hm.register_open_transcribe(spec, cb)
+                            .map_err(|e| format!("open-transcribe: {e}"))
+                    }
+                    None => Ok(()),
+                };
+                if let Err(msg) = result {
+                    failures.push(msg);
+                    if let Some(old) = old_t {
+                        let cb = super::make_open_window_callback(
+                            app_clone.clone(),
+                            super::WindowKind::Transcribe,
+                        );
+                        if let Err(e2) = hm.register_open_transcribe(old, cb) {
+                            warn!(
+                                "open-transcribe revert ALSO failed; slot dead until restart: {e2}"
+                            );
+                        }
+                    }
+                }
+            }
+            let _ = tx.send(if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(failures.join("; "))
+            });
+        });
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                if let Some(history) =
+                    app.try_state::<Arc<crate::commands::error_history::ErrorHistory>>()
+                {
+                    history.record("hotkey-error", &serde_json::json!(e));
+                }
+                let _ = app.emit("hotkey-error", &e);
+                return Err(CommandError::new("HOTKEY", e));
+            }
+            Err(_) => {
+                return Err(CommandError::new(
+                    "HOTKEY",
+                    "open-windows hotkey re-registration timed out",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

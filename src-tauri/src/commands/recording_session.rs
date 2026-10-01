@@ -84,13 +84,15 @@ impl SessionPolicy {
 /// otherwise the field-coverage test fails.
 #[allow(dead_code)] // referenced by tests_session_policy::known_unsnapshoted_fields_audit_anchor
 const KNOWN_UNSNAPSHOTED_FIELDS: &[&str] = &[
-    "llm_api_key",         // live-read per LLM call for key rotation
-    "autostart",           // app-lifecycle concern, not pipeline
-    "review_before_paste", // folded into mode via pipeline_mode()
-    "hotkey",              // hotkey re-registration is independent of pipeline
-    "download_mirror",     // only used at model fetch time, not pipeline
-    "record_only_enabled", // record-only mode has its own session policy (record_only_session)
-    "record_only_hotkey",  // hotkey re-registration is independent of pipeline
+    "llm_api_key",            // live-read per LLM call for key rotation
+    "autostart",              // app-lifecycle concern, not pipeline
+    "review_before_paste",    // folded into mode via pipeline_mode()
+    "hotkey",                 // hotkey re-registration is independent of pipeline
+    "download_mirror",        // only used at model fetch time, not pipeline
+    "record_only_enabled",    // record-only mode has its own session policy (record_only_session)
+    "record_only_hotkey",     // hotkey re-registration is independent of pipeline
+    "open_settings_hotkey",   // window-lifecycle concern, not pipeline (M6-a)
+    "open_transcribe_hotkey", // window-lifecycle concern, not pipeline (M6-a)
 ];
 
 /// Outcome of a hotkey release: either fully handled inline, or an async

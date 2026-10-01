@@ -3,6 +3,7 @@ import { MASKED_MARKER } from '../ui/lib/api-key-mask.js';
 import { sameSpec } from '../ui/lib/hotkeys.js';
 import {
     apiUrlWarningText,
+    crossSlotConflicts,
     hasCredentialInUrl,
     hasUserinfoInUrl,
     hotkeyConflictWarning,
@@ -347,6 +348,93 @@ describe('validateSettings', () => {
         };
         const result = validateSettings(config, modelStatus);
         expect(result.valid).toBe(true);
+    });
+
+    it('returns invalid when an open slot equals the main hotkey', () => {
+        const config = {
+            ...baseConfig,
+            open_settings_hotkey: RIGHT_CTRL,
+        };
+        const result = validateSettings(config, modelStatus);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('冲突');
+    });
+
+    it('returns invalid when the two open slots are identical', () => {
+        const config = {
+            ...baseConfig,
+            open_settings_hotkey: F9,
+            open_transcribe_hotkey: F9,
+        };
+        const result = validateSettings(config, modelStatus);
+        expect(result.valid).toBe(false);
+        expect(result.error).toContain('冲突');
+    });
+});
+
+// ---- M6-a cross-slot conflict pure function ----
+
+describe('crossSlotConflicts (M6-a)', () => {
+    const base = {
+        hotkey: RIGHT_CTRL,
+        record_only_hotkey: RIGHT_ALT,
+        open_settings_hotkey: null,
+        open_transcribe_hotkey: null,
+    };
+
+    it('returns [] when no two enabled slots collide (null slots exempt)', () => {
+        expect(crossSlotConflicts(base)).toEqual([]);
+        // Null open slots never conflict with any set spec.
+        expect(crossSlotConflicts({ ...base, hotkey: F1 })).toEqual([]);
+    });
+
+    it('flags the open slot when it equals the primary hotkey (never the primary slot)', () => {
+        // DR-2.3 order invariant: blame always points at the LATER slot —
+        // the primary slot is never reported.
+        const conflicts = crossSlotConflicts({
+            ...base,
+            open_settings_hotkey: RIGHT_CTRL,
+        });
+        expect(conflicts).toHaveLength(1);
+        expect(conflicts[0].slot).toBe('open_settings_hotkey');
+        expect(conflicts[0].slot).not.toBe('hotkey');
+        expect(conflicts[0].message).toContain('语音输入键');
+    });
+
+    it('flags the later open slot when the two open slots collide', () => {
+        const conflicts = crossSlotConflicts({
+            ...base,
+            open_settings_hotkey: F9,
+            open_transcribe_hotkey: F9,
+        });
+        expect(conflicts).toHaveLength(1);
+        expect(conflicts[0].slot).toBe('open_transcribe_hotkey');
+    });
+
+    it('flags the open slot when record_only collides with it', () => {
+        const conflicts = crossSlotConflicts({
+            ...base,
+            open_settings_hotkey: RIGHT_ALT,
+        });
+        expect(conflicts).toHaveLength(1);
+        expect(conflicts[0].slot).toBe('open_settings_hotkey');
+        expect(conflicts[0].message).toContain('录音快捷键');
+    });
+
+    it('attributes every colliding pair to its later slot (multi-pair)', () => {
+        const conflicts = crossSlotConflicts({
+            ...base,
+            open_settings_hotkey: RIGHT_CTRL,
+            open_transcribe_hotkey: RIGHT_CTRL,
+        });
+        // Two open slots colliding with each other AND with the primary —
+        // each colliding pair reports its later slot: one per pair.
+        expect(conflicts).toHaveLength(3);
+        const slots = conflicts.map((c) => c.slot);
+        expect(slots).toContain('open_settings_hotkey');
+        expect(slots).toContain('open_transcribe_hotkey');
+        expect(slots).not.toContain('hotkey');
+        expect(slots).not.toContain('record_only_hotkey');
     });
 });
 

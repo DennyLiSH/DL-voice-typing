@@ -90,6 +90,7 @@
                     </div>
                     <div class="hotkey-preview" id="hotkey-preview" aria-live="polite"></div>
                     <div class="hotkey-warning hint hint-warning" id="hotkey-warning" hidden></div>
+                    <div class="hotkey-warning hint hint-warning" id="hotkey-conflict-warning" hidden></div>
                     <div class="hint">按住说话，松开转录。更改即时生效。</div>
                 </div>
                 <div class="form-group">
@@ -110,6 +111,7 @@
                     </div>
                     <div class="hotkey-preview" id="record-only-hotkey-preview" aria-live="polite"></div>
                     <div class="hotkey-warning hint hint-warning" id="record-only-hotkey-warning" hidden></div>
+                    <div class="hotkey-warning hint hint-warning" id="record-only-hotkey-conflict-warning" hidden></div>
                     <div class="hint">不能与语音输入快捷键相同。切换需重启生效。</div>
                 </div>
                 <div class="form-group" id="open-settings-hotkey-group">
@@ -123,6 +125,7 @@
                     </div>
                     <div class="hotkey-preview" id="open-settings-hotkey-preview" aria-live="polite"></div>
                     <div class="hotkey-warning hint hint-warning" id="open-settings-hotkey-warning" hidden></div>
+                    <div class="hotkey-warning hint hint-warning" id="open-settings-hotkey-conflict-warning" hidden></div>
                     <div class="hint">留空表示禁用。不能与其他任意快捷键冲突。更改即时生效。</div>
                 </div>
                 <div class="form-group" id="open-transcribe-hotkey-group">
@@ -136,6 +139,7 @@
                     </div>
                     <div class="hotkey-preview" id="open-transcribe-hotkey-preview" aria-live="polite"></div>
                     <div class="hotkey-warning hint hint-warning" id="open-transcribe-hotkey-warning" hidden></div>
+                    <div class="hotkey-warning hint hint-warning" id="open-transcribe-hotkey-conflict-warning" hidden></div>
                     <div class="hint">留空表示禁用。不能与其他任意快捷键冲突。更改即时生效。</div>
                 </div>
             </div>
@@ -327,6 +331,14 @@
                         <div class="help-item">
                             <div class="help-item-title">热键与其他软件冲突</div>
                             <div class="help-item-body">在「快捷键」设置页更换为其他按键。注意：Windows 的 Fn 键在固件层处理，无法被本软件识别。</div>
+                        </div>
+                        <div class="help-item">
+                            <div class="help-item-title">打开设置窗快捷键（可选）</div>
+                            <div class="help-item-body">默认未启用，可在「快捷键」设置页配置。</div>
+                        </div>
+                        <div class="help-item">
+                            <div class="help-item-title">打开转录窗快捷键（可选）</div>
+                            <div class="help-item-body">默认未启用，可在「快捷键」设置页配置。</div>
                         </div>
                         <div class="help-item">
                             <div class="help-item-title">如何保存训练数据</div>

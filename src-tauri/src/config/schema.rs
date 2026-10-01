@@ -384,12 +384,12 @@ pub struct AppConfig {
 
     /// Optional global hotkey to open the settings window. None = disabled.
     /// Default None to avoid stealing keys the user already uses globally.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub open_settings_hotkey: Option<HotkeySpec>,
 
     /// Optional global hotkey to open the transcribe window. None = disabled.
     /// Default None to avoid stealing keys the user already uses globally.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub open_transcribe_hotkey: Option<HotkeySpec>,
 }
 
@@ -487,10 +487,25 @@ impl AppConfig {
                 "invalid record_only_hotkey: {key}"
             )));
         }
-        if self.record_only_enabled && self.hotkey == self.record_only_hotkey {
-            return Err(AppError::Config(
-                "hotkey and record_only_hotkey must be different".to_string(),
-            ));
+        // Four spec slots must be pairwise distinct where set (M6-a matrix at
+        // the config boundary; the hook layer re-checks at register time).
+        let slots: [(&str, Option<HotkeySpec>); 4] = [
+            ("hotkey", Some(self.hotkey)),
+            ("record_only_hotkey", Some(self.record_only_hotkey)),
+            ("open_settings_hotkey", self.open_settings_hotkey),
+            ("open_transcribe_hotkey", self.open_transcribe_hotkey),
+        ];
+        for i in 0..slots.len() {
+            for j in (i + 1)..slots.len() {
+                if let (Some(a), Some(b)) = (slots[i].1, slots[j].1)
+                    && a == b
+                {
+                    return Err(AppError::Config(format!(
+                        "{} and {} must be different",
+                        slots[i].0, slots[j].0
+                    )));
+                }
+            }
         }
         if self.llm_enabled
             && (self.llm_api_url.is_empty()
@@ -943,6 +958,55 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_open_settings_equal_to_primary() {
+        let config = AppConfig {
+            open_settings_hotkey: Some(HotkeySpec {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 0xA3, // same as default hotkey
+            }),
+            ..Default::default()
+        };
+        let err = config
+            .validate()
+            .expect_err("open_settings == primary must error");
+        assert!(
+            err.to_string().contains("hotkey") && err.to_string().contains("open_settings_hotkey"),
+            "message must name both slots, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_allows_both_open_slots_none() {
+        // Default config (both open slots None) -> ok (regression lock).
+        assert!(AppConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_two_identical_open_slots() {
+        let spec = HotkeySpec {
+            ctrl: true,
+            shift: false,
+            alt: false,
+            vk: 0x53, // S
+        };
+        let config = AppConfig {
+            open_settings_hotkey: Some(spec),
+            open_transcribe_hotkey: Some(spec),
+            ..Default::default()
+        };
+        let err = config
+            .validate()
+            .expect_err("two identical open slots must error");
+        assert!(
+            err.to_string().contains("open_settings_hotkey")
+                && err.to_string().contains("open_transcribe_hotkey"),
+            "message must name both slots, got: {err}"
+        );
     }
 
     #[test]

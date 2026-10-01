@@ -148,12 +148,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 }
             }
             "transcribe" => {
-                if let Some(pt) =
-                    app.try_state::<crate::commands::transcribe_cmd::PendingTranscribe>()
-                    && let Err(e) = crate::commands::transcribe_cmd::open_window_impl(app, &pt)
-                {
-                    info!("Tray: open transcribe window failed: {e}");
-                }
+                open_transcribe_window(app);
             }
             "quit" => {
                 use std::sync::atomic::Ordering;
@@ -164,30 +159,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 app.exit(0);
             }
             "settings" => {
-                if let Some(window) = app.get_webview_window("settings") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                } else if let Ok(window) = WebviewWindowBuilder::new(
-                    app,
-                    "settings",
-                    tauri::WebviewUrl::App("settings.html".into()),
-                )
-                .title("语文兔语音输入法 - 设置")
-                .inner_size(560.0, 620.0)
-                .resizable(true)
-                .center()
-                .visible(false)
-                .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
-                .build()
-                {
-                    let _ = window.show();
-                    #[cfg(feature = "devtools")]
-                    {
-                        if let Some(w) = app.get_webview_window("settings") {
-                            w.open_devtools();
-                        }
-                    }
-                }
+                open_settings_window(app);
             }
             id if id.starts_with("undo-mistouch:") => {
                 let batch_id: u64 = id
@@ -216,4 +188,46 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
         .build(app)?;
 
     Ok(())
+}
+
+/// Open the transcribe window: show-or-build via `PendingTranscribe` /
+/// `open_window_impl`. Shared by the tray menu arm and the M6-a
+/// open-window hotkey callback (extracted verbatim from the former tray
+/// arm — behavior unchanged).
+pub(crate) fn open_transcribe_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(pt) = app.try_state::<crate::commands::transcribe_cmd::PendingTranscribe>()
+        && let Err(e) = crate::commands::transcribe_cmd::open_window_impl(app, &pt)
+    {
+        info!("Tray: open transcribe window failed: {e}");
+    }
+}
+
+/// Open the settings window: show if it exists, build it otherwise.
+/// Shared by the tray menu arm and the M6-a open-window hotkey callback
+/// (extracted verbatim from the former tray arm — behavior unchanged).
+pub(crate) fn open_settings_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else if let Ok(window) = WebviewWindowBuilder::new(
+        app,
+        "settings",
+        tauri::WebviewUrl::App("settings.html".into()),
+    )
+    .title("语文兔语音输入法 - 设置")
+    .inner_size(560.0, 620.0)
+    .resizable(true)
+    .center()
+    .visible(false)
+    .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
+    .build()
+    {
+        let _ = window.show();
+        #[cfg(feature = "devtools")]
+        {
+            if let Some(w) = app.get_webview_window("settings") {
+                w.open_devtools();
+            }
+        }
+    }
 }

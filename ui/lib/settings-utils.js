@@ -147,6 +147,42 @@ export function apiUrlWarningText(url, hasDedicatedKey = false) {
     return parts.length ? parts.join('') : null;
 }
 
+const SLOT_FIELD_LABELS = {
+    hotkey: '语音输入键',
+    record_only_hotkey: '录音快捷键',
+    open_settings_hotkey: '打开设置',
+    open_transcribe_hotkey: '打开转录窗',
+};
+
+/**
+ * Pairwise cross-slot conflict detection across the 4 hotkey spec slots.
+ * Returns one {slot, message} per colliding pair, attributed to the LATER
+ * slot (j > i).
+ *
+ * Invariant (DR-2.3): callers MUST pass the specs object with `hotkey`
+ * first and slots in canonical order (hotkey → record_only_hotkey →
+ * open_settings_hotkey → open_transcribe_hotkey) — the j > i blame
+ * direction guarantees a conflict is NEVER reported on the primary slot,
+ * keeping the warning UI's semantics stable (互吞防护第一层).
+ */
+export function crossSlotConflicts(specs) {
+    const entries = Object.entries(specs);
+    const conflicts = [];
+    for (let i = 0; i < entries.length; i++) {
+        for (let j = i + 1; j < entries.length; j++) {
+            const [slotA, specA] = entries[i];
+            const [slotB, specB] = entries[j];
+            if (specA != null && specB != null && sameSpec(specA, specB)) {
+                conflicts.push({
+                    slot: slotB,
+                    message: `与「${SLOT_FIELD_LABELS[slotA]}」冲突，请选择其他按键组合`,
+                });
+            }
+        }
+    }
+    return conflicts;
+}
+
 /**
  * Validate settings before save.
  * Returns { valid: boolean, error: string|null }.
@@ -177,24 +213,15 @@ export function validateSettings(config, modelStatus) {
             error: '录音快捷键不能与语音输入快捷键相同',
         };
     }
-    // M6-a 4-slot cross-conflict (any enabled vs any other Pair).
-    const conflicts = [
-        ['录音快捷键', config.record_only_hotkey],
-        ['打开设置窗快捷键', config.open_settings_hotkey],
-        ['打开转录窗快捷键', config.open_transcribe_hotkey],
-    ];
-    const allSpecs = [['语音输入快捷键', config.hotkey], ...conflicts];
-    for (let i = 0; i < allSpecs.length; i++) {
-        for (let j = i + 1; j < allSpecs.length; j++) {
-            const [labelA, specA] = allSpecs[i];
-            const [labelB, specB] = allSpecs[j];
-            if (specA != null && specB != null && sameSpec(specA, specB)) {
-                return {
-                    valid: false,
-                    error: `${labelA}与${labelB}冲突`,
-                };
-            }
-        }
+    // M6-a 4-slot cross-conflict (any enabled vs any other pair).
+    const conflicts = crossSlotConflicts({
+        hotkey: config.hotkey,
+        record_only_hotkey: config.record_only_hotkey,
+        open_settings_hotkey: config.open_settings_hotkey,
+        open_transcribe_hotkey: config.open_transcribe_hotkey,
+    });
+    if (conflicts.length > 0) {
+        return { valid: false, error: '快捷键槽位之间存在冲突，请更换后保存' };
     }
     if (config.record_only_enabled && !config.data_saving_path) {
         return {
