@@ -7,6 +7,7 @@ import {
     getColor,
     getShadow,
     lerpColor,
+    remapRecordOnlyRms,
     remapRms,
 } from '../ui/floating-utils.js';
 
@@ -74,6 +75,37 @@ describe('remapRms', () => {
         for (const rms of [0.01, 0.1, 0.3, 0.5, 0.8, 0.99]) {
             expect(remapRms(rms)).toBeGreaterThan(rms);
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// remapRecordOnlyRms (盲录电平增强 2026-09-29)
+// ---------------------------------------------------------------------------
+describe('remapRecordOnlyRms (盲录电平增强 2026-09-29)', () => {
+    it('normal speech RMS spans most of [0,1] after knee normalization', () => {
+        // Field data (v26.9.5 FAIL): speech ~0.01, silence ~0.001.
+        // The old shared sqrt remap gave 0.1 vs 0.032 (brightness swing 6%,
+        // measured 0.4% on screen). The knee'd curve must separate them hard.
+        expect(remapRecordOnlyRms(0.01)).toBeCloseTo(Math.sqrt(0.5), 5); // 0.707
+        expect(remapRecordOnlyRms(0.001)).toBeCloseTo(Math.sqrt(0.05), 5); // 0.224
+    });
+
+    it('clamps at the knee: louder-than-knee input saturates at 1', () => {
+        expect(remapRecordOnlyRms(0.02)).toBe(1);
+        expect(remapRecordOnlyRms(0.5)).toBe(1);
+    });
+
+    it('regression guard: field speech/silence pair yields a wide spread', () => {
+        // The v26.9.5 failure signature was a spread of ~0.08 in visualRms
+        // (brightness 1.0→1.06). The recalibrated curve must keep the
+        // speech-vs-silence visualRms spread above 0.4 for the same pair.
+        const spread = remapRecordOnlyRms(0.01) - remapRecordOnlyRms(0.001);
+        expect(spread).toBeGreaterThan(0.4);
+    });
+
+    it('zero and negative input map to 0', () => {
+        expect(remapRecordOnlyRms(0)).toBe(0);
+        expect(remapRecordOnlyRms(-0.01)).toBe(0);
     });
 });
 

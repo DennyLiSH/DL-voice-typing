@@ -38,6 +38,22 @@ export function remapRms(rms) {
 }
 
 /**
+ * Record-only level curve (盲录电平增强 2026-09-29). Field data showed mic
+ * RMS landing in 0.001–0.05, where the shared sqrt remap yields only
+ * 0.03–0.22 — a ±6% brightness swing that measured ~0.4% on screen
+ * (v26.9.5 acceptance FAIL). Normalize against a soft knee FIRST, then
+ * sqrt, so normal speech spans most of [0,1] and silence falls to the
+ * bottom. Classic spring path keeps remapRms (scale/color calibration).
+ * @param {number} rms - Raw RMS in [0, 1]
+ * @returns {number} Visual RMS in [0, 1]
+ */
+const RECORD_ONLY_RMS_KNEE = 0.02;
+export function remapRecordOnlyRms(rms) {
+    const normalized = Math.min(Math.max(rms, 0) / RECORD_ONLY_RMS_KNEE, 1);
+    return Math.sqrt(normalized);
+}
+
+/**
  * Get interpolated color for a given visual RMS value using COLOR_STOPS.
  * @param {number} visualRms - Visual RMS in [0, 1]
  * @returns {number[]} RGBA color array

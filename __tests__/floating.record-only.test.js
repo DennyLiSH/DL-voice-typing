@@ -167,10 +167,10 @@ describe('record-only level feedback (盲录电平)', () => {
 
     it('audio-rms in record-only mode drives the brightness filter, not the spring transform', () => {
         listeners['record-only-started']({ payload: { stem: 'x' } });
-        listeners['audio-rms']({ payload: 0.05 });
+        listeners['audio-rms']({ payload: 0.001 });
         const f1 = indicator().style.filter;
         expect(f1).toContain('brightness(');
-        listeners['audio-rms']({ payload: 0.5 });
+        listeners['audio-rms']({ payload: 0.01 });
         const f2 = indicator().style.filter;
         const b1 = Number.parseFloat(f1.match(/brightness\(([\d.]+)\)/)[1]);
         const b2 = Number.parseFloat(f2.match(/brightness\(([\d.]+)\)/)[1]);
@@ -179,6 +179,19 @@ describe('record-only level feedback (盲录电平)', () => {
         // The spring path must NOT run: record-only transform belongs to the
         // CSS breathe keyframes.
         expect(indicator().style.transform).toBe('');
+    });
+
+    it('record-only rms=0.02 saturates the knee curve to brightness(2.00); classic stays off', () => {
+        // Wiring guard: record-only uses remapRecordOnlyRms (knee 0.02);
+        // rms at the knee must clamp to visualRms=1 → brightness(1+1)=2.00.
+        listeners['record-only-started']({ payload: { stem: 'x' } });
+        listeners['audio-rms']({ payload: 0.02 });
+        expect(indicator().style.filter).toContain('brightness(2.00)');
+        // Classic path keeps the shared remapRms (spring-driven, no filter).
+        listeners['record-only-ended']?.({ payload: null });
+        listeners['recording-start']({ payload: null });
+        listeners['audio-rms']({ payload: 0.02 });
+        expect(indicator().style.filter).not.toContain('brightness(2.00)');
     });
 
     it('audio-rms in classic mode keeps the spring path and sets no filter', () => {

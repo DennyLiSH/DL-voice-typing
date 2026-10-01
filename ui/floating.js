@@ -3,6 +3,7 @@ import {
     errorTextWithGuide,
     getColor,
     getShadow,
+    remapRecordOnlyRms,
     remapRms,
 } from './floating-utils.js';
 import { INJECTION_ERROR_MSG } from './lib/errors.js';
@@ -104,8 +105,12 @@ function showRecordOnly() {
 // an inline transform/background would fight the class styles that
 // showRecordOnly deliberately cleared.
 function updateRecordOnlyLevel(rms) {
-    const visualRms = remapRms(rms);
-    indicator.style.filter = `brightness(${(1 + visualRms * 0.6).toFixed(2)})`;
+    // 盲录电平增强: knee'd curve + full modulation depth. Range 1.0–2.0:
+    // the red channel clips at 255 (+40% over the ~181 base) while G/B
+    // still scale, giving a clearly visible speech/silence swing that the
+    // old 1 + sqrt(rms)*0.6 curve (±6%) could not deliver in the field.
+    const visualRms = remapRecordOnlyRms(rms);
+    indicator.style.filter = `brightness(${(1 + visualRms).toFixed(2)})`;
     maybeRipple(rms);
 }
 
@@ -253,6 +258,7 @@ function showRecording() {
     stopRecordOnlyTimer();
     indicator.style.background = BASE_BG;
     indicator.style.boxShadow = BASE_SHADOW;
+    indicator.style.filter = '';
     indicator.style.transform = `scale(${MIN_SCALE})`;
     indicator.classList.remove('processing', 'error', 'exit', 'record-only');
     currentScale = MIN_SCALE;
