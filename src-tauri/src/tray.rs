@@ -10,11 +10,14 @@ use tauri::{
 };
 
 /// Tray id used by both `TrayIconBuilder::with_id` (when present) and
-/// `tray_by_id` lookups. The shipped binary defaults to Tauri 2's "main"
-/// id, but the existing tray code has long queried "default" for tooltip
-/// updates (committed line 81 of the prior version). Keep the string in
-/// one constant so `set_mistouch_undo` does not guess.
-const TRAY_ID: &str = "default";
+/// `tray_by_id` lookups. **Must** be explicitly assigned via
+/// `TrayIconBuilder::with_id` — `TrayIconBuilder::new()` defaults the id
+/// to a global incrementing counter (tray-icon crate, see
+/// `COUNTER.next().to_string()`), so `tray_by_id("main")` /
+/// `tray_by_id("default")` both return None. The pre-P4 tray.rs worked
+/// only by coincidence (the tooltip update was wrapped in `if let Some`,
+/// silently no-op'd). M2-a unified the lookup under one constant.
+const TRAY_ID: &str = "main-tray";
 
 /// Build the tray menu. `mistouch_undo = Some(batch_id)` prepends the
 /// M2-a 「撤销误触丢弃」item (id carries the batch id; the 5s finalize
@@ -97,7 +100,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
         .to_rgba8();
     let (w, h) = icon.dimensions();
 
-    TrayIconBuilder::new()
+    TrayIconBuilder::with_id(TRAY_ID)
         .icon(Image::new_owned(icon.into_raw(), w, h))
         .menu(&menu)
         .tooltip("语文兔 - 就绪")
