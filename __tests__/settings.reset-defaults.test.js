@@ -216,6 +216,13 @@ describe('restore defaults (M3-a)', () => {
         await new Promise((r) => setTimeout(r, 0));
         document.getElementById('save-btn').click();
         await new Promise((r) => setTimeout(r, 0));
+        // 基线归一化断言（原 plan 用例 7）：CLEAR 哨兵不得残留基线，
+        // 否则 maskedKeyEqual('', '__CLEAR__') = false → 永久 dirty。
+        expect(document.getElementById('save-btn').disabled).toBe(true);
+        // The clean form disables the save button (disabled = clean), so
+        // jsdom suppresses the second click — force-enable to reach
+        // saveSettings() (same precedent as the retry tests below).
+        document.getElementById('save-btn').disabled = false;
         document.getElementById('save-btn').click();
         await new Promise((r) => setTimeout(r, 0));
         const saveCalls = invocations.filter((i) => i.cmd === 'save_settings');
@@ -250,15 +257,16 @@ describe('restore defaults (M3-a)', () => {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         document.getElementById('save-btn').click();
         await new Promise((r) => setTimeout(r, 0));
-        // typing+delete leaves the key box empty — populate returned
-        // MASKED for the baseline (validateSettings rejects the literal
-        // sentinel per the Task 3.1 guard, so save is a no-op). The intent
-        // is withdrawn (notice is empty), and the form is left untouched.
         expect(
             document.getElementById('save-status').textContent,
         ).not.toContain('已恢复默认值');
+        // Plan 用例 8 原裁决：input 全删后 get() 走末行返回 '__MASKED__'
+        // （keepBaseline 下基线仍 MASKED），save 发送 '__MASKED__'，后端
+        // unmask_or_keep 保留旧 key——两种形态均 = 保留，行为等价于未动。
         const saveCalls = invocations.filter((i) => i.cmd === 'save_settings');
-        expect(saveCalls).toHaveLength(0);
+        const saveCall = saveCalls[saveCalls.length - 1];
+        expect(saveCall).toBeDefined();
+        expect(saveCall.args.config.llm_api_key).toBe('__MASKED__');
     });
 
     it('save-failure retry chain keeps sending CLEAR on repeated resets', async () => {
@@ -295,5 +303,63 @@ describe('restore defaults (M3-a)', () => {
         expect(saveCalls.length).toBeGreaterThanOrEqual(2);
         const lastSave = saveCalls[saveCalls.length - 1];
         expect(lastSave.args.config.llm_api_key).toBe('__CLEAR__');
+    });
+
+    it('retrying save directly after a failure still sends CLEAR (intent survives)', async () => {
+        let saveCount = 0;
+        await stubInvoke((cmd) => {
+            if (cmd === 'get_config')
+                return Promise.resolve({
+                    ...baseConfig,
+                    llm_api_key: '__MASKED__',
+                });
+            if (cmd === 'save_settings') {
+                saveCount++;
+                if (saveCount === 1)
+                    return Promise.reject(new Error('transient'));
+                return Promise.resolve(null);
+            }
+            return null;
+        });
+        await loadFresh({ ...baseConfig, llm_api_key: '__MASKED__' });
+        const saveBtn = document.getElementById('save-btn');
+        document.getElementById('reset-defaults-btn').click();
+        await new Promise((r) => setTimeout(r, 50));
+        saveBtn.click();
+        await new Promise((r) => setTimeout(r, 50));
+        // DR-1.2：失败后直接重试（不再 reset）——CLEAR 意图必须在失败的
+        // save 后存活（双清只在成功路径执行），否则第二次 save 发 MASKED
+        // = 保留 key，用户以为在清 key。
+        saveBtn.click();
+        await new Promise((r) => setTimeout(r, 50));
+        const saveCalls = invocations.filter((i) => i.cmd === 'save_settings');
+        expect(saveCalls.length).toBeGreaterThanOrEqual(2);
+        const secondSaveCall = saveCalls[saveCalls.length - 1];
+        expect(secondSaveCall.args.config.llm_api_key).toBe('__CLEAR__');
+    });
+
+    it('hand-typing a sentinel literal is neutralized (never sent to backend)', async () => {
+        invocations = [];
+        stubInvoke();
+        await loadFresh();
+        const input = document.getElementById('api-key');
+        // 手输 '__CLEAR__' —— 哨兵不得经手输路径触达后端（否则 = 意外清 key）
+        input.value = '__CLEAR__';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('save-btn').click();
+        await new Promise((r) => setTimeout(r, 0));
+        let saveCalls = invocations.filter((i) => i.cmd === 'save_settings');
+        let saveCall = saveCalls[saveCalls.length - 1];
+        expect(saveCall).toBeDefined();
+        expect(saveCall.args.config.llm_api_key).toBe('__MASKED__');
+        // 手输 '__MASKED__' —— 同样无害化为保留语义（后端保留旧 key）
+        input.value = '__MASKED__';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('save-btn').click();
+        await new Promise((r) => setTimeout(r, 0));
+        saveCalls = invocations.filter((i) => i.cmd === 'save_settings');
+        saveCall = saveCalls[saveCalls.length - 1];
+        expect(saveCall).toBeDefined();
+        expect(saveCall.args.config.llm_api_key).toBe('__MASKED__');
     });
 });

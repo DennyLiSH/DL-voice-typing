@@ -129,7 +129,17 @@ const DOM_DEFS = {
     },
     llm_api_key: {
         get: () => {
-            const v = apiKeyInput.value.trim();
+            const typed = apiKeyInput.value.trim();
+            // Sentinel neutralization (M3-a fix): a sentinel hand-typed
+            // into the input is indistinguishable from the legit
+            // roundtrip form at the validate layer, so the guard lives
+            // HERE at the DOM source — the only place that can tell
+            // "user typed" from "masked roundtrip echo". A typed
+            // sentinel degrades to the empty-input semantics (keep the
+            // stored key); sentinels can never reach the backend by
+            // hand-typing.
+            const v =
+                typed === CLEAR_MARKER || typed === MASKED_MARKER ? '' : typed;
             // Dual channel (Stage 6 F1): with keepBaseline the LIVE check keeps
             // reading the pre-reset baseline; the SNAPSHOT channel remains as
             // defense-in-depth (and covers any future populate caller that
@@ -563,9 +573,6 @@ export async function saveSettings() {
         return;
     }
 
-    apiKeyResetPending = false;
-    apiKeyHadExistingAtReset = false;
-
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中…';
     saveBtn.classList.add('saving');
@@ -574,7 +581,20 @@ export async function saveSettings() {
     const prevRecordOnly = loadedConfig?.record_only_hotkey;
     try {
         await call('save_settings', { config });
-        loadedConfig = config;
+        // Baseline normalization (M3-a fix): the CLEAR sentinel must never
+        // persist in the dirty baseline — maskedKeyEqual only treats the
+        // MASKED marker as "unchanged", a '__CLEAR__' residue keeps the
+        // form dirty forever. Normalize to '' (the post-save backend truth).
+        loadedConfig = {
+            ...config,
+            llm_api_key:
+                config.llm_api_key === CLEAR_MARKER ? '' : config.llm_api_key,
+        };
+        // Double-clear runs on the SUCCESS path only — clearing before the
+        // call would silently drop the CLEAR intent on a failed save (the
+        // retry would send MASKED = keep-key while the user meant to wipe).
+        apiKeyResetPending = false;
+        apiKeyHadExistingAtReset = false;
 
         // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
         let saveMsg = '✓ 已保存';

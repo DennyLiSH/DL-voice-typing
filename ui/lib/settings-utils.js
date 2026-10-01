@@ -152,16 +152,6 @@ export function apiUrlWarningText(url, hasDedicatedKey = false) {
  * Returns { valid: boolean, error: string|null }.
  */
 export function validateSettings(config, modelStatus) {
-    // Sentinel literal guard (M3-a): MASKED_MARKER is a placeholder (the
-    // frontend never sends it as a real value); CLEAR_MARKER is the
-    // restore-defaults intent sentinel (backend unmask_or_keep clears it).
-    // Reject MASKED at the front line; pass CLEAR through to the backend.
-    if (config.llm_api_key === '__MASKED__') {
-        return {
-            valid: false,
-            error: '该值被保留，请换一个密钥',
-        };
-    }
     if (
         config.llm_enabled &&
         (!config.llm_api_url || !config.llm_api_key || !config.llm_model)
