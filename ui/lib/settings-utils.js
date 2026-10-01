@@ -1,5 +1,9 @@
 import { sameSpec } from './hotkeys.js';
-import { SETTINGS_FIELDS } from './settings-schema.js';
+import {
+    HOTKEY_SLOTS,
+    hotkeySpecsOf,
+    SETTINGS_FIELDS,
+} from './settings-schema.js';
 
 /**
  * Compare current config against loaded config to determine dirty state.
@@ -147,12 +151,12 @@ export function apiUrlWarningText(url, hasDedicatedKey = false) {
     return parts.length ? parts.join('') : null;
 }
 
-const SLOT_FIELD_LABELS = {
-    hotkey: '语音输入键',
-    record_only_hotkey: '录音快捷键',
-    open_settings_hotkey: '打开设置',
-    open_transcribe_hotkey: '打开转录窗',
-};
+// Derived from HOTKEY_SLOTS (settings-schema.js) so the label map and the
+// slot list cannot drift on a slot rename/add. Order matches
+// HOTKEY_SLOTS (canonical); Object.fromEntries preserves insertion order.
+export const SLOT_FIELD_LABELS = Object.fromEntries(
+    HOTKEY_SLOTS.map((s) => [s.key, s.label]),
+);
 
 /**
  * Pairwise cross-slot conflict detection across the 4 hotkey spec slots.
@@ -214,12 +218,7 @@ export function validateSettings(config, modelStatus) {
         };
     }
     // M6-a 4-slot cross-conflict (any enabled vs any other pair).
-    const conflicts = crossSlotConflicts({
-        hotkey: config.hotkey,
-        record_only_hotkey: config.record_only_hotkey,
-        open_settings_hotkey: config.open_settings_hotkey,
-        open_transcribe_hotkey: config.open_transcribe_hotkey,
-    });
+    const conflicts = crossSlotConflicts(hotkeySpecsOf(config));
     if (conflicts.length > 0) {
         return { valid: false, error: '快捷键槽位之间存在冲突，请更换后保存' };
     }

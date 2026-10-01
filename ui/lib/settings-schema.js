@@ -16,6 +16,12 @@ import { sameSpec } from './hotkeys.js';
  *
  * Adding a setting = one entry here + one DOM_DEFS wiring in
  * settings-form.js (sync guarded by __tests__/settings-schema.test.js).
+ *
+ * Hotkey slot entries may carry an extra `slot: { label, optional }`
+ * descriptor — these are the source of HOTKEY_SLOTS (derived below) and
+ * `hotkeySpecsOf(config)`. Slot order in this array IS the canonical
+ * hotkey slot order; do not reorder without updating the
+ * __tests__/settings-schema.test.js contract.
  */
 // equal 槽位是 UNCHANGED 谓词（与 sameSpec 同极性）：掩码标记或与 loaded
 // 相同 → 未变更。dirty = !equal ≡ 现行 apiKeyDirty
@@ -27,7 +33,11 @@ const maskedKeyEqual = (current, loaded) =>
 
 export const SETTINGS_FIELDS = [
     { key: 'language' },
-    { key: 'hotkey', equal: sameSpec },
+    {
+        key: 'hotkey',
+        equal: sameSpec,
+        slot: { label: '语音输入键', optional: false },
+    },
     { key: 'whisper_model' },
     { key: 'llm_enabled' },
     { key: 'llm_api_url' },
@@ -40,7 +50,46 @@ export const SETTINGS_FIELDS = [
     { key: 'realtime_transcription' },
     { key: 'autostart' },
     { key: 'record_only_enabled' },
-    { key: 'record_only_hotkey', equal: sameSpec },
-    { key: 'open_settings_hotkey', equal: sameSpec },
-    { key: 'open_transcribe_hotkey', equal: sameSpec },
+    {
+        key: 'record_only_hotkey',
+        equal: sameSpec,
+        slot: { label: '录音快捷键', optional: false },
+    },
+    {
+        key: 'open_settings_hotkey',
+        equal: sameSpec,
+        slot: { label: '打开设置', optional: true },
+    },
+    {
+        key: 'open_transcribe_hotkey',
+        equal: sameSpec,
+        slot: { label: '打开转录窗', optional: true },
+    },
 ];
+
+/**
+ * Derived hotkey slot descriptors, in canonical order (the order the
+ * SETTINGS_FIELDS filter yields them). The filter ORDER is the contract —
+ * crossSlotConflicts relies on this so the j > i blame direction is
+ * deterministic (never blames the primary slot). Adding a slot = adding
+ * a SETTINGS_FIELDS entry above with `slot:`; everything downstream
+ * (label, prefix, optionality, specs ordering) follows.
+ */
+export const HOTKEY_SLOTS = SETTINGS_FIELDS.filter((f) => f.slot).map((f) => ({
+    key: f.key,
+    prefix: f.key.replaceAll('_', '-'),
+    label: f.slot.label,
+    optional: f.slot.optional,
+}));
+
+/**
+ * Project a config object down to its hotkey spec slots, in canonical
+ * order. Replaces every `{hotkey, record_only_hotkey, ...} 4-key literal`
+ * call site so callers can't drift from the canonical order. Optional
+ * slots pass through `undefined` (no normalised-equals-configure
+ * involved) — the underlying crossSlotConflicts treats null/undefined
+ * as "disabled" identically.
+ */
+export function hotkeySpecsOf(config) {
+    return Object.fromEntries(HOTKEY_SLOTS.map((s) => [s.key, config[s.key]]));
+}

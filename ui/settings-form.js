@@ -5,15 +5,15 @@ import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
 import {
     DEFAULT_PRIMARY_SPEC,
     DEFAULT_RECORD_ONLY_SPEC,
+    hotkeyPreviewLabel,
     optionalSpecFromUI,
     populateMainKeySelects,
     sameSpec,
     specFromUI,
-    specLabel,
     writeOptionalSpecToUI,
     writeSpecToUI,
 } from './lib/hotkeys.js';
-import { SETTINGS_FIELDS } from './lib/settings-schema.js';
+import { HOTKEY_SLOTS, SETTINGS_FIELDS } from './lib/settings-schema.js';
 import {
     apiUrlWarningText,
     crossSlotConflicts,
@@ -49,7 +49,7 @@ let apiKeyHadExistingAtReset = false; // Stage 6 F1: snapshot channel
 // part of module init — production wires this in app-shell.js; the test
 // loadFresh path imports settings-form.js directly and never calls
 // app-shell.js, so calling it here keeps the two paths consistent.
-populateMainKeySelects();
+populateMainKeySelects(HOTKEY_SLOTS);
 const modelInput = document.getElementById('model');
 const toggleKeyBtn = document.getElementById('toggle-key');
 const testBtn = document.getElementById('test-btn');
@@ -86,6 +86,27 @@ onFormChange(updateDirtyState);
 // --- Initialization ---
 
 /**
+ * Factory for the four hotkey-slot DOM_DEFS entries. Centralises the
+ * `required: writeSpecToUI(prefix, v ?? fallback)` vs
+ * `optional: writeOptionalSpecToUI(prefix, v)` split, plus the matching
+ * get branch (optionalSpecFromUI returns null when the slot is
+ * disabled, mirroring the backend Option<HotkeySpec>).
+ *
+ * `fallback` is the default spec used when the backend supplied null
+ * (e.g. fresh install where the field has no server value yet). Only
+ * required slots take a fallback — optional slots stay null and the UI
+ * shows the "未启用" preview.
+ */
+const hotkeyField = ({ prefix, optional, fallback }) => ({
+    get: () => (optional ? optionalSpecFromUI(prefix) : specFromUI(prefix)),
+    set: (v) => {
+        if (optional) writeOptionalSpecToUI(prefix, v);
+        else writeSpecToUI(prefix, v ?? fallback);
+        updateHotkeyPreview(prefix);
+    },
+});
+
+/**
  * DOM wiring for each SETTINGS_FIELDS key (get: DOM → value,
  * set: value → DOM). Keyed by field name — the key LIST lives in
  * lib/settings-schema.js (single source); this map only wires DOM.
@@ -103,13 +124,11 @@ const DOM_DEFS = {
             languageSelect.value = v || 'zh';
         },
     },
-    hotkey: {
-        get: () => specFromUI('hotkey'),
-        set: (v) => {
-            writeSpecToUI('hotkey', v ?? DEFAULT_PRIMARY_SPEC);
-            updateHotkeyPreview('hotkey');
-        },
-    },
+    hotkey: hotkeyField({
+        prefix: 'hotkey',
+        optional: false,
+        fallback: DEFAULT_PRIMARY_SPEC,
+    }),
     whisper_model: {
         get: getSelectedModel,
         set: setSelectedModel,
@@ -227,27 +246,19 @@ const DOM_DEFS = {
             updateRecordOnlyHotkeyState(!!v);
         },
     },
-    record_only_hotkey: {
-        get: () => specFromUI('record-only-hotkey'),
-        set: (v) => {
-            writeSpecToUI('record-only-hotkey', v ?? DEFAULT_RECORD_ONLY_SPEC);
-            updateHotkeyPreview('record-only-hotkey');
-        },
-    },
-    open_settings_hotkey: {
-        get: () => optionalSpecFromUI('open-settings-hotkey'),
-        set: (v) => {
-            writeOptionalSpecToUI('open-settings-hotkey', v);
-            updateHotkeyPreview('open-settings-hotkey');
-        },
-    },
-    open_transcribe_hotkey: {
-        get: () => optionalSpecFromUI('open-transcribe-hotkey'),
-        set: (v) => {
-            writeOptionalSpecToUI('open-transcribe-hotkey', v);
-            updateHotkeyPreview('open-transcribe-hotkey');
-        },
-    },
+    record_only_hotkey: hotkeyField({
+        prefix: 'record-only-hotkey',
+        optional: false,
+        fallback: DEFAULT_RECORD_ONLY_SPEC,
+    }),
+    open_settings_hotkey: hotkeyField({
+        prefix: 'open-settings-hotkey',
+        optional: true,
+    }),
+    open_transcribe_hotkey: hotkeyField({
+        prefix: 'open-transcribe-hotkey',
+        optional: true,
+    }),
 };
 
 const FIELDS = SETTINGS_FIELDS.map(({ key }) => ({ key, ...DOM_DEFS[key] }));
@@ -256,18 +267,13 @@ export function populateFields(config, { keepBaseline = false } = {}) {
     if (!keepBaseline) {
         loadedConfig = config;
     }
-    // M6-a: backend serde emits `null` (not skipping) for Option<HotkeySpec>,
-    // but the JS shape on first paint may see `undefined` if the user is on
-    // a pre-M6 install and just upgraded. The DOM getter returns `null` for the
-    // optional slots; normalising both sides to `null` keeps isConfigDirty
-    // stable across the upgrade.
-    const cfg = {
-        open_settings_hotkey: null,
-        open_transcribe_hotkey: null,
-        ...config,
-    };
+    // Optional slot spec passthrough relies on `config[key]` being exactly
+    // what the backend sent (null for disabled, spec for enabled). The
+    // dirty-check side (isConfigDirty) handles the undefined→null
+    // normalisation for the optional slots when the user is on a pre-M6
+    // install and just upgraded — no duplicate guard here.
     FIELDS.forEach(({ key, set }) => {
-        set(cfg[key]);
+        set(config[key]);
     });
     updateApiUrlWarning();
     // Initial conflict-warning refresh on EVERY populate call (including
@@ -514,29 +520,19 @@ function onHotkeyComboChange() {
  */
 function updateHotkeyWarnings() {
     const config = getCurrentConfig();
-    const conflicts = crossSlotConflicts({
-        hotkey: config.hotkey,
-        record_only_hotkey: config.record_only_hotkey,
-        open_settings_hotkey: config.open_settings_hotkey,
-        open_transcribe_hotkey: config.open_transcribe_hotkey,
-    });
+    const conflicts = crossSlotConflicts(
+        Object.fromEntries(HOTKEY_SLOTS.map((s) => [s.key, config[s.key]])),
+    );
     // First conflict message per slot (a slot colliding with several
     // others shows its first pair — enough to direct the user).
     const hit = new Map();
     for (const c of conflicts) {
         if (!hit.has(c.slot)) hit.set(c.slot, c.message);
     }
-    for (const slot of [
-        'hotkey',
-        'record_only_hotkey',
-        'open_settings_hotkey',
-        'open_transcribe_hotkey',
-    ]) {
-        const el = document.getElementById(
-            `${slot.replaceAll('_', '-')}-conflict-warning`,
-        );
+    for (const { key, prefix } of HOTKEY_SLOTS) {
+        const el = document.getElementById(`${prefix}-conflict-warning`);
         if (!el) continue;
-        const message = hit.get(slot);
+        const message = hit.get(key);
         el.hidden = !message;
         el.textContent = message ?? '';
     }
@@ -550,22 +546,17 @@ function updateHotkeyWarnings() {
 function updateHotkeyPreview(prefix) {
     const el = document.getElementById(`${prefix}-preview`);
     if (!el) return;
-    // Optional slots use a different getter (null when disabled) and a
-    // different label semantics ("未启用" vs "未选择主键").
-    const isOptional =
-        prefix === 'open-settings-hotkey' ||
-        prefix === 'open-transcribe-hotkey';
-    if (isOptional) {
-        const sel = document.getElementById(prefix);
-        if (!sel || sel.value === '') {
-            el.textContent = '当前组合：未启用';
-            updateHotkeyWarning(prefix);
-            return;
-        }
-    }
+    // The optional flag is derived from HOTKEY_SLOTS (settings-schema.js)
+    // rather than hard-coded id comparisons — adding a slot only needs
+    // a SETTINGS_FIELDS entry, no change here.
+    const slot = HOTKEY_SLOTS.find((s) => s.prefix === prefix);
+    const optional = slot?.optional ?? false;
     const spec = specFromUI(prefix);
-    el.textContent =
-        spec.vk === 0 ? '未选择主键' : `当前组合：${specLabel(spec)}`;
+    const label = hotkeyPreviewLabel(spec, { optional });
+    // '未选择主键' (required + empty main-key) is the lone label that
+    // drops the '当前组合：' prefix — keeps the old form wording stable
+    // so the byte-identical preview text contract holds.
+    el.textContent = label === '未选择主键' ? label : `当前组合：${label}`;
     updateHotkeyWarning(prefix);
 }
 

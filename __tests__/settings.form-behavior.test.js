@@ -764,4 +764,39 @@ describe('hotkey combo (Task 8: arbitrary combinations)', () => {
         const config = await getCurrentConfigFromForm();
         expect(config.hotkey.vk).toBe(0);
     });
+
+    it('first paint on a pre-M6 config (no open_* keys) leaves a clean dirty baseline', async () => {
+        // Pre-M6 configs (committed before df97165) carry no
+        // open_settings_hotkey / open_transcribe_hotkey field at all. The
+        // schema's slot?.optional normalisation handles undefined→null on
+        // both sides of isConfigDirty so the dirty baseline stays false on
+        // first paint (no spurious "save" prompt for users who have not
+        // touched the new slots). The DOM elements for the open_* slots
+        // are not seeded by MINIMAL_DOM — the form's optional-chaining
+        // guards skip them, so the test only asserts the dirty-baseline
+        // outcome, which is the actual regression contract.
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'get_config') {
+                const config = await originalImpl(cmd, args);
+                const {
+                    open_settings_hotkey: _s,
+                    open_transcribe_hotkey: _t,
+                    ...rest
+                } = config;
+                return rest;
+            }
+            return originalImpl(cmd, args);
+        });
+
+        vi.resetModules();
+        await import('../ui/settings.js');
+        await new Promise((r) => setTimeout(r, 10));
+
+        // Baseline is clean: no spurious dirty state for a config whose
+        // loaded shape matches its current shape (both sides treated as
+        // null via slot?.optional normalisation).
+        const { isFormDirty } = await import('../ui/lib/form-state.js');
+        expect(isFormDirty()).toBe(false);
+    });
 });

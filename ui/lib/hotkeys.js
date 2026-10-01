@@ -248,28 +248,47 @@ export function writeOptionalSpecToUI(prefix, spec) {
 }
 
 /**
- * Fill both hotkey <select> elements (`#hotkey`, `#record-only-hotkey`)
- * with one <option> per MAIN_KEYS entry. Called once from settings.js
- * init before any populateFields, so that writeSpecToUI's `sel.value =
- * name` has the option to land on. Idempotent: a second call replaces
- * the existing options rather than appending.
+ * Three-branch preview label for the hotkey combo form.
+ *   - empty + optional  → "未启用" (slot disabled)
+ *   - empty + required  → "未选择主键" (no main key picked)
+ *   - has spec          → specLabel(spec)
+ *
+ * `spec` is whatever `specFromUI(prefix)` would return for the current
+ * DOM state — a partial HotkeySpec with vk=0 when the <select> is empty.
+ * The caller passes `optional` from its own slot lookup; this function
+ * never inspects DOM, so it stays pure and trivially testable.
  */
-export function populateMainKeySelects() {
-    const isOptional = (id) =>
-        id === 'open-settings-hotkey' || id === 'open-transcribe-hotkey';
-    const sels = [
-        'hotkey',
-        'record-only-hotkey',
-        'open-settings-hotkey',
-        'open-transcribe-hotkey',
-    ].map((id) => document.getElementById(id));
-    for (const sel of sels) {
+export function hotkeyPreviewLabel(spec, { optional }) {
+    if (optional && spec.vk === 0) return '未启用';
+    if (!optional && spec.vk === 0) return '未选择主键';
+    return specLabel(spec);
+}
+
+/**
+ * Fill hotkey <select> elements with one <option> per MAIN_KEYS entry.
+ * Called once from app-shell.js init (and once from settings-form.js
+ * module-load for the loadFresh test path) before any populateFields, so
+ * that writeSpecToUI's `sel.value = name` has the option to land on.
+ * Idempotent: a second call replaces the existing options rather than
+ * appending.
+ *
+ * Slots are passed in by the caller (HOTKEY_SLOTS in settings-schema.js)
+ * — this function is no longer aware of which specific slots exist, so
+ * adding a slot = adding a SETTINGS_FIELDS entry. The optional flag
+ * controls whether the slot prepends a blank「（未启用）」 option used by
+ * writeOptionalSpecToUI's null branch.
+ *
+ * @param {Array<{prefix: string, optional: boolean}>} slots
+ */
+export function populateMainKeySelects(slots) {
+    for (const { prefix, optional } of slots) {
+        const sel = document.getElementById(prefix);
         if (!sel) continue;
         // replaceChildren (no innerHTML) per the ui/ render-safety rule.
         sel.replaceChildren();
         // Optional slots prepend a blank option so the user can disable the
         // hotkey (None semantics). writeOptionalSpecToUI relies on this.
-        if (isOptional(sel.id)) {
+        if (optional) {
             const blank = document.createElement('option');
             blank.value = '';
             blank.textContent = '（未启用）';

@@ -4,6 +4,7 @@ import { confirmDialog, isDialogOpen } from './lib/confirm-dialog.js';
 import { bindFirstRunBanner, showIfRequested } from './lib/first-run-banner.js';
 import { isFormDirty } from './lib/form-state.js';
 import { populateMainKeySelects } from './lib/hotkeys.js';
+import { HOTKEY_SLOTS } from './lib/settings-schema.js';
 import { showError } from './lib/ui-utils.js';
 import {
     loadComputeMode,
@@ -229,7 +230,7 @@ export async function init() {
         // MAIN_KEYS entry. Must run BEFORE populateFields so the
         // writeSpecToUI call inside populateFields can locate the right
         // <option> for the loaded config's vk.
-        populateMainKeySelects();
+        populateMainKeySelects(HOTKEY_SLOTS);
         showIfRequested();
         bindFirstRunBanner();
         setDirtyCheckEnabled(false);

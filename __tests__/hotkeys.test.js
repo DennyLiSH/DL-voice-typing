@@ -18,6 +18,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+    hotkeyPreviewLabel,
     MAIN_KEYS,
     optionalSpecFromUI,
     populateMainKeySelects,
@@ -29,6 +30,11 @@ import {
 } from '../ui/lib/hotkeys.js';
 
 const SELECT_IDS = ['hotkey', 'record-only-hotkey'];
+// Module-level fixture for populateMainKeySelects(slots): mirrors the
+// real SETTINGS_FIELDS slot list shape ({ prefix, optional }) so tests
+// can exercise the parameterised function without pulling the schema
+// (schema → hotkeys.js is a forbidden import direction).
+const SLOTS = SELECT_IDS.map((prefix) => ({ prefix, optional: false }));
 
 function buildComboDom() {
     document.body.innerHTML = '';
@@ -88,7 +94,7 @@ describe('populateMainKeySelects', () => {
     });
 
     it('populates both <select> elements with MAIN_KEYS options', () => {
-        populateMainKeySelects();
+        populateMainKeySelects(SLOTS);
         for (const id of SELECT_IDS) {
             const sel = document.getElementById(id);
             expect(sel.options.length).toBe(MAIN_KEYS.length);
@@ -100,8 +106,8 @@ describe('populateMainKeySelects', () => {
     });
 
     it('is idempotent (second call does not duplicate)', () => {
-        populateMainKeySelects();
-        populateMainKeySelects();
+        populateMainKeySelects(SLOTS);
+        populateMainKeySelects(SLOTS);
         for (const id of SELECT_IDS) {
             expect(document.getElementById(id).options.length).toBe(
                 MAIN_KEYS.length,
@@ -117,7 +123,7 @@ describe('specFromUI / writeSpecToUI', () => {
     });
 
     it('reads checkboxes + select value into a HotkeySpec object', () => {
-        populateMainKeySelects();
+        populateMainKeySelects(SLOTS);
         document.getElementById('hotkey-ctrl').checked = true;
         document.getElementById('hotkey-alt').checked = true;
         const sel = document.getElementById('hotkey');
@@ -127,7 +133,7 @@ describe('specFromUI / writeSpecToUI', () => {
     });
 
     it('round-trips a complex spec through the DOM', () => {
-        populateMainKeySelects();
+        populateMainKeySelects(SLOTS);
         const input = {
             ctrl: true,
             shift: true,
@@ -144,7 +150,7 @@ describe('specFromUI / writeSpecToUI', () => {
     });
 
     it('writes RightCtrl back to its canonical select option', () => {
-        populateMainKeySelects();
+        populateMainKeySelects(SLOTS);
         writeSpecToUI('hotkey', {
             ctrl: false,
             shift: false,
@@ -155,7 +161,7 @@ describe('specFromUI / writeSpecToUI', () => {
     });
 
     it('with unknown vk, leaves select empty AND does not mutate spec', () => {
-        populateMainKeySelects();
+        populateMainKeySelects(SLOTS);
         // Pre-set a known value to confirm writeSpecToUI clears it.
         const sel = document.getElementById('hotkey');
         sel.value = 'RightCtrl';
@@ -169,7 +175,7 @@ describe('specFromUI / writeSpecToUI', () => {
     });
 
     it('does not mutate the input spec on a known vk either (defense in depth)', () => {
-        populateMainKeySelects();
+        populateMainKeySelects(SLOTS);
         const spec = { ctrl: true, shift: false, alt: false, vk: 0xa3 };
         const frozen = JSON.parse(JSON.stringify(spec));
         writeSpecToUI('hotkey', spec);
@@ -354,5 +360,43 @@ describe('optional slots (M6-a)', () => {
 
     it('specLabel(null) renders as 未启用', () => {
         expect(specLabel(null)).toBe('未启用');
+    });
+});
+
+describe('hotkeyPreviewLabel', () => {
+    // Three-branch contract: optional+empty → 未启用, required+empty →
+    // 未选择主键, otherwise → specLabel(spec). Byte-identical to the
+    // preview text the form used to render inline.
+    it('returns 未启用 for optional slot with no spec', () => {
+        expect(
+            hotkeyPreviewLabel(
+                { ctrl: false, shift: false, alt: false, vk: 0 },
+                { optional: true },
+            ),
+        ).toBe('未启用');
+    });
+
+    it('returns 未选择主键 for required slot with no spec', () => {
+        expect(
+            hotkeyPreviewLabel(
+                { ctrl: false, shift: false, alt: false, vk: 0 },
+                { optional: false },
+            ),
+        ).toBe('未选择主键');
+    });
+
+    it('returns specLabel(spec) when a spec is present', () => {
+        expect(
+            hotkeyPreviewLabel(
+                { ctrl: true, shift: false, alt: false, vk: 0x41 },
+                { optional: true },
+            ),
+        ).toBe('Ctrl+A');
+        expect(
+            hotkeyPreviewLabel(
+                { ctrl: false, shift: false, alt: false, vk: 0xa3 },
+                { optional: false },
+            ),
+        ).toBe('RightCtrl');
     });
 });
