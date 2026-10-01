@@ -170,6 +170,7 @@ export function sameSpec(a, b) {
  * from config instead of it being silently rewritten.
  */
 export function specLabel(spec) {
+    if (spec == null) return '未启用';
     const parts = [];
     if (spec.ctrl) parts.push('Ctrl');
     if (spec.shift) parts.push('Shift');
@@ -217,6 +218,36 @@ export function writeSpecToUI(prefix, spec) {
 }
 
 /**
+ * M6-a optional-slot variant of `specFromUI`. Returns `null` when the key
+ * <select> is empty (the user disabled the slot), so the caller can
+ * distinguish "no hotkey configured" from "default RightCtrl". Mirrors
+ * the backend `Option<HotkeySpec>` semantics.
+ */
+export function optionalSpecFromUI(prefix) {
+    const sel = document.getElementById(prefix);
+    if (!sel || sel.value === '') return null;
+    return specFromUI(prefix);
+}
+
+/**
+ * M6-a optional-slot variant of `writeSpecToUI`. Passing `null` blanks
+ * the form (unchecks modifiers + clears the key select) so the user
+ * sees the disabled state after clicking "restore defaults".
+ */
+export function writeOptionalSpecToUI(prefix, spec) {
+    if (spec == null) {
+        for (const m of ['ctrl', 'shift', 'alt']) {
+            const el = document.getElementById(`${prefix}-${m}`);
+            if (el) el.checked = false;
+        }
+        const sel = document.getElementById(prefix);
+        if (sel) sel.value = '';
+        return;
+    }
+    writeSpecToUI(prefix, spec);
+}
+
+/**
  * Fill both hotkey <select> elements (`#hotkey`, `#record-only-hotkey`)
  * with one <option> per MAIN_KEYS entry. Called once from settings.js
  * init before any populateFields, so that writeSpecToUI's `sel.value =
@@ -224,13 +255,26 @@ export function writeSpecToUI(prefix, spec) {
  * the existing options rather than appending.
  */
 export function populateMainKeySelects() {
-    const sels = ['hotkey', 'record-only-hotkey'].map((id) =>
-        document.getElementById(id),
-    );
+    const isOptional = (id) =>
+        id === 'open-settings-hotkey' || id === 'open-transcribe-hotkey';
+    const sels = [
+        'hotkey',
+        'record-only-hotkey',
+        'open-settings-hotkey',
+        'open-transcribe-hotkey',
+    ].map((id) => document.getElementById(id));
     for (const sel of sels) {
         if (!sel) continue;
         // replaceChildren (no innerHTML) per the ui/ render-safety rule.
         sel.replaceChildren();
+        // Optional slots prepend a blank option so the user can disable the
+        // hotkey (None semantics). writeOptionalSpecToUI relies on this.
+        if (isOptional(sel.id)) {
+            const blank = document.createElement('option');
+            blank.value = '';
+            blank.textContent = '（未启用）';
+            sel.appendChild(blank);
+        }
         for (const name of MAIN_KEYS) {
             const opt = document.createElement('option');
             opt.value = name;

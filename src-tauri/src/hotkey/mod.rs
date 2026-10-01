@@ -190,6 +190,26 @@ pub trait HotkeyManager: Send {
     /// hotkey active. Used when settings change just the record-only key.
     fn unregister_record_only(&mut self) -> Result<(), AppError>;
 
+    /// Register the open-settings global hotkey (M6-a optional slot).
+    fn register_open_settings(
+        &mut self,
+        spec: HotkeySpec,
+        callback: HotkeyCallback,
+    ) -> Result<(), AppError>;
+
+    /// Register the open-transcribe global hotkey (M6-a optional slot).
+    fn register_open_transcribe(
+        &mut self,
+        spec: HotkeySpec,
+        callback: HotkeyCallback,
+    ) -> Result<(), AppError>;
+
+    /// Unregister only the open-settings hotkey slot.
+    fn unregister_open_settings(&mut self) -> Result<(), AppError>;
+
+    /// Unregister only the open-transcribe hotkey slot.
+    fn unregister_open_transcribe(&mut self) -> Result<(), AppError>;
+
     /// Check if hotkey is currently registered.
     fn is_registered(&self) -> bool;
 }

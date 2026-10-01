@@ -90,7 +90,7 @@
                     </div>
                     <div class="hotkey-preview" id="hotkey-preview" aria-live="polite"></div>
                     <div class="hotkey-warning hint hint-warning" id="hotkey-warning" hidden></div>
-                    <div class="hint">按住说话，松开转录。切换需重启生效。</div>
+                    <div class="hint">按住说话，松开转录。更改即时生效。</div>
                 </div>
                 <div class="form-group">
                     <div class="toggle-row">
@@ -111,6 +111,32 @@
                     <div class="hotkey-preview" id="record-only-hotkey-preview" aria-live="polite"></div>
                     <div class="hotkey-warning hint hint-warning" id="record-only-hotkey-warning" hidden></div>
                     <div class="hint">不能与语音输入快捷键相同。切换需重启生效。</div>
+                </div>
+                <div class="form-group" id="open-settings-hotkey-group">
+                    <label for="open-settings-hotkey">打开设置窗快捷键（可选）</label>
+                    <div class="hotkey-combo" id="open-settings-hotkey-combo">
+                        <label class="hotkey-mod"><input type="checkbox" id="open-settings-hotkey-ctrl"> Ctrl</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="open-settings-hotkey-shift"> Shift</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="open-settings-hotkey-alt"> Alt</label>
+                        <span class="hotkey-plus">+</span>
+                        <select id="open-settings-hotkey" aria-label="打开设置窗快捷键"></select>
+                    </div>
+                    <div class="hotkey-preview" id="open-settings-hotkey-preview" aria-live="polite"></div>
+                    <div class="hotkey-warning hint hint-warning" id="open-settings-hotkey-warning" hidden></div>
+                    <div class="hint">留空表示禁用。不能与其他任意快捷键冲突。更改即时生效。</div>
+                </div>
+                <div class="form-group" id="open-transcribe-hotkey-group">
+                    <label for="open-transcribe-hotkey">打开转录窗快捷键（可选）</label>
+                    <div class="hotkey-combo" id="open-transcribe-hotkey-combo">
+                        <label class="hotkey-mod"><input type="checkbox" id="open-transcribe-hotkey-ctrl"> Ctrl</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="open-transcribe-hotkey-shift"> Shift</label>
+                        <label class="hotkey-mod"><input type="checkbox" id="open-transcribe-hotkey-alt"> Alt</label>
+                        <span class="hotkey-plus">+</span>
+                        <select id="open-transcribe-hotkey" aria-label="打开转录窗快捷键"></select>
+                    </div>
+                    <div class="hotkey-preview" id="open-transcribe-hotkey-preview" aria-live="polite"></div>
+                    <div class="hotkey-warning hint hint-warning" id="open-transcribe-hotkey-warning" hidden></div>
+                    <div class="hint">留空表示禁用。不能与其他任意快捷键冲突。更改即时生效。</div>
                 </div>
             </div>
 

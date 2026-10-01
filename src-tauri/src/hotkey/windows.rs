@@ -105,6 +105,8 @@ type CancelSlot = Arc<dyn Fn() -> bool + Send + Sync>;
 struct HookState {
     primary: Option<(HotkeySpec, SlotCallback)>,
     record_only: Option<(HotkeySpec, SlotCallback)>,
+    open_settings: Option<(HotkeySpec, SlotCallback)>,
+    open_transcribe: Option<(HotkeySpec, SlotCallback)>,
     cancel_esc: Option<CancelSlot>,
     /// keydown 匹配时咨询的 modifier 采样器。默认 OS 真相探针（生产）；
     /// 测试必须经 `with_probe` 注入合成实现——Default 装的是真实键盘状态。
@@ -116,6 +118,8 @@ impl HookState {
         Self {
             primary: None,
             record_only: None,
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe,
         }
@@ -216,36 +220,57 @@ fn validate_no_conflict(
     hs: &HookState,
     self_slot: SlotKind,
 ) -> Result<(), AppError> {
-    match self_slot {
-        SlotKind::Primary => {
-            if let Some((other, _)) = &hs.record_only
-                && *other == spec
-            {
-                return Err(AppError::Hotkey(
-                    "primary hotkey must differ from the record-only hotkey".to_string(),
-                ));
-            }
+    // M6-a conflict matrix: pairwise comparison across all spec slots. Any
+    // matching pair (ignoring self_slot) errors with the same backend msg
+    // shape that get_pair_conflict_msg produces for the frontend.
+    let slots: [SlotKind; 4] = [
+        SlotKind::Primary,
+        SlotKind::RecordOnly,
+        SlotKind::OpenSettings,
+        SlotKind::OpenTranscribe,
+    ];
+    let spec_of = |kind: SlotKind| -> Option<HotkeySpec> {
+        match kind {
+            SlotKind::Primary => hs.primary.as_ref().map(|(s, _)| *s),
+            SlotKind::RecordOnly => hs.record_only.as_ref().map(|(s, _)| *s),
+            SlotKind::OpenSettings => hs.open_settings.as_ref().map(|(s, _)| *s),
+            SlotKind::OpenTranscribe => hs.open_transcribe.as_ref().map(|(s, _)| *s),
         }
-        SlotKind::RecordOnly => {
-            if let Some((other, _)) = &hs.primary
-                && *other == spec
-            {
-                return Err(AppError::Hotkey(
-                    "record-only hotkey must differ from the primary hotkey".to_string(),
-                ));
-            }
+    };
+    for other in slots {
+        if other == self_slot {
+            continue;
+        }
+        if let Some(other_spec) = spec_of(other)
+            && other_spec == spec
+        {
+            return Err(AppError::Hotkey(format!(
+                "hotkey already used by {} slot",
+                slot_label(other)
+            )));
         }
     }
     Ok(())
 }
 
-/// Identifies which of the two user-facing slots a `register*` call is
+fn slot_label(kind: SlotKind) -> &'static str {
+    match kind {
+        SlotKind::Primary => "primary",
+        SlotKind::RecordOnly => "record-only",
+        SlotKind::OpenSettings => "open-settings",
+        SlotKind::OpenTranscribe => "open-transcribe",
+    }
+}
+
+/// Identifies which of the four user-facing slots a `register*` call is
 /// filling. Used by `validate_no_conflict` to look only at the OTHER
-/// slot's spec, keeping the helper symmetric.
-#[derive(Debug, Clone, Copy)]
+/// slots' specs, keeping the helper symmetric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SlotKind {
     Primary,
     RecordOnly,
+    OpenSettings,
+    OpenTranscribe,
 }
 
 static HOOK_STATE: Mutex<Option<HookState>> = Mutex::new(None);
@@ -361,6 +386,22 @@ impl HotkeyManager for WindowsHotkeyManager {
         self.register_spec_slot(spec, callback, SlotKind::RecordOnly)
     }
 
+    fn register_open_settings(
+        &mut self,
+        spec: HotkeySpec,
+        callback: HotkeyCallback,
+    ) -> Result<(), AppError> {
+        self.register_spec_slot(spec, callback, SlotKind::OpenSettings)
+    }
+
+    fn register_open_transcribe(
+        &mut self,
+        spec: HotkeySpec,
+        callback: HotkeyCallback,
+    ) -> Result<(), AppError> {
+        self.register_spec_slot(spec, callback, SlotKind::OpenTranscribe)
+    }
+
     fn register_cancel_esc(&mut self, callback: CancelEscCallback) -> Result<(), AppError> {
         // The hook must already exist (set up by register()). If it does not,
         // we still record the slot in HOOK_STATE so the keyboard_hook_proc can
@@ -393,6 +434,14 @@ impl HotkeyManager for WindowsHotkeyManager {
 
     fn unregister_record_only(&mut self) -> Result<(), AppError> {
         self.clear_spec_slot(SlotKind::RecordOnly)
+    }
+
+    fn unregister_open_settings(&mut self) -> Result<(), AppError> {
+        self.clear_spec_slot(SlotKind::OpenSettings)
+    }
+
+    fn unregister_open_transcribe(&mut self) -> Result<(), AppError> {
+        self.clear_spec_slot(SlotKind::OpenTranscribe)
     }
 
     fn is_registered(&self) -> bool {
@@ -452,6 +501,10 @@ impl WindowsHotkeyManager {
         match slot {
             SlotKind::Primary => hook_state.primary = Some((spec, Arc::from(callback))),
             SlotKind::RecordOnly => hook_state.record_only = Some((spec, Arc::from(callback))),
+            SlotKind::OpenSettings => hook_state.open_settings = Some((spec, Arc::from(callback))),
+            SlotKind::OpenTranscribe => {
+                hook_state.open_transcribe = Some((spec, Arc::from(callback)))
+            }
         }
         Ok(())
     }
@@ -468,6 +521,8 @@ impl WindowsHotkeyManager {
                     match slot {
                         SlotKind::Primary => hs.primary = None,
                         SlotKind::RecordOnly => hs.record_only = None,
+                        SlotKind::OpenSettings => hs.open_settings = None,
+                        SlotKind::OpenTranscribe => hs.open_transcribe = None,
                     }
                     all_slots_empty(hs)
                 }
@@ -631,6 +686,18 @@ fn find_callback(
             crate::hotkey::vk_to_key_name(vk)
         );
     }
+    if let Some((spec, cb)) = &hs.open_settings
+        && spec.vk == vk
+        && (!is_keydown || modifiers_match(spec, mods))
+    {
+        return Some(cb.clone());
+    }
+    if let Some((spec, cb)) = &hs.open_transcribe
+        && spec.vk == vk
+        && (!is_keydown || modifiers_match(spec, mods))
+    {
+        return Some(cb.clone());
+    }
     None
 }
 
@@ -695,6 +762,8 @@ mod tests {
         let hs = HookState {
             primary: Some((default_primary(), primary_cb.clone())),
             record_only: Some((default_record_only(), record_cb.clone())),
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe: probe_returning(ModifiersHeld::default()),
         };
@@ -715,6 +784,8 @@ mod tests {
         let hs = HookState {
             primary: Some((default_primary(), dummy_callback())),
             record_only: Some((default_record_only(), dummy_callback())),
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe: probe_returning(ModifiersHeld::default()),
         };
@@ -729,6 +800,8 @@ mod tests {
         let only_record = HookState {
             primary: None,
             record_only: Some((default_record_only(), dummy_callback())),
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe: probe_returning(ModifiersHeld::default()),
         };
@@ -824,6 +897,8 @@ mod tests {
         let hs_ctrl_held = HookState {
             primary: Some((default_primary(), dummy_callback())),
             record_only: None,
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe: probe_returning(ModifiersHeld {
                 ctrl: true,
@@ -991,6 +1066,8 @@ mod tests {
         let hs = HookState {
             primary: Some((spec, dummy_callback())),
             record_only: None,
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe: probe_returning(ModifiersHeld::default()),
         };
@@ -1038,6 +1115,8 @@ mod tests {
         let hs_with_primary = HookState {
             primary: Some((a_ctrl, dummy_callback())),
             record_only: None,
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe: probe_returning(ModifiersHeld::default()),
         };
@@ -1045,7 +1124,7 @@ mod tests {
             .expect_err("record_only == primary must error");
         let msg = format!("{err:?}");
         assert!(
-            msg.contains("record-only hotkey must differ from the primary hotkey"),
+            msg.contains("hotkey already used by primary slot"),
             "expected record-only vs primary message, got: {msg}"
         );
         // Spec mismatch against existing primary -> still ok (no false-positive).
@@ -1079,6 +1158,8 @@ mod tests {
         let hs_with_record = HookState {
             primary: None,
             record_only: Some((spec_b, dummy_callback())),
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: None,
             mods_probe: probe_returning(ModifiersHeld::default()),
         };
@@ -1086,7 +1167,7 @@ mod tests {
             .expect_err("primary == record_only must error");
         let msg = format!("{err:?}");
         assert!(
-            msg.contains("primary hotkey must differ from the record-only hotkey"),
+            msg.contains("hotkey already used by record-only slot"),
             "expected primary vs record-only message, got: {msg}"
         );
         // Different spec -> ok (false-positive guard).
@@ -1106,6 +1187,8 @@ mod tests {
         HookState {
             primary: primary.map(|s| (s, dummy_callback())),
             record_only: record_only.map(|s| (s, dummy_callback())),
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: if cancel_esc {
                 Some(Arc::new(|| true))
             } else {
@@ -1234,6 +1317,8 @@ mod tests {
         let hs = HookState {
             primary: None,
             record_only: None,
+            open_settings: None,
+            open_transcribe: None,
             cancel_esc: Some(Arc::new(|| true)),
             mods_probe: probe_returning(ModifiersHeld::default()),
         };

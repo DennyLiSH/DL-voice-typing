@@ -532,11 +532,11 @@ describe('save status clearing semantics', () => {
 
     it('restart-hint message survives 1.5s and clears on the next input', async () => {
         makeDirty();
-        // Change the hotkey so the save message becomes instructional.
-        // Hotkey is now a combo: 3 modifier checkboxes + main <select>.
-        // Toggling a checkbox changes the persisted HotkeySpec shape, which
-        // triggers the "新热键重启应用后生效" message branch.
-        const hotkeyCtrl = document.getElementById('hotkey-ctrl');
+        // Change the record-only-hotkey so the save message becomes
+        // instructional. Primary / open-* hotkeys are now live-re-registered
+        // on save (M6-a), so toggling primary checkboxes no longer triggers a
+        // restart hint; only the record-only slot still requires a restart.
+        const hotkeyCtrl = document.getElementById('record-only-hotkey-ctrl');
         hotkeyCtrl.checked = true;
         hotkeyCtrl.dispatchEvent(new Event('change'));
 

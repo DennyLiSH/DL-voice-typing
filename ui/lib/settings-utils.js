@@ -8,11 +8,22 @@ import { SETTINGS_FIELDS } from './settings-schema.js';
  * Special handling: masked API key is never considered dirty.
  */
 export function isConfigDirty(current, loaded) {
-    return SETTINGS_FIELDS.some(({ key, equal }) =>
-        equal
-            ? !equal(current[key], loaded[key])
-            : current[key] !== loaded[key],
-    );
+    return SETTINGS_FIELDS.some(({ key, equal }) => {
+        // M6-a: optional hotkey slots default to null on both sides when the
+        // user is on a pre-M6 install (loaded lacks the field) and after
+        // restore-defaults (current is null). Without the normalisation the
+        // dirty check spuriously flips on the very first paint.
+        let c = current[key];
+        let l = loaded[key];
+        if (
+            key === 'open_settings_hotkey' ||
+            key === 'open_transcribe_hotkey'
+        ) {
+            if (c === undefined) c = null;
+            if (l === undefined) l = null;
+        }
+        return equal ? !equal(c, l) : c !== l;
+    });
 }
 
 export const CREDENTIAL_WORDS = new Set([
@@ -175,6 +186,25 @@ export function validateSettings(config, modelStatus) {
             valid: false,
             error: '录音快捷键不能与语音输入快捷键相同',
         };
+    }
+    // M6-a 4-slot cross-conflict (any enabled vs any other Pair).
+    const conflicts = [
+        ['录音快捷键', config.record_only_hotkey],
+        ['打开设置窗快捷键', config.open_settings_hotkey],
+        ['打开转录窗快捷键', config.open_transcribe_hotkey],
+    ];
+    const allSpecs = [['语音输入快捷键', config.hotkey], ...conflicts];
+    for (let i = 0; i < allSpecs.length; i++) {
+        for (let j = i + 1; j < allSpecs.length; j++) {
+            const [labelA, specA] = allSpecs[i];
+            const [labelB, specB] = allSpecs[j];
+            if (specA != null && specB != null && sameSpec(specA, specB)) {
+                return {
+                    valid: false,
+                    error: `${labelA}与${labelB}冲突`,
+                };
+            }
+        }
     }
     if (config.record_only_enabled && !config.data_saving_path) {
         return {

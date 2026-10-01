@@ -162,6 +162,52 @@ pub fn save_settings(
             )),
         }
     } else {
+        // M6-a optional open-windows slots: live re-register on change.
+        // Synchronous path (not main-thread) — tests cover this branch and the
+        // operation is cheap (unregister + re-register on the OS hook).
+        if config.open_settings_hotkey != old_config.open_settings_hotkey {
+            let hm_state = app.state::<Mutex<WindowsHotkeyManager>>();
+            if let Ok(mut hm) = hm_state.lock() {
+                let _ = hm.unregister_open_settings();
+                if let Some(spec) = config.open_settings_hotkey {
+                    let cb =
+                        super::make_open_window_callback(app.clone(), super::WindowKind::Settings);
+                    if let Err(e) = hm.register_open_settings(spec, cb) {
+                        tracing::warn!("open-settings re-registration failed: {e}");
+                        // Revert to OLD spec (if it existed).
+                        if let Some(old) = old_config.open_settings_hotkey {
+                            let cb = super::make_open_window_callback(
+                                app.clone(),
+                                super::WindowKind::Settings,
+                            );
+                            let _ = hm.register_open_settings(old, cb);
+                        }
+                    }
+                }
+            }
+        }
+        if config.open_transcribe_hotkey != old_config.open_transcribe_hotkey {
+            let hm_state = app.state::<Mutex<WindowsHotkeyManager>>();
+            if let Ok(mut hm) = hm_state.lock() {
+                let _ = hm.unregister_open_transcribe();
+                if let Some(spec) = config.open_transcribe_hotkey {
+                    let cb = super::make_open_window_callback(
+                        app.clone(),
+                        super::WindowKind::Transcribe,
+                    );
+                    if let Err(e) = hm.register_open_transcribe(spec, cb) {
+                        tracing::warn!("open-transcribe re-registration failed: {e}");
+                        if let Some(old) = old_config.open_transcribe_hotkey {
+                            let cb = super::make_open_window_callback(
+                                app.clone(),
+                                super::WindowKind::Transcribe,
+                            );
+                            let _ = hm.register_open_transcribe(old, cb);
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

@@ -381,6 +381,16 @@ pub struct AppConfig {
     /// Hotkey spec for record-only mode (default: RightAlt with no modifier flags).
     #[serde(default = "default_record_only_hotkey")]
     pub record_only_hotkey: HotkeySpec,
+
+    /// Optional global hotkey to open the settings window. None = disabled.
+    /// Default None to avoid stealing keys the user already uses globally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_settings_hotkey: Option<HotkeySpec>,
+
+    /// Optional global hotkey to open the transcribe window. None = disabled.
+    /// Default None to avoid stealing keys the user already uses globally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_transcribe_hotkey: Option<HotkeySpec>,
 }
 
 fn default_hotkey() -> HotkeySpec {
@@ -451,6 +461,8 @@ impl Default for AppConfig {
             realtime_transcription: false,
             record_only_enabled: false,
             record_only_hotkey: default_record_only_hotkey(),
+            open_settings_hotkey: None,
+            open_transcribe_hotkey: None,
         }
     }
 }

@@ -41,4 +41,6 @@ export const SETTINGS_FIELDS = [
     { key: 'autostart' },
     { key: 'record_only_enabled' },
     { key: 'record_only_hotkey', equal: sameSpec },
+    { key: 'open_settings_hotkey', equal: sameSpec },
+    { key: 'open_transcribe_hotkey', equal: sameSpec },
 ];

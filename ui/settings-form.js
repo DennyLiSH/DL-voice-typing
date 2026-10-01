@@ -5,9 +5,12 @@ import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
 import {
     DEFAULT_PRIMARY_SPEC,
     DEFAULT_RECORD_ONLY_SPEC,
+    optionalSpecFromUI,
+    populateMainKeySelects,
     sameSpec,
     specFromUI,
     specLabel,
+    writeOptionalSpecToUI,
     writeSpecToUI,
 } from './lib/hotkeys.js';
 import { SETTINGS_FIELDS } from './lib/settings-schema.js';
@@ -40,6 +43,12 @@ const apiKeyInput = document.getElementById('api-key');
 const resetDefaultsBtn = document.getElementById('reset-defaults-btn');
 let apiKeyResetPending = false;
 let apiKeyHadExistingAtReset = false; // Stage 6 F1: snapshot channel
+// M6-a: populate the four main-key <select> elements (hotkey,
+// record-only-hotkey, open-settings-hotkey, open-transcribe-hotkey) as
+// part of module init — production wires this in app-shell.js; the test
+// loadFresh path imports settings-form.js directly and never calls
+// app-shell.js, so calling it here keeps the two paths consistent.
+populateMainKeySelects();
 const modelInput = document.getElementById('model');
 const toggleKeyBtn = document.getElementById('toggle-key');
 const testBtn = document.getElementById('test-btn');
@@ -214,6 +223,20 @@ const DOM_DEFS = {
             updateHotkeyPreview('record-only-hotkey');
         },
     },
+    open_settings_hotkey: {
+        get: () => optionalSpecFromUI('open-settings-hotkey'),
+        set: (v) => {
+            writeOptionalSpecToUI('open-settings-hotkey', v);
+            updateHotkeyPreview('open-settings-hotkey');
+        },
+    },
+    open_transcribe_hotkey: {
+        get: () => optionalSpecFromUI('open-transcribe-hotkey'),
+        set: (v) => {
+            writeOptionalSpecToUI('open-transcribe-hotkey', v);
+            updateHotkeyPreview('open-transcribe-hotkey');
+        },
+    },
 };
 
 const FIELDS = SETTINGS_FIELDS.map(({ key }) => ({ key, ...DOM_DEFS[key] }));
@@ -222,8 +245,18 @@ export function populateFields(config, { keepBaseline = false } = {}) {
     if (!keepBaseline) {
         loadedConfig = config;
     }
+    // M6-a: backend serde emits `null` (not skipping) for Option<HotkeySpec>,
+    // but the JS shape on first paint may see `undefined` if the user is on
+    // a pre-M6 install and just upgraded. The DOM getter returns `null` for the
+    // optional slots; normalising both sides to `null` keeps isConfigDirty
+    // stable across the upgrade.
+    const cfg = {
+        open_settings_hotkey: null,
+        open_transcribe_hotkey: null,
+        ...config,
+    };
     FIELDS.forEach(({ key, set }) => {
-        set(config[key]);
+        set(cfg[key]);
     });
     updateApiUrlWarning();
     if (!keepBaseline) {
@@ -434,7 +467,12 @@ for (const prefix of ['hotkey', 'record-only-hotkey']) {
 
 function onHotkeyComboChange() {
     updateDirtyState();
-    for (const prefix of ['hotkey', 'record-only-hotkey']) {
+    for (const prefix of [
+        'hotkey',
+        'record-only-hotkey',
+        'open-settings-hotkey',
+        'open-transcribe-hotkey',
+    ]) {
         updateHotkeyPreview(prefix);
     }
 }
@@ -447,6 +485,19 @@ function onHotkeyComboChange() {
 function updateHotkeyPreview(prefix) {
     const el = document.getElementById(`${prefix}-preview`);
     if (!el) return;
+    // Optional slots use a different getter (null when disabled) and a
+    // different label semantics ("未启用" vs "未选择主键").
+    const isOptional =
+        prefix === 'open-settings-hotkey' ||
+        prefix === 'open-transcribe-hotkey';
+    if (isOptional) {
+        const sel = document.getElementById(prefix);
+        if (!sel || sel.value === '') {
+            el.textContent = '当前组合：未启用';
+            updateHotkeyWarning(prefix);
+            return;
+        }
+    }
     const spec = specFromUI(prefix);
     el.textContent =
         spec.vk === 0 ? '未选择主键' : `当前组合：${specLabel(spec)}`;
@@ -520,7 +571,7 @@ export async function saveSettings() {
     saveBtn.classList.add('saving');
     saveInFlight = true;
 
-    const prevHotkey = loadedConfig?.hotkey;
+    const prevRecordOnly = loadedConfig?.record_only_hotkey;
     try {
         await call('save_settings', { config });
         loadedConfig = config;
@@ -528,8 +579,12 @@ export async function saveSettings() {
         // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
         let saveMsg = '✓ 已保存';
         let saveMsgType = 'success';
-        if (!sameSpec(config.hotkey, prevHotkey)) {
-            saveMsg = '✓ 已保存（新热键重启应用后生效）';
+        // M6-a: only the record-only slot still needs a restart — primary and
+        // the optional open-* slots are live-re-registered on save. Old wording
+        // ("新热键重启应用后生效") fired for any primary change, which was
+        // stale after live re-registration landed.
+        if (!sameSpec(config.record_only_hotkey, prevRecordOnly)) {
+            saveMsg = '✓ 已保存（录音快捷键重启应用后生效）';
         }
         try {
             const wantAutostart = autostartToggle.classList.contains('active');

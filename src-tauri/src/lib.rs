@@ -522,6 +522,26 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
             );
         }
     }
+
+    // M6-a optional open-windows slots (default: not registered).
+    if let Some(spec) = config.open_settings_hotkey {
+        let cb = commands::make_open_window_callback(app.clone(), commands::WindowKind::Settings);
+        if let Err(e) = hotkey_manager.register_open_settings(spec, cb) {
+            warn!(
+                "failed to register open-settings hotkey '{}': {e}",
+                spec.display()
+            );
+        }
+    }
+    if let Some(spec) = config.open_transcribe_hotkey {
+        let cb = commands::make_open_window_callback(app.clone(), commands::WindowKind::Transcribe);
+        if let Err(e) = hotkey_manager.register_open_transcribe(spec, cb) {
+            warn!(
+                "failed to register open-transcribe hotkey '{}': {e}",
+                spec.display()
+            );
+        }
+    }
     hotkey_manager
 }
 
