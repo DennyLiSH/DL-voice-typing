@@ -376,25 +376,11 @@ fn open_settings_at_model_page(app: &tauri::AppHandle) {
         let _ = window.set_focus();
         return;
     }
-    let built = tauri::webview::WebviewWindowBuilder::new(
+    match crate::tray::build_settings_window(
         app,
-        "settings",
         tauri::WebviewUrl::App("settings.html?model_missing=1".into()),
-    )
-    .title("语文兔语音输入法 - 设置")
-    .inner_size(560.0, 620.0)
-    .resizable(true)
-    .center()
-    .visible(false)
-    .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
-    .on_page_load(|window, payload| {
-        if payload.event() == tauri::webview::PageLoadEvent::Finished {
-            let _ = window
-                .eval("import('./app-shell.js').then(m => m.switchPage('model')).catch(() => {})");
-        }
-    })
-    .build();
-    match built {
+        Some("import('./app-shell.js').then(m => m.switchPage('model')).catch(() => {})"),
+    ) {
         Ok(window) => {
             let _ = window.show();
         }

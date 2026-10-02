@@ -2,12 +2,13 @@ use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
 use tauri::{
-    App, AppHandle, Emitter, Manager, Runtime,
+    App, AppHandle, Emitter, Manager, WebviewUrl,
     image::Image,
     menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    webview::WebviewWindowBuilder,
+    webview::{WebviewWindow, WebviewWindowBuilder},
 };
+use tauri::Runtime;
 
 /// Tray id used by both `TrayIconBuilder::with_id` (when present) and
 /// `tray_by_id` lookups. **Must** be explicitly assigned via
@@ -202,6 +203,35 @@ pub(crate) fn open_transcribe_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Single builder for the settings window — the six window parameters
+/// (title/size/resizable/center/visible/background) live here once; the
+/// two entry-point families (tray menu + M6-a open-window hotkey via
+/// `open_settings_window`; first-run missing-model via lib.rs
+/// `open_settings_at_model_page`) differ only in url and optional
+/// post-load eval. The caller retains its own error handling and any
+/// devtools-only behavior.
+pub(crate) fn build_settings_window<R: Runtime>(
+    app: &AppHandle<R>,
+    url: WebviewUrl,
+    on_finished_eval: Option<&'static str>,
+) -> tauri::Result<WebviewWindow<R>> {
+    let mut builder = WebviewWindowBuilder::new(app, "settings", url)
+        .title("语文兔语音输入法 - 设置")
+        .inner_size(560.0, 620.0)
+        .resizable(true)
+        .center()
+        .visible(false)
+        .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF));
+    if let Some(eval) = on_finished_eval {
+        builder = builder.on_page_load(move |window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = window.eval(eval);
+            }
+        });
+    }
+    builder.build()
+}
+
 /// Open the settings window: show if it exists, build it otherwise.
 /// Shared by the tray menu arm and the M6-a open-window hotkey callback
 /// (extracted verbatim from the former tray arm — behavior unchanged).
@@ -209,18 +239,8 @@ pub(crate) fn open_settings_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
-    } else if let Ok(window) = WebviewWindowBuilder::new(
-        app,
-        "settings",
-        tauri::WebviewUrl::App("settings.html".into()),
-    )
-    .title("语文兔语音输入法 - 设置")
-    .inner_size(560.0, 620.0)
-    .resizable(true)
-    .center()
-    .visible(false)
-    .background_color(tauri::webview::Color(0xFA, 0xFA, 0xF8, 0xFF))
-    .build()
+    } else if let Ok(window) =
+        build_settings_window(app, WebviewUrl::App("settings.html".into()), None)
     {
         let _ = window.show();
         #[cfg(feature = "devtools")]
