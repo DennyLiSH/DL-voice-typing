@@ -78,7 +78,7 @@ function invokedCommands() {
 const ALLOWED_REGISTERED_BUT_UNINVOKED = new Set([
     // Backend perf history command; perf is exposed via tray tooltip /
     // state, no settings UI surface yet. (perf_cmd.rs:7, registered
-    // lib.rs:166, re-exported commands/mod.rs:118 — never called from ui/.)
+    // lib.rs:166 — never called from ui/.)
     'get_perf_history',
     // Backend data-usage command (MB total for saved recordings); no
     // frontend consumer wired today. (data_management_cmd.rs:872,

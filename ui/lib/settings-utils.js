@@ -12,17 +12,15 @@ import {
  * Special handling: masked API key is never considered dirty.
  */
 export function isConfigDirty(current, loaded) {
-    return SETTINGS_FIELDS.some(({ key, equal }) => {
+    return SETTINGS_FIELDS.some(({ key, equal, slot }) => {
         // M6-a: optional hotkey slots default to null on both sides when the
         // user is on a pre-M6 install (loaded lacks the field) and after
         // restore-defaults (current is null). Without the normalisation the
-        // dirty check spuriously flips on the very first paint.
+        // dirty check spuriously flips on the very first paint. The
+        // optionality predicate itself is schema-derived (slot?.optional).
         let c = current[key];
         let l = loaded[key];
-        if (
-            key === 'open_settings_hotkey' ||
-            key === 'open_transcribe_hotkey'
-        ) {
+        if (slot?.optional) {
             if (c === undefined) c = null;
             if (l === undefined) l = null;
         }

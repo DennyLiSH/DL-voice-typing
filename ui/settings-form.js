@@ -13,7 +13,11 @@ import {
     writeOptionalSpecToUI,
     writeSpecToUI,
 } from './lib/hotkeys.js';
-import { HOTKEY_SLOTS, SETTINGS_FIELDS } from './lib/settings-schema.js';
+import {
+    HOTKEY_SLOTS,
+    hotkeySpecsOf,
+    SETTINGS_FIELDS,
+} from './lib/settings-schema.js';
 import {
     apiUrlWarningText,
     crossSlotConflicts,
@@ -520,9 +524,7 @@ function onHotkeyComboChange() {
  */
 function updateHotkeyWarnings() {
     const config = getCurrentConfig();
-    const conflicts = crossSlotConflicts(
-        Object.fromEntries(HOTKEY_SLOTS.map((s) => [s.key, config[s.key]])),
-    );
+    const conflicts = crossSlotConflicts(hotkeySpecsOf(config));
     // First conflict message per slot (a slot colliding with several
     // others shows its first pair — enough to direct the user).
     const hit = new Map();
