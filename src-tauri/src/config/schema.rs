@@ -439,6 +439,8 @@ impl fmt::Debug for AppConfig {
             .field("realtime_transcription", &self.realtime_transcription)
             .field("record_only_enabled", &self.record_only_enabled)
             .field("record_only_hotkey", &self.record_only_hotkey)
+            .field("open_settings_hotkey", &self.open_settings_hotkey)
+            .field("open_transcribe_hotkey", &self.open_transcribe_hotkey)
             .finish()
     }
 }
@@ -543,6 +545,38 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit test: every pub-serialized field must appear by NAME in the
+    /// Debug output (values are intentionally redacted). Driven by
+    /// serde_json::to_value so a future `#[serde(skip_serializing_if)]` on
+    /// a field that is None/empty in BOTH default + populated forms
+    /// would still surface here (the known residual blind spot —
+    /// m6a-fix plan defect #5). Today there are no skip attributes on
+    /// any field (verified at planning).
+    #[test]
+    fn debug_impl_lists_every_serialized_field() {
+        let spec = HotkeySpec {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            vk: 0xA3,
+        };
+        let populated = AppConfig {
+            open_settings_hotkey: Some(spec),
+            open_transcribe_hotkey: Some(spec),
+            ..AppConfig::default()
+        };
+        for config in [AppConfig::default(), populated] {
+            let dbg = format!("{config:?}");
+            let value = serde_json::to_value(&config).unwrap();
+            for key in value.as_object().unwrap().keys() {
+                assert!(
+                    dbg.contains(key),
+                    "pub field `{key}` missing from AppConfig Debug output"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_default_values() {
