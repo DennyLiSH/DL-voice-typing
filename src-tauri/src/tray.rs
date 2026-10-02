@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
+use tauri::Runtime;
 use tauri::{
     App, AppHandle, Emitter, Manager, WebviewUrl,
     image::Image,
@@ -8,7 +9,6 @@ use tauri::{
     tray::TrayIconBuilder,
     webview::{WebviewWindow, WebviewWindowBuilder},
 };
-use tauri::Runtime;
 
 /// Tray id used by both `TrayIconBuilder::with_id` (when present) and
 /// `tray_by_id` lookups. **Must** be explicitly assigned via
