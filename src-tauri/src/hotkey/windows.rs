@@ -660,47 +660,45 @@ unsafe extern "system" fn keyboard_hook_proc(
 /// incident shipped precisely because this rejection was silent. 已接受的
 /// 权衡：主键若配置为常用打字键，日常 modifier 组合会高频触发本 warn
 /// （含击键时间元数据，本地日志文件）——可观测性优先，节流留待后续。
+/// Find the callback for the first slot whose spec matches `vk` and
+/// (when keydown) whose modifiers also match.  On a mismatch during a
+/// keydown event the corresponding slot emits a LOUD warn
+/// (`target = "hotkey"`) — the 2026-09-28 GetAsyncKeyState incident
+/// was identified by exactly this rejection-warn pair, and the open_*
+/// slots (added later) are now included to keep coverage complete
+/// (BehaviorChange: open_* keydown rejections now warn; primary /
+/// record-only warn texts unchanged byte-for-byte).
+///
+/// Order from this row is the canonical hook-disorder slot order — the
+/// loop falls through with `continue` (does not return None) so multiple
+/// slots sharing the same vk are still both probed (matches the prior
+/// inline `if let` control flow; multi-vk binding is not a current use
+/// case but the contract is preserved).
 fn find_callback(
     hs: &HookState,
     vk: u32,
     mods: ModifiersHeld,
     is_keydown: bool,
 ) -> Option<SlotCallback> {
-    if let Some((spec, cb)) = &hs.primary
-        && spec.vk == vk
-    {
+    let slots: [(&str, Option<&(HotkeySpec, SlotCallback)>); 4] = [
+        ("primary", hs.primary.as_ref()),
+        ("record-only", hs.record_only.as_ref()),
+        ("open-settings", hs.open_settings.as_ref()),
+        ("open-transcribe", hs.open_transcribe.as_ref()),
+    ];
+    for (label, slot) in slots {
+        let Some((spec, cb)) = slot else { continue };
+        if spec.vk != vk {
+            continue;
+        }
         if !is_keydown || modifiers_match(spec, mods) {
             return Some(cb.clone());
         }
         tracing::warn!(
             target: "hotkey",
-            "primary keydown rejected: key={} held={mods:?} spec={spec}",
+            "{label} keydown rejected: key={} held={mods:?} spec={spec}",
             crate::hotkey::vk_to_key_name(vk)
         );
-    }
-    if let Some((spec, cb)) = &hs.record_only
-        && spec.vk == vk
-    {
-        if !is_keydown || modifiers_match(spec, mods) {
-            return Some(cb.clone());
-        }
-        tracing::warn!(
-            target: "hotkey",
-            "record-only keydown rejected: key={} held={mods:?} spec={spec}",
-            crate::hotkey::vk_to_key_name(vk)
-        );
-    }
-    if let Some((spec, cb)) = &hs.open_settings
-        && spec.vk == vk
-        && (!is_keydown || modifiers_match(spec, mods))
-    {
-        return Some(cb.clone());
-    }
-    if let Some((spec, cb)) = &hs.open_transcribe
-        && spec.vk == vk
-        && (!is_keydown || modifiers_match(spec, mods))
-    {
-        return Some(cb.clone());
     }
     None
 }
@@ -708,6 +706,34 @@ fn find_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Locking test for find_callback's open_* path: when a slot is
+    /// configured but the held modifiers don't match, the keydown
+    /// rejection is uniform across all four slots (None return). The
+    /// accompanying LOUD warn is the BehaviorChange this test pins the
+    /// code path for (tracing output itself is not assertable here).
+    /// keyup (is_keydown=false) is modifier-unconstrained — press/release
+    /// pairing must stay functional for paired-event deliveries.
+    #[test]
+    fn open_settings_keydown_with_mismatched_modifiers_fires_nothing() {
+        let spec = HotkeySpec {
+            ctrl: true,
+            shift: false,
+            alt: false,
+            vk: 0x41,
+        };
+        let hs = HookState::with_probe(probe_returning(ModifiersHeld::default()));
+        let mut hs = hs;
+        hs.open_settings = Some((spec, dummy_callback()));
+        // Probe returns no held modifiers; keydown with ctrl-required spec
+        // → no callback on the open_settings slot.
+        assert!(find_callback(&hs, 0x41, ModifiersHeld::default(), true).is_none());
+        // keyup (is_keydown=false) is modifier-unconstrained.
+        assert!(
+            find_callback(&hs, 0x41, ModifiersHeld::default(), false).is_some(),
+            "keyup must not be modifier-gated"
+        );
+    }
 
     #[test]
     fn test_new_manager() {
