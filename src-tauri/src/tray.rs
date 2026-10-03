@@ -149,7 +149,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 }
             }
             "transcribe" => {
-                open_transcribe_window(app);
+                open_transcribe_window(app, "Tray");
             }
             "quit" => {
                 use std::sync::atomic::Ordering;
@@ -160,7 +160,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                 app.exit(0);
             }
             "settings" => {
-                open_settings_window(app);
+                open_settings_window(app, "Tray");
             }
             id if id.starts_with("undo-mistouch:") => {
                 let batch_id: u64 = id
@@ -194,12 +194,14 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
 /// Open the transcribe window: show-or-build via `PendingTranscribe` /
 /// `open_window_impl`. Shared by the tray menu arm and the M6-a
 /// open-window hotkey callback (extracted verbatim from the former tray
-/// arm — behavior unchanged).
-pub(crate) fn open_transcribe_window<R: Runtime>(app: &AppHandle<R>) {
+/// arm — behavior unchanged). `source` labels the failure log with the
+/// actual trigger ("Tray" / "Hotkey") — the helper cannot know its
+/// caller.
+pub(crate) fn open_transcribe_window<R: Runtime>(app: &AppHandle<R>, source: &'static str) {
     if let Some(pt) = app.try_state::<crate::commands::transcribe_cmd::PendingTranscribe>()
         && let Err(e) = crate::commands::transcribe_cmd::open_window_impl(app, &pt)
     {
-        info!("Tray: open transcribe window failed: {e}");
+        info!("{source}: open transcribe window failed: {e}");
     }
 }
 
@@ -235,19 +237,24 @@ pub(crate) fn build_settings_window<R: Runtime>(
 /// Open the settings window: show if it exists, build it otherwise.
 /// Shared by the tray menu arm and the M6-a open-window hotkey callback
 /// (extracted verbatim from the former tray arm — behavior unchanged).
-pub(crate) fn open_settings_window<R: Runtime>(app: &AppHandle<R>) {
+/// `source` labels the build-failure log with the actual trigger ("Tray"
+/// / "Hotkey") — the shared helper cannot know its caller.
+pub(crate) fn open_settings_window<R: Runtime>(app: &AppHandle<R>, source: &'static str) {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
-    } else if let Ok(window) =
-        build_settings_window(app, WebviewUrl::App("settings.html".into()), None)
-    {
-        let _ = window.show();
-        #[cfg(feature = "devtools")]
-        {
-            if let Some(w) = app.get_webview_window("settings") {
-                w.open_devtools();
+    } else {
+        match build_settings_window(app, WebviewUrl::App("settings.html".into()), None) {
+            Ok(window) => {
+                let _ = window.show();
+                #[cfg(feature = "devtools")]
+                {
+                    if let Some(w) = app.get_webview_window("settings") {
+                        w.open_devtools();
+                    }
+                }
             }
+            Err(e) => warn!("{source}: open settings window build failed: {e}"),
         }
     }
 }

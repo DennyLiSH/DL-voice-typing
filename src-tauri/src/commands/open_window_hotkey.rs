@@ -31,8 +31,8 @@ pub(crate) fn make_open_window_callback<R: Runtime>(
             let handle = app.clone();
             // Window creation must happen on the main thread.
             let _ = app.run_on_main_thread(move || match kind {
-                WindowKind::Settings => crate::tray::open_settings_window(&handle),
-                WindowKind::Transcribe => crate::tray::open_transcribe_window(&handle),
+                WindowKind::Settings => crate::tray::open_settings_window(&handle, "Hotkey"),
+                WindowKind::Transcribe => crate::tray::open_transcribe_window(&handle, "Hotkey"),
             });
         }
         HotkeyEvent::Released => {}
