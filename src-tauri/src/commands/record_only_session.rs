@@ -69,7 +69,7 @@ fn classify_release(elapsed: Duration, dropped_blocks: u64, finalize_failed: boo
 // Tests never register a scheduler (None => dispatch no-ops), so the
 // integration tests exercise emit + classification without touching
 // files; scheduler invocation is covered by the on-device checks 8.3-1/3.
-type MistouchScheduler = Arc<dyn Fn(&str, &str) + Send + Sync>;
+pub(crate) type MistouchScheduler = Arc<dyn Fn(&str, &str) + Send + Sync>;
 static MISTOUCH_SCHEDULER: std::sync::OnceLock<MistouchScheduler> = std::sync::OnceLock::new();
 
 /// Register the app-side mistouch scheduler (lib.rs setup, once).

@@ -86,53 +86,9 @@ pub fn run() {
             ));
             // M2-a mistouch scheduling (non-IPC; see record_only_session.rs
             // MISTOUCH_SCHEDULER doc for why this is not an event listener).
-            {
-                let app_h = app.handle().clone();
-                let scheduler = std::sync::Arc::new(move |stem: &str, dir: &str| {
-                    let pending = app_h
-                        .state::<std::sync::Arc<
-                            commands::data_management_cmd::PendingDeletes,
-                        >>()
-                        .inner()
-                        .clone();
-                    // Defense-in-depth: the scheduler is process-internal (no IPC
-                    // surface), but still pin the dir to the CURRENT configured data
-                    // dir so no future caller can point it elsewhere.
-                    let cfg_dir = {
-                        let cfg = app_h.state::<crate::config::ConfigCache>();
-                        cfg.read_cached().data_saving_path.clone()
-                    };
-                    if dir != cfg_dir {
-                        tracing::warn!(
-                            "mistouch dispatch: dir mismatch (payload != config data dir); ignoring"
-                        );
-                        return;
-                    }
-                    let base = std::path::PathBuf::from(dir);
-                    let filenames = vec![stem.to_string()];
-                    let app_for_cb = app_h.clone();
-                    let outcome =
-                        commands::data_management_cmd::soft_delete_files(&base, &filenames);
-                    if outcome.moved == 0 {
-                        // Known limitation (registered below): the floating copy already
-                        // said "已自动丢弃" — a failed move leaves an orphan WAV in the
-                        // data dir with no JSON. Rare disk-failure path; log-visible only.
-                        tracing::warn!(
-                            "mistouch discard: no file moved for {stem} dir={dir} (failed_count={})",
-                            outcome.failed.len()
-                        );
-                        return;
-                    }
-                    let id = pending.schedule_with_finalize(
-                        outcome.pairs,
-                        Some(std::sync::Arc::new(move |_batch_id| {
-                            crate::tray::set_mistouch_undo(&app_for_cb, None);
-                        })),
-                    );
-                    crate::tray::set_mistouch_undo(&app_h, Some(id));
-                });
-                commands::record_only_session::set_mistouch_scheduler(scheduler);
-            }
+            commands::record_only_session::set_mistouch_scheduler(make_mistouch_scheduler(
+                app.handle().clone(),
+            ));
             manage_pipeline_state(
                 app.handle(),
                 state_machine.clone(),
@@ -437,6 +393,58 @@ fn create_overlay_windows(app: &mut tauri::App) -> Result<(), tauri::Error> {
     .build()?;
 
     Ok(())
+}
+
+/// M2-a mistouch scheduler factory (non-IPC; see record_only_session.rs
+/// MISTOUCH_SCHEDULER doc for why this is not an event listener).
+/// Soft-deletes the mistouch WAV into the pending dir and wires the tray
+/// undo item; the finalize callback clears the tray entry when the 5s
+/// undo window ends. Stays in lib.rs because it assembles tray +
+/// PendingDeletes + ConfigCache — pure composition, no logic of its own
+/// beyond the dir-mismatch defense.
+fn make_mistouch_scheduler(
+    app_h: tauri::AppHandle,
+) -> commands::record_only_session::MistouchScheduler {
+    std::sync::Arc::new(move |stem: &str, dir: &str| {
+        let pending = app_h
+            .state::<std::sync::Arc<commands::data_management_cmd::PendingDeletes>>()
+            .inner()
+            .clone();
+        // Defense-in-depth: the scheduler is process-internal (no IPC
+        // surface), but still pin the dir to the CURRENT configured data
+        // dir so no future caller can point it elsewhere.
+        let cfg_dir = {
+            let cfg = app_h.state::<crate::config::ConfigCache>();
+            cfg.read_cached().data_saving_path.clone()
+        };
+        if dir != cfg_dir {
+            tracing::warn!(
+                "mistouch dispatch: dir mismatch (payload != config data dir); ignoring"
+            );
+            return;
+        }
+        let base = std::path::PathBuf::from(dir);
+        let filenames = vec![stem.to_string()];
+        let app_for_cb = app_h.clone();
+        let outcome = commands::data_management_cmd::soft_delete_files(&base, &filenames);
+        if outcome.moved == 0 {
+            // Known limitation (registered below): the floating copy already
+            // said "已自动丢弃" — a failed move leaves an orphan WAV in the
+            // data dir with no JSON. Rare disk-failure path; log-visible only.
+            tracing::warn!(
+                "mistouch discard: no file moved for {stem} dir={dir} (failed_count={})",
+                outcome.failed.len()
+            );
+            return;
+        }
+        let id = pending.schedule_with_finalize(
+            outcome.pairs,
+            Some(std::sync::Arc::new(move |_batch_id| {
+                crate::tray::set_mistouch_undo(&app_for_cb, None);
+            })),
+        );
+        crate::tray::set_mistouch_undo(&app_h, Some(id));
+    })
 }
 
 /// Manage all shared state that the pipeline and commands depend on.
