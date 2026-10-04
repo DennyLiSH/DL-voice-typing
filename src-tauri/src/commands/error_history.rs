@@ -40,8 +40,10 @@ impl ErrorHistory {
     /// future UIs).
     pub const CAPACITY: usize = 20;
     /// Message truncation bound (mirrors `redact_error_detail`'s 500-char
-    /// convention — whisper error strings can be long).
-    const MAX_MESSAGE_CHARS: usize = 500;
+    /// convention — whisper error strings can be long). Shared with
+    /// `log_cmd`'s sink-side truncation so the two error sinks cannot
+    /// drift apart.
+    pub(crate) const MAX_MESSAGE_CHARS: usize = 500;
 
     pub fn new() -> Self {
         Self {
