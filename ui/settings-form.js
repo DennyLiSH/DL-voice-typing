@@ -1,4 +1,4 @@
-import { call } from './lib/api.js';
+import { call, reportError } from './lib/api.js';
 import { CLEAR_MARKER, MASKED_MARKER } from './lib/api-key-mask.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
 import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
@@ -397,7 +397,10 @@ btnBrowsePath.addEventListener('click', async () => {
             dataSavingPath.value = selected;
             updateDirtyState();
         }
-    } catch (_e) {
+    } catch (e) {
+        // dialog.open is a plugin direct call bypassing the call() wrapper
+        // — forward manually so the failure leaves a tracing audit trail.
+        reportError(e, 'browse-data-path');
         showError('打开文件夹选择器失败');
     }
 });
@@ -726,17 +729,28 @@ function setSaveStatus(message, type) {
 // Sync the OS autostart state with the toggle. Returns false when the
 // sync failed (caller downgrades the save message to the autostart
 // warning). Dev builds without DL_AUTOSTART=1 skip via
-// is_autostart_available → false. The catch is intentionally broad:
-// BOTH the availability probe and the enable/disable call can reject.
+// is_autostart_available → false. Two catch layers: the inner one owns
+// the plugin direct calls (forwarded manually — they bypass the call()
+// wrapper); the outer one only sees wrapper-reported probe failures.
 async function syncAutostart() {
     try {
         const wantAutostart = autostartToggle.classList.contains('active');
         const autostartAvailable = await call('is_autostart_available');
         if (autostartAvailable) {
-            if (wantAutostart) {
-                await window.__TAURI__.autostart.enable();
-            } else {
-                await window.__TAURI__.autostart.disable();
+            try {
+                if (wantAutostart) {
+                    await window.__TAURI__.autostart.enable();
+                } else {
+                    await window.__TAURI__.autostart.disable();
+                }
+            } catch (e) {
+                // Plugin calls bypass the call() wrapper — forward
+                // manually. The outer catch stays wrapper-only: probe
+                // failures are already reported by call() with the
+                // command-name context; reporting here too would
+                // double-log them.
+                reportError(e, 'sync-autostart');
+                return false;
             }
         }
         loadedAutostart = wantAutostart;
@@ -796,6 +810,9 @@ if (resetDefaultsBtn) {
             setSaveStatus('已恢复默认值，请核对后保存', 'success');
             armClearStatusOnInteract();
         } catch (_e) {
+            // get_default_config failures are already forwarded by the
+            // call() wrapper (context = command name); this catch only
+            // owns the UI fallback text — no manual reportError here.
             setSaveStatus('✗ 恢复默认失败，请重试', 'error');
         }
     });

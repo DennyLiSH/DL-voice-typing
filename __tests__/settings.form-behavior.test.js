@@ -800,3 +800,106 @@ describe('hotkey combo (Task 8: arbitrary combinations)', () => {
         expect(isFormDirty()).toBe(false);
     });
 });
+
+describe('failure audit forwarding (plugin direct calls bypassing call())', () => {
+    beforeEach(async () => {
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    // log_frontend_error invokes captured by invokeMock, as context list.
+    const loggedContexts = () =>
+        invokeMock.mock.calls
+            .filter(([cmd]) => cmd === 'log_frontend_error')
+            .map(([, args]) => args?.context);
+
+    it('autostart plugin rejection forwards with context sync-autostart', async () => {
+        // Zero-audit closure: enable/disable are plugin direct calls that
+        // bypass the call() wrapper — without the manual forward their
+        // failure leaves no tracing trail, only the volatile ⚠ text.
+        setInputValue('api-url', 'https://api.example.com/v1');
+        // wantAutostart=false (config autostart off) + available=true +
+        // disable() throwing drives the plugin-failure branch.
+        vi.stubGlobal('__TAURI__', {
+            ...window.__TAURI__,
+            autostart: {
+                enable: vi.fn(),
+                disable: vi.fn(async () => {
+                    throw new Error('denied');
+                }),
+            },
+        });
+        clickSave();
+        await flush();
+        expect(loggedContexts()).toContain('sync-autostart');
+        // Behavior unchanged: save still succeeds with the ⚠ downgrade.
+        expect(document.getElementById('save-status').textContent).toContain(
+            '开机自启同步失败',
+        );
+    });
+
+    it('autostart plugin rejection forwards when enabling (wantAutostart=true)', async () => {
+        // Dual-branch lock: enable() must live inside the inner try too —
+        // moving it out (e.g. to a fast path before the probe) would not
+        // redden the disable-only case above.
+        document
+            .getElementById('autostart-toggle')
+            .dispatchEvent(new Event('click'));
+        vi.stubGlobal('__TAURI__', {
+            ...window.__TAURI__,
+            autostart: {
+                enable: vi.fn(async () => {
+                    throw new Error('denied');
+                }),
+                disable: vi.fn(),
+            },
+        });
+        clickSave();
+        await flush();
+        expect(loggedContexts()).toContain('sync-autostart');
+        expect(document.getElementById('save-status').textContent).toContain(
+            '开机自启同步失败',
+        );
+    });
+
+    it('probe failure is reported exactly once by the wrapper (no double-report)', async () => {
+        // is_autostart_available goes through call(): the wrapper already
+        // forwards it (context = command name). syncAutostart's own catch
+        // must stay silent for this failure class — a second forward would
+        // double-log one failure under two contexts.
+        setInputValue('api-url', 'https://api.example.com/v1');
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'is_autostart_available') throw new Error('probe boom');
+            return originalImpl(cmd, args);
+        });
+        clickSave();
+        await flush();
+        expect(loggedContexts()).toEqual(['is_autostart_available']);
+        expect(document.getElementById('save-status').textContent).toContain(
+            '开机自启同步失败',
+        );
+    });
+
+    it('data-path dialog open failure forwards with context browse-data-path', async () => {
+        // Same defect class as autostart: dialog.open is a plugin direct
+        // call bypassing the wrapper; its catch used to swallow silently.
+        vi.stubGlobal('__TAURI__', {
+            ...window.__TAURI__,
+            dialog: {
+                open: vi.fn(async () => {
+                    throw new Error('picker gone');
+                }),
+            },
+        });
+        document
+            .getElementById('btn-browse-path')
+            .dispatchEvent(new Event('click'));
+        await flush();
+        expect(loggedContexts()).toContain('browse-data-path');
+    });
+});
