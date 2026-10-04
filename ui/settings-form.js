@@ -659,17 +659,7 @@ export async function saveSettings() {
             saveMsgType = 'error';
         }
         updateDirtyState();
-        setSaveStatus(saveMsg, saveMsgType);
-        if (saveMsg === '✓ 已保存') {
-            // Pure acknowledgement — auto-clear after 1.5s.
-            setTimeout(() => {
-                saveStatus.textContent = '';
-            }, 1500);
-        } else {
-            // Instructional message (restart hint / autostart failure) —
-            // must survive until the user's next interaction, not evaporate.
-            armClearStatusOnInteract();
-        }
+        revealSaveStatus(saveMsg, saveMsgType);
     } catch (e) {
         disarmClearStatusOnInteract();
         const msg = e?.message || '保存失败，请重试';
@@ -753,6 +743,21 @@ async function syncAutostart() {
         return true;
     } catch (_e) {
         return false;
+    }
+}
+
+// Show the save message. Pure acknowledgements ("✓ 已保存") auto-clear
+// after 1.5s; instructional messages (restart hint / autostart failure)
+// survive until the user's next interaction instead of evaporating.
+function revealSaveStatus(saveMsg, saveMsgType) {
+    setSaveStatus(saveMsg, saveMsgType);
+    if (saveMsg === '✓ 已保存') {
+        // Pure acknowledgement — auto-clear after 1.5s.
+        setTimeout(() => {
+            saveStatus.textContent = '';
+        }, 1500);
+    } else {
+        armClearStatusOnInteract();
     }
 }
 
