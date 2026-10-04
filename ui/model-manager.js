@@ -2,6 +2,7 @@ import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
 import { hideIfVisible } from './lib/first-run-banner.js';
 import { notifyFormChange } from './lib/form-state.js';
+import { modelActionView } from './lib/model-view.js';
 import { MODELS } from './lib/transcribe-models.js';
 import { showError } from './lib/ui-utils.js';
 
@@ -61,49 +62,20 @@ export function populateModelSelect() {
 }
 
 export function updateModelAction() {
-    const isDownloading = activeDownload !== null;
-    const downloadingThis = activeDownload === selectedModel;
-    const isCustom = selectedModel.startsWith('custom:');
+    const view = modelActionView(selectedModel, activeDownload, modelStatus);
 
-    // Hide all action elements first
-    modelStatusText.style.display = 'none';
-    btnDownloadModel.style.display = 'none';
-    downloadProgress.style.display = 'none';
-    btnDownloadModel.textContent = '下载';
-    btnDownloadModel.className = 'btn-primary btn-download-model';
+    modelStatusText.style.display = view.statusVisible ? 'inline' : 'none';
+    downloadProgress.style.display = view.progressVisible ? 'block' : 'none';
 
-    if (isCustom && !isDownloading) {
-        // Custom model — show delete button
-        btnDownloadModel.textContent = '删除';
-        btnDownloadModel.className =
-            'btn-primary btn-download-model btn-danger';
-        btnDownloadModel.style.display = 'inline-block';
-        btnDownloadModel.disabled = false;
-        whisperModelSelect.disabled = false;
-    } else if (isDownloading && downloadingThis) {
-        downloadProgress.style.display = 'block';
-        whisperModelSelect.disabled = true;
-        btnDownloadModel.disabled = true;
-    } else if (isDownloading) {
-        btnDownloadModel.style.display = 'inline-block';
-        btnDownloadModel.disabled = true;
-        whisperModelSelect.disabled = true;
-    } else if (isCustom) {
-        // Custom model during download of another model
-        btnDownloadModel.textContent = '删除';
-        btnDownloadModel.className =
-            'btn-primary btn-download-model btn-danger';
-        btnDownloadModel.style.display = 'inline-block';
-        btnDownloadModel.disabled = true;
-        whisperModelSelect.disabled = true;
-    } else if (modelStatus[selectedModel]) {
-        modelStatusText.style.display = 'inline';
-        whisperModelSelect.disabled = false;
-    } else {
-        btnDownloadModel.style.display = 'inline-block';
-        btnDownloadModel.disabled = false;
-        whisperModelSelect.disabled = false;
-    }
+    btnDownloadModel.textContent = view.action === 'delete' ? '删除' : '下载';
+    btnDownloadModel.className = view.actionDanger
+        ? 'btn-primary btn-download-model btn-danger'
+        : 'btn-primary btn-download-model';
+    btnDownloadModel.style.display =
+        view.action === 'none' ? 'none' : 'inline-block';
+    btnDownloadModel.disabled = view.actionDisabled;
+
+    whisperModelSelect.disabled = view.selectDisabled;
 }
 
 whisperModelSelect.addEventListener('change', () => {
