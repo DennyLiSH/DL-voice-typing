@@ -29,7 +29,7 @@ let activeDownload = null;
 // mirrored with src-tauri/src/config/schema.rs BUILT_IN_MODELS — drift
 // is pinned by __tests__/model-table-contract.test.js.
 
-export function populateModelSelect() {
+export function populateModelSelect(converge = true) {
     whisperModelSelect.innerHTML = '';
 
     // Built-in group
@@ -58,6 +58,10 @@ export function populateModelSelect() {
             customGroup.appendChild(opt);
         }
         whisperModelSelect.appendChild(customGroup);
+    }
+
+    if (converge && whisperModelSelect.value !== selectedModel) {
+        selectedModel = whisperModelSelect.value;
     }
 }
 
@@ -209,13 +213,20 @@ export function setCustomModels(models) {
 
 export function setSelectedModel(model) {
     selectedModel = model;
-    // Keep DOM <select> in sync with the variable. populateModelSelect
-    // rebuilds options with `selected` set on the matching one.
-    populateModelSelect();
+    // Intermediate-state rebuild: refresh the DOM selected marker WITHOUT
+    // the convergence guard — the custom group may not be loaded yet
+    // (app-shell init calls this before setCustomModels). Callers own the
+    // final populate.
+    populateModelSelect(false);
 }
 
+// The module variable is the single source of truth; the DOM select is a
+// projection (change events write back into it, populateModelSelect
+// renders from it, and its convergence guard re-syncs both after every
+// final-state rebuild). Never read the DOM here — a DOM-first read
+// resurrects the dual-source divergence this refactor removed.
 export function getSelectedModel() {
-    return whisperModelSelect ? whisperModelSelect.value : selectedModel;
+    return selectedModel;
 }
 
 export function getModelStatus() {

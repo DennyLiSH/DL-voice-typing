@@ -281,4 +281,68 @@ describe('model-manager', () => {
             expect(badge().textContent).toBe('GPU 加速');
         });
     });
+
+    it('single source: user change syncs the module variable', async () => {
+        const mm = await loadFresh();
+        mm.setCustomModels([]);
+        mm.populateModelSelect();
+        select().value = 'tiny';
+        select().dispatchEvent(new Event('change'));
+        expect(mm.getSelectedModel()).toBe('tiny');
+        expect(mm.getSelectedModel()).toBe(select().value);
+    });
+
+    it('single source: getSelectedModel never silently prefers the DOM', async () => {
+        const mm = await loadFresh();
+        mm.setCustomModels([]);
+        mm.setSelectedModel('tiny');
+        mm.populateModelSelect();
+        // Tamper with the DOM directly (bypassing the change event) — the
+        // variable must remain authoritative; no hidden DOM-first reads.
+        select().value = 'base';
+        expect(mm.getSelectedModel()).toBe('tiny');
+    });
+
+    it('convergence guard: stale custom reference adopts the rendered fallback', async () => {
+        const mm = await loadFresh();
+        mm.setCustomModels([]); // 'custom:ghost.bin' is NOT in the list
+        mm.setSelectedModel('custom:ghost.bin');
+        mm.populateModelSelect();
+        // The variable is reset to what the browser actually rendered
+        // (first option = first built-in), keeping save-config and button
+        // state consistent instead of diverging on a ghost reference.
+        expect(mm.getSelectedModel()).toBe(select().value);
+        expect(mm.getSelectedModel()).not.toBe('custom:ghost.bin');
+    });
+
+    // Replicates the app-shell init order (see plan 「调用时序」): the
+    // FIRST populate runs inside setSelectedModel before setCustomModels
+    // has loaded the custom group — that intermediate populate must NOT
+    // converge the variable to the browser fallback, or a configured
+    // custom model would be silently reset and persisted on next save.
+    it('init order: custom selection survives the intermediate populate', async () => {
+        const mm = await loadFresh();
+        mm.setSelectedModel('custom:x.bin');
+        mm.setCustomModels(['x.bin']);
+        mm.populateModelSelect();
+        expect(mm.getSelectedModel()).toBe('custom:x.bin');
+        expect(select().value).toBe('custom:x.bin');
+    });
+
+    // Replicates the populateFields write-back (app-shell.js:243 →
+    // settings-form.js DOM_DEFS set → setSelectedModel(config.whisper_model))
+    // that fires AFTER the final-state populate: with a ghost custom id on
+    // disk, the variable is re-written to the ghost AFTER convergence. The
+    // new single-source semantics KEEP the ghost (no silent config
+    // rewrite); the select shows the fallback until the next final-state
+    // populate or user interaction.
+    it('populateFields write-back after convergence keeps the ghost id', async () => {
+        const mm = await loadFresh();
+        mm.setCustomModels([]);
+        mm.setSelectedModel('custom:ghost.bin');
+        mm.populateModelSelect();
+        expect(mm.getSelectedModel()).not.toBe('custom:ghost.bin'); // converged
+        mm.setSelectedModel('custom:ghost.bin'); // populateFields write-back
+        expect(mm.getSelectedModel()).toBe('custom:ghost.bin'); // kept, not clobbered
+    });
 });
