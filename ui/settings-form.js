@@ -654,18 +654,7 @@ export async function saveSettings() {
         if (!sameSpec(config.record_only_hotkey, prevRecordOnly)) {
             saveMsg = '✓ 已保存（录音快捷键重启应用后生效）';
         }
-        try {
-            const wantAutostart = autostartToggle.classList.contains('active');
-            const autostartAvailable = await call('is_autostart_available');
-            if (autostartAvailable) {
-                if (wantAutostart) {
-                    await window.__TAURI__.autostart.enable();
-                } else {
-                    await window.__TAURI__.autostart.disable();
-                }
-            }
-            loadedAutostart = wantAutostart;
-        } catch (_e) {
+        if (!(await syncAutostart())) {
             saveMsg = '⚠ 已保存，开机自启同步失败';
             saveMsgType = 'error';
         }
@@ -742,6 +731,29 @@ function disarmClearStatusOnInteract() {
 function setSaveStatus(message, type) {
     saveStatus.textContent = message;
     saveStatus.className = `status ${type}`;
+}
+
+// Sync the OS autostart state with the toggle. Returns false when the
+// sync failed (caller downgrades the save message to the autostart
+// warning). Dev builds without DL_AUTOSTART=1 skip via
+// is_autostart_available → false. The catch is intentionally broad:
+// BOTH the availability probe and the enable/disable call can reject.
+async function syncAutostart() {
+    try {
+        const wantAutostart = autostartToggle.classList.contains('active');
+        const autostartAvailable = await call('is_autostart_available');
+        if (autostartAvailable) {
+            if (wantAutostart) {
+                await window.__TAURI__.autostart.enable();
+            } else {
+                await window.__TAURI__.autostart.disable();
+            }
+        }
+        loadedAutostart = wantAutostart;
+        return true;
+    } catch (_e) {
+        return false;
+    }
 }
 
 export function setDirtyCheckEnabled(enabled) {
