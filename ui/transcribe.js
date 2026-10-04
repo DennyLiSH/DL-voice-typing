@@ -47,6 +47,11 @@ const state = {
     selected: null,
     segments: [],
     edits: new Map(),
+    // M1-a: user is editing the full merged text (segments locked).
+    // Lives here, NOT on document.body classList — the body is a render
+    // surface; state on it is invisible to readers and fragile to DOM
+    // resets.
+    mergedEditing: false,
     activeSegment: -1,
     // In-flight operation phase (Axis A, mutually exclusive). Recording
     // status and edits stay orthogonal axes rendered via uiFlags.
@@ -304,7 +309,7 @@ function buildSegmentRow(index, seg) {
     input.setAttribute('aria-label', `段落 ${index + 1}`);
     // M1-a: while the user is editing the full merged text, segment inputs
     // are disabled to prevent the merge from clobbering their edits.
-    if (document.body.classList.contains('merged-editing')) {
+    if (state.mergedEditing) {
         input.disabled = true;
     }
     // Rule 5: edits feed the merged text only, never the segment.
@@ -356,7 +361,7 @@ function enterMergedEditMode() {
     // Lock segment edits to prevent segment changes from clobbering the
     // user's full-text edit (the mergeSegmentTexts call in updateMerged
     // would otherwise overwrite whatever they typed).
-    document.body.classList.add('merged-editing');
+    state.mergedEditing = true;
     merged.focus();
 }
 
@@ -369,7 +374,7 @@ function exitMergedEditMode() {
     merged.classList.remove('editing');
     edit.hidden = false;
     done.hidden = true;
-    document.body.classList.remove('merged-editing');
+    state.mergedEditing = false;
     // final_text is captured from #merged.value at inject time; nothing
     // to persist here. Trigger syncUI in case button states depend on
     // emptiness (they do via mergedEmpty).
@@ -510,7 +515,7 @@ async function injectText() {
     // their authoritative version; segments + edits may be stale relative
     // to it. Otherwise rebuild from segments (which respects per-segment
     // edits via the state.edits map).
-    const text = document.body.classList.contains('merged-editing')
+    const text = state.mergedEditing
         ? ($('merged')?.value ?? '')
         : mergeSegmentTexts(state.segments, state.edits);
     if (text.trim() === '') return;

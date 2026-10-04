@@ -302,7 +302,9 @@ const BODY_HTML = `
             <div class="skel-row"></div>
         </div>
         <div id="segments-empty" hidden></div>
-        <textarea id="merged"></textarea>
+        <textarea id="merged" readonly></textarea>
+        <button id="btn-edit-merged"></button>
+        <button id="btn-done-edit-merged" hidden></button>
         <button id="btn-inject"></button>
         <span id="inject-spinner" hidden></span>
     </div>
@@ -1163,5 +1165,77 @@ describe('recording row badge cluster + stem formatting (consolidated)', () => {
         expect(document.getElementById('detail-title').textContent).toBe(
             '2026-08-18 10:00:00',
         );
+    });
+});
+
+describe('merged edit mode (M1-a)', () => {
+    // Immediate DOM affordances of the mode toggle. NOTE: segment inputs
+    // are NOT disabled synchronously on enter — the disabled flag is
+    // applied at row-build time (buildSegmentRow), so the "inputs stay
+    // disabled across a re-render" contract lives in the second it.
+    it('entering merged edit toggles mode affordances; done restores', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        const merged = get('merged');
+        expect(merged.readOnly).toBe(true);
+        expect(get('btn-edit-merged').hidden).toBe(false);
+        expect(get('btn-done-edit-merged').hidden).toBe(true);
+
+        get('btn-edit-merged').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        expect(merged.readOnly).toBe(false);
+        expect(merged.classList.contains('editing')).toBe(true);
+        expect(get('btn-edit-merged').hidden).toBe(true);
+        expect(get('btn-done-edit-merged').hidden).toBe(false);
+        expect(document.activeElement).toBe(merged);
+
+        get('btn-done-edit-merged').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        expect(merged.readOnly).toBe(true);
+        expect(get('btn-edit-merged').hidden).toBe(false);
+        expect(get('btn-done-edit-merged').hidden).toBe(true);
+    });
+
+    it('re-select during merged edit renders disabled segment inputs', async () => {
+        // Real re-render path: selectRecording B (different filename —
+        // same-name clicks early-return at transcribe.js:211) rebuilds the
+        // rows via renderSegments → buildSegmentRow. btn-refresh does NOT
+        // qualify (it only re-renders the list, never the segment rows).
+        // Uses the file's existing twoItemInvoke + clickRow helpers
+        // (transcribe.test.js:688-704); ITEM2 is the second list entry.
+        await loadFresh(twoItemInvoke);
+        await selectFirstRecording();
+        get('btn-edit-merged').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        clickRow(ITEM2.filename);
+        // Double flush mirrors the file's own precedent for "selection has
+        // finished rendering" assertions (transcribe.test.js:366-367,
+        // 763-765) — single flush is micro-task-sufficient but the second
+        // costs nothing and removes any flake surface.
+        await flush();
+        await flush();
+        const input = document.querySelector('.segment-text');
+        expect(input).not.toBeNull();
+        expect(input.disabled).toBe(true);
+    });
+
+    it('inject during merged edit uses the merged textarea value', async () => {
+        await loadFresh(defaultInvoke);
+        await selectFirstRecording();
+        get('btn-edit-merged').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        get('merged').value = '全文编辑后的文本。';
+        get('btn-inject').dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        await flush();
+        const call = invokeMock.mock.calls.find(
+            ([cmd]) => cmd === 'inject_transcript_text',
+        );
+        expect(call[1].text).toBe('全文编辑后的文本。');
     });
 });
