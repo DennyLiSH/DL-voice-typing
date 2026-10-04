@@ -30,15 +30,6 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// Fire-and-forget: tracing uses `non_blocking::WorkerGuard` by design —
 /// log write failures are not surfaced to the caller. UI feedback runs
 /// through independent channels (showError/setStatus).
-///
-/// Covers 4 user-initiated failure points in settings.js (save_settings,
-/// test_llm_connection, download_whisper_model, delete_custom_model) where
-/// UI feedback already informs the user; this command lets the same failure
-/// be audited via the backend rolling log file after the fact.
-///
-/// Fire-and-forget: tracing uses `non_blocking::WorkerGuard` by design —
-/// log write failures are not surfaced to the caller. UI feedback runs
-/// through independent channels (showError/setStatus).
 #[tauri::command]
 pub fn log_frontend_error(
     message: String,
