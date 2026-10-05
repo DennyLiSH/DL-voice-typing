@@ -41,7 +41,7 @@ pub fn encrypt(plaintext: &str) -> Result<String, AppError> {
     // SAFETY: LocalFree releases the DPAPI-allocated buffer. pbData was validated
     // non-null above. After this call, pbData must not be used.
     unsafe {
-        LocalFree(HLOCAL(output_blob.pbData as *mut core::ffi::c_void));
+        LocalFree(Some(HLOCAL(output_blob.pbData as *mut core::ffi::c_void)));
     }
 
     Ok(encoded)
@@ -87,7 +87,7 @@ pub fn decrypt(ciphertext: &str) -> Result<String, AppError> {
     // SAFETY: LocalFree releases the DPAPI-allocated buffer. pbData was validated
     // non-null above. After this call, pbData must not be used.
     unsafe {
-        LocalFree(HLOCAL(output_blob.pbData as *mut core::ffi::c_void));
+        LocalFree(Some(HLOCAL(output_blob.pbData as *mut core::ffi::c_void)));
     }
 
     Ok(plaintext)

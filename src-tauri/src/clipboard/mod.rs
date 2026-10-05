@@ -436,7 +436,7 @@ fn write_clipboard(text: &str) -> Result<(), AppError> {
             let _ = GlobalUnlock(hglobal);
 
             let handle = windows::Win32::Foundation::HANDLE(hglobal.0);
-            SetClipboardData(13u32, handle)
+            SetClipboardData(13u32, Some(handle))
                 .map_err(|e| AppError::Clipboard(format!("set data failed: {e}")))?;
 
             let _ = CloseClipboard();

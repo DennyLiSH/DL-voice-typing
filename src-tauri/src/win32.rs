@@ -135,7 +135,7 @@ pub fn is_window_valid(hwnd_val: isize) -> bool {
     let hwnd = HWND(hwnd_val as *mut _);
     // SAFETY: IsWindow has no preconditions; an invalid/dangling HWND value
     // simply returns FALSE.
-    unsafe { IsWindow(hwnd).as_bool() }
+    unsafe { IsWindow(Some(hwnd)).as_bool() }
 }
 
 /// Read the title of a window handle. Returns None when the handle is
