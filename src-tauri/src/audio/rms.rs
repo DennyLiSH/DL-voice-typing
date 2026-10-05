@@ -1,5 +1,5 @@
 /// RMS (Root Mean Square) calculation for audio waveform visualization.
-use rand::Rng;
+use rand::RngExt;
 
 /// Waveform bar weights: [0.5, 0.8, 1.0, 0.75, 0.55]
 pub const BAR_WEIGHTS: [f32; 5] = [0.5, 0.8, 1.0, 0.75, 0.55];
