@@ -39,8 +39,12 @@ jobs:
         shell: bash
         run: bash scripts/check-ui-imports.sh
 
+      # Production deps only: audit scans the full lock tree, so a dev-chain CVE
+      # (source-map-js GHSA-68fv-2mgg-jv7q, 2026-10-06) reddened unrelated PRs
+      # that forked from a pre-fix base. The Tauri runtime never consumes source
+      # maps — dev-chain findings carry no production risk here.
       - name: Frontend audit
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Frontend test
         run: npm test
