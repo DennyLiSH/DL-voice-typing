@@ -1142,7 +1142,7 @@ name = "dl-voice-typing"
 version = "26.10.4"
 dependencies = [
  "arc-swap",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cmake",
  "cpal",
  "dirs 7.0.0",
