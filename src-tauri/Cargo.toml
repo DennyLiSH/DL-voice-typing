@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
-cpal = "0.15"
+cpal = "0.18"
 whisper-rs = { version = "0.16", optional = true, features = ["vulkan"] }
 reqwest = { version = "0.13", features = ["json", "stream"] }
 futures-util = "0.3"
