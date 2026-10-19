@@ -166,6 +166,10 @@ async function loadFresh() {
 
 const flush = () => new Promise((r) => setTimeout(r, 10));
 
+async function shell() {
+    return import('../ui/app-shell.js');
+}
+
 describe('app-shell: feedback link (help footer)', () => {
     beforeEach(async () => {
         await loadFresh();
@@ -207,5 +211,105 @@ describe('app-shell: feedback link (help footer)', () => {
         await vi.advanceTimersByTimeAsync(3000);
         expect(link.textContent).toBe('反馈问题');
         expect(link.dataset.recovering).toBeUndefined();
+    });
+});
+
+describe('app-shell: help-page recent errors', () => {
+    beforeEach(async () => {
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('renders 5 records and auto-expands the section', async () => {
+        const events = [
+            'speech-error',
+            'llm-error',
+            'injection-error',
+            'record-only-error',
+            'hotkey-error',
+        ];
+        invokeMock.mockResolvedValueOnce(
+            events.map((event, i) => ({
+                event,
+                message: `错误 ${i + 1}`,
+                timestamp: `2026-10-19 10:0${i}:00+08:00`,
+            })),
+        );
+        const { switchPage } = await shell();
+        await switchPage('help');
+        await flush(); // switchPage does not await refreshErrorHistory
+
+        const section = document.getElementById('help-errors-section');
+        expect(section.open).toBe(true);
+        const items = document.querySelectorAll(
+            '#error-history-list .error-history-item',
+        );
+        expect(items).toHaveLength(5);
+        expect(items[0].querySelector('.badge').textContent).toBe('语音识别');
+        expect(items[1].querySelector('.badge').textContent).toBe('LLM 纠错');
+        expect(items[4].querySelector('.badge').textContent).toBe('热键注册');
+        expect(
+            items[0].querySelector('.error-history-message').textContent,
+        ).toBe('错误 1');
+    });
+
+    it('empty history shows the hint and stays collapsed', async () => {
+        invokeMock.mockResolvedValueOnce([]);
+        const { switchPage } = await shell();
+        await switchPage('help');
+        await flush(); // switchPage does not await refreshErrorHistory
+        const section = document.getElementById('help-errors-section');
+        expect(section.open).toBe(false);
+        expect(
+            document.getElementById('error-history-list').textContent,
+        ).toContain('暂无错误记录');
+    });
+
+    it('backend failure shows the load-failure hint', async () => {
+        invokeMock.mockRejectedValueOnce(new Error('backend down'));
+        const { switchPage } = await shell();
+        await switchPage('help');
+        await flush(); // switchPage does not await refreshErrorHistory
+        expect(
+            document.getElementById('error-history-list').textContent,
+        ).toContain('无法加载错误记录');
+        expect(document.getElementById('help-errors-section').open).toBe(false);
+    });
+
+    it('stale response from a previous help visit cannot overwrite a newer render', async () => {
+        // Visit 1 starts a gated fetch (A); user leaves and returns —
+        // visit 2's fetch (B) resolves first. When A finally resolves it
+        // must be discarded (errorHistorySeq guard).
+        let releaseA;
+        const gateA = new Promise((resolve) => {
+            releaseA = () =>
+                resolve([
+                    {
+                        event: 'speech-error',
+                        message: 'STALE',
+                        timestamp: 't',
+                    },
+                ]);
+        });
+        invokeMock.mockImplementationOnce(() => gateA);
+        const { switchPage } = await shell();
+        switchPage('help'); // A pending
+        await switchPage('general'); // away
+        invokeMock.mockResolvedValueOnce([]);
+        switchPage('help'); // B (fast)
+        await flush();
+        expect(
+            document.getElementById('error-history-list').textContent,
+        ).toContain('暂无错误记录'); // B's render stands
+
+        releaseA();
+        await flush();
+        expect(
+            document.getElementById('error-history-list').textContent,
+        ).toContain('暂无错误记录'); // A did not overwrite
     });
 });
