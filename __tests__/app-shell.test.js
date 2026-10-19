@@ -30,10 +30,10 @@ let listeners;
 const DOM = `
   <div id="container" class="content-area"></div>
   <div class="sidebar"></div>
-  <div class="sidebar-item" data-page="general"></div>
+  <div class="sidebar-item active" data-page="general"></div>
   <div class="sidebar-item" data-page="help"></div>
   <div class="sidebar-item" data-page="model"></div>
-  <div class="page-content" id="page-general"></div>
+  <div class="page-content active" id="page-general"></div>
   <div class="page-content" id="page-help"></div>
   <div class="page-content" id="page-model"></div>
   <details class="help-section" id="help-errors-section"><summary>最近错误</summary><div class="help-section-body"><div id="error-history-list" aria-live="polite"></div></div></details>
@@ -137,6 +137,10 @@ async function loadFresh() {
             return { built_in: { base: true }, custom: [] };
         }
         if (cmd === 'is_autostart_available') return true;
+        // Backend contract: get_last_errors always returns a (possibly
+        // empty) list — never null. Navigation tests that don't care
+        // about the history still trigger refreshErrorHistory on entry.
+        if (cmd === 'get_last_errors') return [];
         return null;
     });
 
@@ -311,5 +315,73 @@ describe('app-shell: help-page recent errors', () => {
         expect(
             document.getElementById('error-history-list').textContent,
         ).toContain('暂无错误记录'); // A did not overwrite
+    });
+});
+
+const activePage = () =>
+    document.querySelector('.sidebar-item.active')?.dataset.page;
+
+const computeModeCalls = () =>
+    invokeMock.mock.calls.filter(([cmd]) => cmd === 'get_compute_mode').length;
+
+describe('app-shell: sidebar navigation', () => {
+    beforeEach(async () => {
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('entering the model page re-runs compute-mode detection (leave and return)', async () => {
+        // init() already ran one detection — route every get_compute_mode
+        // to 'gpu' without disturbing the config commands.
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'get_compute_mode') return 'gpu';
+            return originalImpl(cmd, args);
+        });
+        const { switchPage } = await shell();
+        expect(computeModeCalls()).toBe(1); // init baseline
+
+        await switchPage('model');
+        expect(computeModeCalls()).toBe(2);
+
+        await switchPage('general');
+        expect(computeModeCalls()).toBe(2); // leaving does not re-run
+
+        await switchPage('model');
+        expect(computeModeCalls()).toBe(3); // re-enter re-runs
+        expect(document.getElementById('compute-mode-badge').textContent).toBe(
+            'GPU 加速',
+        );
+    });
+
+    it('switching with unsaved edits prompts; cancel stays, confirm proceeds', async () => {
+        const input = document.getElementById('api-url');
+        input.value = 'https://api.example.com/v1';
+        input.dispatchEvent(new Event('input')); // form is now dirty
+        const { switchPage } = await shell();
+
+        confirmCtl.result = false; // user cancels the confirm dialog
+        await switchPage('help');
+        expect(activePage()).toBe('general');
+
+        confirmCtl.result = true; // user confirms leaving
+        await switchPage('help');
+        expect(activePage()).toBe('help');
+        expect(
+            document
+                .querySelector('.sidebar-item[data-page="help"]')
+                .classList.contains('active'),
+        ).toBe(true);
+    });
+
+    it('navigation requests are dropped while a dialog is open (modal short-circuit)', async () => {
+        confirmCtl.open = true;
+        const { switchPage } = await shell();
+        await switchPage('help');
+        expect(activePage()).toBe('general'); // dropped, no dialog, no switch
     });
 });
