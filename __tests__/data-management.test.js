@@ -239,6 +239,19 @@ describe('buildRecordingRow', () => {
         expect(row.querySelector('.badge.badge-neutral').textContent).toBe(
             '音频文件缺失',
         );
+        expect(row.querySelector('.badge.badge-neutral').title).toBe(
+            '此录音没有音频文件（可能已被删除或当时未保存成功）',
+        );
+    });
+
+    it('audio-load-failure badge carries the retry-hint title', () => {
+        const row = buildRecordingRow(baseEntry, { audioFailed: true });
+        const badge = row.querySelector('.badge.badge-failed');
+        expect(badge.textContent).toBe('音频加载失败');
+        expect(badge.title).toBe(
+            '音频文件暂时无法读取（可能被其他程序占用），点「刷新」重试',
+        );
+        expect(row.querySelector('.btn-play')).toBeNull();
     });
 
     it('row carries the expand affordance (F4 evolved 2026-09-04: keyboard-reachable expand)', () => {

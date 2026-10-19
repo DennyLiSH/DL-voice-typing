@@ -271,6 +271,7 @@ describe('model-manager', () => {
         invokeMock.mockRejectedValueOnce(new Error('x'));
         await mm.loadComputeMode();
         expect(badge().textContent).toBe('检测失败');
+        expect(badge().title).toBe('检测失败：切到其他设置页再切回本页可重试');
     });
 
     it('model-loaded event refreshes the compute-mode badge', async () => {
