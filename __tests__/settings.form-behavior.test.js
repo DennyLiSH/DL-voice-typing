@@ -948,3 +948,90 @@ describe('F1/F12 conflict advisory wiring (2026-09-13 copy batch)', () => {
         expect(document.getElementById('hotkey-warning').hidden).toBe(true);
     });
 });
+
+describe('save failure surfaces and save-message fork', () => {
+    beforeEach(async () => {
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+    });
+
+    it('save failure shows BOTH the ✗ status line and the error banner', async () => {
+        setInputValue('api-url', 'https://api.example.com/v1');
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'save_settings') throw new Error('无效配置');
+            return originalImpl(cmd, args);
+        });
+
+        clickSave();
+        await flush();
+
+        const status = document.getElementById('save-status');
+        expect(status.textContent).toContain('✗');
+        expect(status.textContent).toContain('无效配置');
+        expect(status.className).toContain('error');
+        const banner = document.getElementById('error-banner');
+        expect(banner.textContent).toContain('无效配置');
+        expect(banner.classList.contains('visible')).toBe(true);
+    });
+
+    it('error status is NOT armed with the interaction-clear listener', async () => {
+        setInputValue('api-url', 'https://api.example.com/v1');
+        const originalImpl = invokeMock.getMockImplementation();
+        invokeMock.mockImplementation(async (cmd, args) => {
+            if (cmd === 'save_settings') throw new Error('无效配置');
+            return originalImpl(cmd, args);
+        });
+        clickSave();
+        await flush();
+
+        // An interaction must NOT clear an error status (the catch path
+        // disarms the listeners — a stale one would swallow the error).
+        // NOTE: dispatch on .content-area itself — new Event('input')
+        // does not bubble and the listener is bound on contentArea.
+        document
+            .querySelector('.content-area')
+            .dispatchEvent(new Event('input'));
+        expect(document.getElementById('save-status').textContent).toContain(
+            '✗',
+        );
+    });
+
+    it('record-only hotkey change yields the instructional message, cleared only by the next interaction', async () => {
+        const sel = document.getElementById('record-only-hotkey');
+        sel.value = 'F9';
+        sel.dispatchEvent(new Event('change'));
+        clickSave();
+        await flush();
+        const status = document.getElementById('save-status');
+        expect(status.textContent).toBe('✓ 已保存（录音快捷键重启应用后生效）');
+
+        // Still showing after a settle — instructional messages persist.
+        await flush();
+        expect(status.textContent).toContain('录音快捷键重启应用后生效');
+
+        // Next interaction clears it.
+        document
+            .querySelector('.content-area')
+            .dispatchEvent(new Event('input'));
+        expect(status.textContent).toBe('');
+    });
+
+    it('pure ✓ acknowledgement auto-clears after 1.5s', async () => {
+        // Armed AFTER loadFresh (its 10ms settle sleep needs real timers).
+        vi.useFakeTimers();
+        setInputValue('api-url', 'https://api.example.com/v1');
+        clickSave();
+        await vi.advanceTimersByTimeAsync(20);
+        expect(document.getElementById('save-status').textContent).toBe(
+            '✓ 已保存',
+        );
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(document.getElementById('save-status').textContent).toBe('');
+    });
+});
