@@ -42,6 +42,7 @@ const MINIMAL_DOM = `
     </select>
   </div>
   <div id="hotkey-preview" aria-live="polite"></div>
+  <div id="hotkey-warning" hidden></div>
   <select id="whisper-model"><option value="base"></option></select>
   <div id="model-status-text"></div>
   <button id="btn-download-model"></button>
@@ -80,6 +81,7 @@ const MINIMAL_DOM = `
     </select>
   </div>
   <div id="record-only-hotkey-preview" aria-live="polite"></div>
+  <div id="record-only-hotkey-warning" hidden></div>
   <div id="version-display"></div>
   <div id="compute-mode-badge"></div>
   <div id="data-error-bar"></div>
@@ -901,5 +903,48 @@ describe('failure audit forwarding (plugin direct calls bypassing call())', () =
             .dispatchEvent(new Event('click'));
         await flush();
         expect(loggedContexts()).toContain('browse-data-path');
+    });
+});
+
+describe('F1/F12 conflict advisory wiring (2026-09-13 copy batch)', () => {
+    beforeEach(async () => {
+        await loadFresh();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('primary slot: F1 shows the advisory, changing to another key clears it', () => {
+        const warn = document.getElementById('hotkey-warning');
+        expect(warn.hidden).toBe(true); // loaded config is RightCtrl — clean
+
+        const sel = document.getElementById('hotkey');
+        sel.value = 'F1';
+        sel.dispatchEvent(new Event('change'));
+        expect(warn.hidden).toBe(false);
+        expect(warn.textContent).toBe(
+            '「F1」是多数程序用作「帮助」键，容易被其他程序抢占，建议更换主键',
+        );
+
+        sel.value = 'RightAlt';
+        sel.dispatchEvent(new Event('change'));
+        expect(warn.hidden).toBe(true);
+        expect(warn.textContent).toBe('');
+    });
+
+    it('record-only slot: F12 shows its own advisory in its own channel', () => {
+        const warn = document.getElementById('record-only-hotkey-warning');
+        const sel = document.getElementById('record-only-hotkey');
+        sel.value = 'F12';
+        sel.dispatchEvent(new Event('change'));
+        expect(warn.hidden).toBe(false);
+        expect(warn.textContent).toBe(
+            '「F12」是浏览器的「开发者工具」键，容易被其他程序抢占，建议更换主键',
+        );
+        // The primary slot's advisory channel is untouched by the
+        // record-only selection (independent channels).
+        expect(document.getElementById('hotkey-warning').hidden).toBe(true);
     });
 });
