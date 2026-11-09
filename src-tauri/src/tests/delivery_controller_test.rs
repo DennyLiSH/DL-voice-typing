@@ -10,11 +10,10 @@ use crate::commands::MockEmitter;
 use crate::commands::pipeline_state::PipelineState;
 use crate::commands::recording_session::SessionPolicy;
 use crate::commands::review_provider::{MockReviewProvider, ReviewProvider};
-use crate::commands::window_controller::{NoopWindowController, WindowController};
-use crate::config::{AppConfig, ConfigCache};
+use crate::commands::window_controller::WindowController;
+use crate::config::AppConfig;
 use crate::data_saving::SaveResult;
 use crate::llm::MockCorrector;
-use crate::perf::PerfHistory;
 use crate::perf::PerfTimer;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
@@ -39,19 +38,17 @@ fn build_ps_with_clipboard_and_review(
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
     let engine = Arc::new(MockEngine::new("test"));
     let emitter = Arc::new(MockEmitter::new());
-    let ps = PipelineState::new(
-        sm,
-        ac,
-        engine,
-        clipboard,
-        Arc::new(PerfHistory::new()),
-        ConfigCache::new(AppConfig::default()),
-        Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("corrected"))))),
-        Arc::new(Mutex::new(None)),
-        Arc::new(NoopWindowController),
-        emitter.clone(),
-        review,
-    );
+    let ps = crate::commands::pipeline_state::TestComponents::default()
+        .with_sm(sm)
+        .with_ac(ac)
+        .with_engine(engine)
+        .with_clipboard(clipboard)
+        .with_cached_llm(Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new(
+            "corrected",
+        ))))))
+        .with_emitter(emitter.clone())
+        .with_review(review)
+        .build();
     (ps, emitter)
 }
 

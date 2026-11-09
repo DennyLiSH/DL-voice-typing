@@ -1110,31 +1110,16 @@ mod tests_normalize_chinese_punctuation {
 #[cfg(test)]
 mod tests_resolve_llm_text {
     use super::*;
-    use crate::audio::MockAudioCapture;
-    use crate::clipboard::MockClipboard;
+
     use crate::commands::MockEmitter;
-    use crate::commands::review_provider::MockReviewProvider;
-    use crate::commands::window_controller::NoopWindowController;
-    use crate::config::{AppConfig, ConfigCache};
-    use crate::perf::PerfHistory;
-    use crate::speech::mock::MockEngine;
-    use crate::state::StateMachine;
+
+    use crate::config::AppConfig;
 
     fn make_ps() -> PipelineState {
         let emitter: Arc<dyn crate::commands::EventEmitter> = Arc::new(MockEmitter::new());
-        PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            emitter,
-            Arc::new(MockReviewProvider::new()),
-        )
+        crate::commands::pipeline_state::TestComponents::default()
+            .with_emitter(emitter)
+            .build()
     }
 
     /// A poisoned `cached_llm` slot must surface as an error, not as a

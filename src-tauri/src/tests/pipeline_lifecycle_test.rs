@@ -4,12 +4,8 @@
 use crate::audio::MockAudioCapture;
 use crate::clipboard::MockClipboard;
 use crate::commands::pipeline_state::PipelineState;
-use crate::commands::review_provider::MockReviewProvider;
-use crate::commands::window_controller::NoopWindowController;
 use crate::commands::{EventEmitter, MockEmitter};
-use crate::config::AppConfig;
 use crate::llm::MockCorrector;
-use crate::perf::PerfHistory;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
@@ -21,19 +17,16 @@ fn build_ps() -> PipelineState {
     let clipboard = Arc::new(MockClipboard::new());
     let emitter: Arc<dyn EventEmitter> = Arc::new(MockEmitter::new());
 
-    PipelineState::new(
-        sm,
-        ac,
-        engine,
-        clipboard,
-        Arc::new(PerfHistory::new()),
-        crate::config::ConfigCache::new(AppConfig::default()),
-        Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("corrected"))))),
-        Arc::new(Mutex::new(None)),
-        Arc::new(NoopWindowController),
-        emitter,
-        Arc::new(MockReviewProvider::new()),
-    )
+    crate::commands::pipeline_state::TestComponents::default()
+        .with_sm(sm)
+        .with_ac(ac)
+        .with_engine(engine)
+        .with_clipboard(clipboard)
+        .with_cached_llm(Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new(
+            "corrected",
+        ))))))
+        .with_emitter(emitter)
+        .build()
 }
 
 #[test]

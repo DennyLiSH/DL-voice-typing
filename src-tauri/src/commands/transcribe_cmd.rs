@@ -700,17 +700,15 @@ fn segments_from_metadata(metadata: &serde_json::Value) -> RecordingSegments {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::MockAudioCapture;
+
     use crate::clipboard::MockClipboard;
     use crate::commands::record_only_session::RecordOnlySession;
-    use crate::commands::review_provider::MockReviewProvider;
-    use crate::commands::window_controller::NoopWindowController;
+
     use crate::commands::{EventEmitter, MockEmitter};
     use crate::config::{AppConfig, ConfigCache};
     use crate::llm::MockCorrector;
-    use crate::perf::PerfHistory;
+
     use crate::speech::mock::MockEngine;
-    use crate::state::StateMachine;
 
     fn build_ps(
         config: AppConfig,
@@ -718,19 +716,13 @@ mod tests {
     ) -> (PipelineState, Arc<MockEmitter>, Arc<MockClipboard>) {
         let emitter = Arc::new(MockEmitter::new());
         let clipboard = Arc::new(MockClipboard::new());
-        let ps = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("测试转录文本")),
-            clipboard.clone(),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(config),
-            Arc::new(Mutex::new(corrector)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            emitter.clone() as Arc<dyn EventEmitter>,
-            Arc::new(MockReviewProvider::new()),
-        );
+        let ps = crate::commands::pipeline_state::TestComponents::default()
+            .with_engine(Arc::new(MockEngine::new("测试转录文本")))
+            .with_clipboard(clipboard.clone())
+            .with_config_cache(ConfigCache::new(config))
+            .with_cached_llm(Arc::new(Mutex::new(corrector)))
+            .with_emitter(emitter.clone() as Arc<dyn EventEmitter>)
+            .build();
         (ps, emitter, clipboard)
     }
 
@@ -1095,20 +1087,12 @@ mod tests {
         let dir = temp_dir("run-zero-seg");
         let emitter = Arc::new(MockEmitter::new());
         let clipboard = Arc::new(MockClipboard::new());
-        let ps = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
+        let ps = crate::commands::pipeline_state::TestComponents::default()
             // Whisper produced zero segments (all filtered / silence).
-            Arc::new(MockEngine::new("").with_segments(vec![])),
-            clipboard,
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            emitter.clone() as Arc<dyn EventEmitter>,
-            Arc::new(MockReviewProvider::new()),
-        );
+            .with_engine(Arc::new(MockEngine::new("").with_segments(vec![])))
+            .with_clipboard(clipboard)
+            .with_emitter(emitter.clone() as Arc<dyn EventEmitter>)
+            .build();
         let json_path = write_pending_json(&dir, "2026-08-18_10-00-03");
         let samples = vec![0.0f32; 16000];
 

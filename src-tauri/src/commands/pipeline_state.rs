@@ -40,9 +40,81 @@ pub(crate) struct TestComponents {
 
 #[cfg(test)]
 impl TestComponents {
+    /// The baseline mock set every test starts from.
+    ///
+    /// Before this constructor, each test spelled out the whole
+    /// 11-argument list by hand — the deviations between sites were
+    /// invisible, and the two adjacent `Arc<Mutex<Option<…>>>` slots
+    /// (`cached_llm` / `realtime_transcriber`) could be swapped without a
+    /// compile error. The baseline is now stated once, and every
+    /// deviation is an explicit `with_*` call.
+    pub(crate) fn default() -> Self {
+        Self {
+            sm: Arc::new(Mutex::new(StateMachine::new())),
+            ac: Arc::new(Mutex::new(crate::audio::MockAudioCapture::new())),
+            engine: Arc::new(crate::speech::mock::MockEngine::new("test")),
+            clipboard: Arc::new(crate::clipboard::MockClipboard::new()),
+            config_cache: ConfigCache::new(crate::config::AppConfig::default()),
+            perf_history: Arc::new(PerfHistory::new()),
+            cached_llm: Arc::new(Mutex::new(None)),
+            realtime_transcriber: Arc::new(Mutex::new(None)),
+            window_controller: Arc::new(crate::commands::window_controller::NoopWindowController),
+            emitter: Arc::new(crate::commands::MockEmitter::new()),
+            review: Arc::new(crate::commands::review_provider::MockReviewProvider::new()),
+        }
+    }
+
+    /// Swap the state machine, keeping the rest.
+    pub(crate) fn with_sm(mut self, sm: Arc<Mutex<StateMachine>>) -> Self {
+        self.sm = sm;
+        self
+    }
+
+    /// Swap the audio capture provider, keeping the rest.
+    pub(crate) fn with_ac(mut self, ac: Arc<Mutex<dyn AudioCaptureProvider>>) -> Self {
+        self.ac = ac;
+        self
+    }
+
+    /// Swap the speech engine, keeping the rest.
+    pub(crate) fn with_engine(mut self, engine: Arc<dyn SpeechEngine>) -> Self {
+        self.engine = engine;
+        self
+    }
+
+    /// Swap the config cache, keeping the rest.
+    pub(crate) fn with_config_cache(mut self, config_cache: ConfigCache) -> Self {
+        self.config_cache = config_cache;
+        self
+    }
+
+    /// Swap the cached-LLM slot, keeping the rest.
+    ///
+    /// Named explicitly because the slot sits next to the
+    /// `realtime_transcriber` slot — same shape, different meaning.
+    pub(crate) fn with_cached_llm(
+        mut self,
+        cached_llm: Arc<Mutex<Option<Arc<dyn TextCorrector>>>>,
+    ) -> Self {
+        self.cached_llm = cached_llm;
+        self
+    }
+
     /// Swap the window controller, keeping the rest (variant rebuilds).
     pub(crate) fn with_window_controller(mut self, wc: Arc<dyn WindowController>) -> Self {
         self.window_controller = wc;
+        self
+    }
+
+    /// Swap the event emitter, keeping the rest.
+    pub(crate) fn with_emitter(mut self, emitter: Arc<dyn EventEmitter>) -> Self {
+        self.emitter = emitter;
+        self
+    }
+
+    /// Swap the review provider, keeping the rest.
+    pub(crate) fn with_review(mut self, review: Arc<dyn ReviewProvider>) -> Self {
+        self.review = review;
         self
     }
 
@@ -721,14 +793,12 @@ impl PipelineState {
 #[cfg(test)]
 mod sm_verb_tests {
     use super::*;
-    use crate::audio::MockAudioCapture;
-    use crate::clipboard::MockClipboard;
+
     use crate::commands::MockEmitter;
     use crate::commands::review_provider::MockReviewProvider;
-    use crate::commands::window_controller::NoopWindowController;
-    use crate::config::{AppConfig, ConfigCache};
+
     use crate::llm::MockCorrector;
-    use crate::perf::PerfHistory;
+
     use crate::speech::mock::MockEngine;
     use crate::state::StateTag;
 
@@ -736,19 +806,12 @@ mod sm_verb_tests {
     /// All collaborators are mocks — only sm behaviour is exercised.
     fn build_test_ps() -> PipelineState {
         let emitter: Arc<dyn EventEmitter> = Arc::new(MockEmitter::new());
-        PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("corrected"))))),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            emitter,
-            Arc::new(MockReviewProvider::new()),
-        )
+        TestComponents::default()
+            .with_cached_llm(Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new(
+                "corrected",
+            ))))))
+            .with_emitter(emitter)
+            .build()
     }
 
     /// Test-only WindowController recording method calls by name.
@@ -1083,19 +1146,7 @@ mod sm_verb_tests {
         assert_eq!(ps.with_cached_llm(|c| c.is_none()), Some(false));
 
         // Seeding via the verb works the same way as direct lock mutation.
-        let ps_empty = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            Arc::new(MockEmitter::new()),
-            Arc::new(MockReviewProvider::new()),
-        );
+        let ps_empty = TestComponents::default().build();
         assert_eq!(
             ps_empty.with_cached_llm(|c| c.is_none()),
             Some(true),
@@ -1126,13 +1177,27 @@ mod sm_verb_tests {
         // object graph → composed operations. Growth still requires
         // editing this number DELIBERATELY (and justifying it).
         //
+        // 2026-11-10 (architecture review round 5, P4): the scrape is now
+        // SCOPED to the PipelineState region (from the struct declaration
+        // onward). The test-only `TestComponents` builder sits above it,
+        // and its methods are a different interface — counting them here
+        // would mean every builder method bumps the "PipelineState
+        // surface" number. The PipelineState surface itself is unchanged
+        // (48 real before and after this change); only the scrape scope
+        // moved, which is why the measured number drops by 3 (the
+        // builder's `with_window_controller` / `with_clipboard` / `build`).
+        //
         // Calibration: the ratchet's two `src.matches(...)` literal strings
         // ALSO appear in the test body itself (one for each pattern), so the
         // measured count is real count + 2.
         let src = include_str!("pipeline_state.rs");
-        let count = src.matches("    pub(crate) fn ").count() + src.matches("    pub fn ").count();
+        let pipeline_src = &src[src
+            .find("pub struct PipelineState {")
+            .expect("PipelineState struct declaration must exist")..];
+        let count = pipeline_src.matches("    pub(crate) fn ").count()
+            + pipeline_src.matches("    pub fn ").count();
         assert_eq!(
-            count, 53,
+            count, 50,
             "PipelineState pub-fn surface changed; update the ratchet deliberately \
              (real count = measured - 2, to subtract the test body's two self-references)"
         );
@@ -1142,21 +1207,12 @@ mod sm_verb_tests {
     fn hide_overlays_hides_floating_and_conditional_review() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let review = Arc::new(MockReviewProvider::new());
-        let ps = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(LogWindowController {
+        let ps = TestComponents::default()
+            .with_window_controller(Arc::new(LogWindowController {
                 calls: calls.clone(),
-            }),
-            Arc::new(MockEmitter::new()),
-            review.clone(),
-        );
+            }))
+            .with_review(review.clone())
+            .build();
 
         // Case 1: review was NOT shown on press — floating only, flag untouched.
         ps.hide_overlays();
@@ -1176,21 +1232,12 @@ mod sm_verb_tests {
     fn reset_to_idle_resets_state_and_hides_overlays() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let review = Arc::new(MockReviewProvider::new());
-        let ps = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(LogWindowController {
+        let ps = TestComponents::default()
+            .with_window_controller(Arc::new(LogWindowController {
                 calls: calls.clone(),
-            }),
-            Arc::new(MockEmitter::new()),
-            review.clone(),
-        );
+            }))
+            .with_review(review.clone())
+            .build();
 
         ps.sm_start_recording();
         review.set_shown_on_press(true);

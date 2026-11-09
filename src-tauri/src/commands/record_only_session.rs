@@ -523,9 +523,7 @@ impl RecordOnlySession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::MockAudioCapture;
-    use crate::clipboard::MockClipboard;
-    use crate::commands::review_provider::MockReviewProvider;
+
     use crate::commands::window_controller::NoopWindowController;
     use crate::commands::{EventEmitter, MockEmitter};
     use crate::config::{AppConfig, ConfigCache};
@@ -542,9 +540,7 @@ mod tests {
             ps.set_record_only_session(s);
         }
     }
-    use crate::perf::PerfHistory;
-    use crate::speech::mock::MockEngine;
-    use crate::state::StateMachine;
+
     use std::fs;
     use std::sync::Mutex;
 
@@ -557,19 +553,14 @@ mod tests {
         wc: Arc<dyn crate::commands::window_controller::WindowController>,
     ) -> (PipelineState, Arc<MockEmitter>) {
         let emitter = Arc::new(MockEmitter::new());
-        let ps = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(config),
-            Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("x"))))),
-            Arc::new(Mutex::new(None)),
-            wc,
-            emitter.clone() as Arc<dyn EventEmitter>,
-            Arc::new(MockReviewProvider::new()),
-        );
+        let ps = crate::commands::pipeline_state::TestComponents::default()
+            .with_config_cache(ConfigCache::new(config))
+            .with_cached_llm(Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new(
+                "x",
+            ))))))
+            .with_window_controller(wc)
+            .with_emitter(emitter.clone() as Arc<dyn EventEmitter>)
+            .build();
         (ps, emitter)
     }
 

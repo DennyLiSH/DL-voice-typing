@@ -11,7 +11,6 @@ use crate::commands::MockEmitter;
 use crate::commands::recording_session::{
     RecordingSession, ReleaseAction, ReleaseActionKind, SessionPolicy, decide_release,
 };
-use crate::commands::review_provider::MockReviewProvider;
 use crate::commands::window_controller::NoopWindowController;
 use crate::config::{AppConfig, PipelineMode};
 use crate::llm::MockCorrector;
@@ -94,19 +93,16 @@ fn build_rig_full_with_delay(
     let engine = Arc::new(engine);
     let clipboard = Arc::new(MockClipboard::new());
     let emitter = Arc::new(MockEmitter::new());
-    let ps = crate::commands::pipeline_state::PipelineState::new(
-        sm.clone(),
-        ac,
-        engine,
-        clipboard.clone(),
-        Arc::new(crate::perf::PerfHistory::new()),
-        crate::config::ConfigCache::new(cfg),
-        Arc::new(Mutex::new(Some(Arc::new(corrector)))),
-        Arc::new(Mutex::new(None)),
-        wc,
-        emitter.clone(),
-        Arc::new(MockReviewProvider::new()),
-    );
+    let ps = crate::commands::pipeline_state::TestComponents::default()
+        .with_sm(sm.clone())
+        .with_ac(ac)
+        .with_engine(engine)
+        .with_clipboard(clipboard.clone())
+        .with_config_cache(crate::config::ConfigCache::new(cfg))
+        .with_cached_llm(Arc::new(Mutex::new(Some(Arc::new(corrector)))))
+        .with_window_controller(wc)
+        .with_emitter(emitter.clone())
+        .build();
     Rig {
         session: RecordingSession::new(ps),
         sm,
