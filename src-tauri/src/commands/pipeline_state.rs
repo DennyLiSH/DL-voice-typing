@@ -16,6 +16,17 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tracing::{debug, info, warn};
 
+/// The audio ring buffer slot of a PipelineState.
+type AudioRingSlot = Arc<Mutex<AudioRingBuffer>>;
+
+/// The record-only session slot of a PipelineState (Some only while a
+/// record-only session is capturing).
+type RecordOnlySlot = Arc<Mutex<Option<crate::commands::record_only_session::ActiveRecordOnly>>>;
+
+/// The cancellation-token slot of a PipelineState (Some between
+/// `sm_stop_recording` and delivery completion).
+type CancelTokenSlot = Arc<Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
+
 /// Aggregated shared state for the hotkey pipeline.
 /// Eliminates the need to pass 8 individual `Arc` references to `make_hotkey_callback`.
 /// Test-only component snapshot for building variant PipelineStates.
@@ -179,6 +190,39 @@ impl PipelineState {
     /// Pre-allocated audio buffer capacity: 60 seconds at 48 kHz.
     const AUDIO_BUFFER_CAPACITY: usize = 48_000 * 60;
 
+    /// Assemble the delivery controller for a PipelineState.
+    ///
+    /// Shared by `new()` and `from_app()`: both build the same
+    /// controller from the same four collaborators, and a drift between
+    /// the two paths would mean the production assembly and the test
+    /// assembly disagree about the delivery lifecycle.
+    fn delivery_for(
+        emitter: Arc<dyn EventEmitter>,
+        window_controller: Arc<dyn WindowController>,
+        clipboard: Arc<dyn ClipboardProvider>,
+        perf_history: Arc<PerfHistory>,
+    ) -> Arc<DeliveryController> {
+        Arc::new(DeliveryController::new(
+            emitter,
+            window_controller,
+            clipboard,
+            perf_history,
+        ))
+    }
+
+    /// The fresh per-instance aggregates every PipelineState starts with:
+    /// the audio ring buffer, the record-only slot and the cancel-token
+    /// slot. `new()` and `from_app()` both start with empty ones.
+    fn fresh_aggregates() -> (AudioRingSlot, RecordOnlySlot, CancelTokenSlot) {
+        (
+            Arc::new(Mutex::new(AudioRingBuffer::new(
+                Self::AUDIO_BUFFER_CAPACITY,
+            ))),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+        )
+    }
+
     /// Direct constructor for testing. Each component is injectable.
     #[allow(dead_code, clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -194,12 +238,13 @@ impl PipelineState {
         emitter: Arc<dyn EventEmitter>,
         review: Arc<dyn ReviewProvider>,
     ) -> Self {
-        let delivery = Arc::new(DeliveryController::new(
+        let delivery = Self::delivery_for(
             emitter.clone(),
             window_controller.clone(),
             clipboard.clone(),
             perf_history.clone(),
-        ));
+        );
+        let (audio_ring_buffer, record_only, cancel_token) = Self::fresh_aggregates();
         Self {
             sm,
             #[cfg(test)]
@@ -215,11 +260,9 @@ impl PipelineState {
             emitter,
             review,
             delivery,
-            audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
-                Self::AUDIO_BUFFER_CAPACITY,
-            ))),
-            record_only: Arc::new(Mutex::new(None)),
-            cancel_token: Arc::new(Mutex::new(None)),
+            audio_ring_buffer,
+            record_only,
+            cancel_token,
         }
     }
 
@@ -249,12 +292,13 @@ impl PipelineState {
         let review: Arc<dyn ReviewProvider> = Arc::new(TauriReviewProvider::new(app.clone()));
         let clipboard = app.state::<Arc<dyn ClipboardProvider>>().inner().clone();
         let perf_history = app.state::<Arc<PerfHistory>>().inner().clone();
-        let delivery = Arc::new(DeliveryController::new(
+        let delivery = Self::delivery_for(
             emitter.clone(),
             window_controller.clone(),
             clipboard.clone(),
             perf_history.clone(),
-        ));
+        );
+        let (audio_ring_buffer, record_only, cancel_token) = Self::fresh_aggregates();
         Self {
             sm: app.state::<Arc<Mutex<StateMachine>>>().inner().clone(),
             #[cfg(test)]
@@ -279,11 +323,9 @@ impl PipelineState {
             emitter,
             review,
             delivery,
-            audio_ring_buffer: Arc::new(Mutex::new(AudioRingBuffer::new(
-                Self::AUDIO_BUFFER_CAPACITY,
-            ))),
-            record_only: Arc::new(Mutex::new(None)),
-            cancel_token: Arc::new(Mutex::new(None)),
+            audio_ring_buffer,
+            record_only,
+            cancel_token,
         }
     }
 
