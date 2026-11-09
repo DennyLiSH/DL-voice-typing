@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Milliseconds of a duration, as `u64`.
 ///
@@ -12,6 +12,39 @@ use std::time::Duration;
 /// perf number.
 pub fn ms_of(d: Duration) -> u64 {
     d.as_millis().min(u64::MAX as u128) as u64
+}
+
+/// A phase timer: pairs a start instant with the elapsed-time reading.
+///
+/// The type exists to make the pairing explicit at the call site:
+/// `let t = PerfTimer::start(); ... t.finish_ms()` — the timer is
+/// created BEFORE the measured work and read AFTER it. The mistake it
+/// prevents is `Instant::now().elapsed()` at the measurement point,
+/// which measures the lifetime of a fresh instant (always ~0).
+#[derive(Debug, Clone, Copy)]
+pub struct PerfTimer {
+    start: Instant,
+}
+
+impl PerfTimer {
+    /// Start a timer (the instant is captured here, not at the reading).
+    pub fn start() -> Self {
+        Self {
+            start: Instant::now(),
+        }
+    }
+
+    /// Milliseconds since the timer was started.
+    pub fn finish_ms(&self) -> u64 {
+        ms_of(self.start.elapsed())
+    }
+
+    /// The raw start instant — for pairing with a later instant (the
+    /// press instant is carried to the release handler to measure the
+    /// hold duration).
+    pub fn started_at(&self) -> Instant {
+        self.start
+    }
 }
 
 /// Performance metrics for a single voice-typing cycle (hotkey press → injection complete).
@@ -153,6 +186,35 @@ impl Default for PerfHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_perf_timer_finish_ms_is_non_negative_and_grows() {
+        let timer = PerfTimer::start();
+        let first = timer.finish_ms();
+        std::thread::sleep(Duration::from_millis(12));
+        let second = timer.finish_ms();
+        assert!(
+            first < second,
+            "the timer must keep counting: {first} -> {second}"
+        );
+        assert!(
+            second >= 10,
+            "the timer must cover the sleep, got {second}ms"
+        );
+    }
+
+    #[test]
+    fn test_perf_timer_started_at_is_the_start_instant() {
+        let timer = PerfTimer::start();
+        let started = timer.started_at();
+        // The exposed instant IS the timer's start: it lies in the past,
+        // and reading it measures the same span as `finish_ms`.
+        assert!(started <= Instant::now());
+        assert!(
+            ms_of(started.elapsed()) <= timer.finish_ms() + 1,
+            "the exposed instant must be the timer's own start"
+        );
+    }
 
     #[test]
     fn test_ms_of_zero() {

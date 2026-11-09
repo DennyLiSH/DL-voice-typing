@@ -14,7 +14,7 @@ use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
 use crate::config::{AppConfig, Language, PipelineMode};
 use crate::data_saving::{SaveConfig, SaveResult};
 use crate::error::AppError;
-use crate::perf::PerfMetrics;
+use crate::perf::{PerfMetrics, PerfTimer, ms_of};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -136,12 +136,24 @@ fn preprocess_audio(audio: &[f32], native_rate: u32) -> Option<Vec<f32>> {
     Some(resample(audio, native_rate, TARGET_SAMPLE_RATE))
 }
 
+/// Per-cycle state carried from the press handler to the release handler.
+///
+/// The press timer travels with the metrics because two measurements
+/// need the press instant: the hold duration (`audio_duration_ms`) and
+/// the end-to-end clock (`end_to_end_ms`). Reconstructing it by
+/// subtracting the (previously broken) hold duration from the release
+/// instant lost the precision and produced ~0 for both.
+struct PerfSlot {
+    metrics: PerfMetrics,
+    press_timer: PerfTimer,
+}
+
 /// Owns the recording session: shared pipeline state + per-cycle perf slot.
 /// Clone is cheap (all fields are `Arc`).
 #[derive(Clone)]
 pub(crate) struct RecordingSession {
     ps: PipelineState,
-    perf_slot: Arc<Mutex<Option<PerfMetrics>>>,
+    perf_slot: Arc<Mutex<Option<PerfSlot>>>,
 }
 
 impl RecordingSession {
@@ -162,7 +174,7 @@ impl RecordingSession {
     /// Hotkey press: state guard, window policy, resource lifecycle.
     /// Runs on the Win32 hook thread — must be synchronous and non-blocking.
     pub(crate) fn on_press(&self) {
-        let t_press = Instant::now();
+        let t_press = PerfTimer::start();
         let cycle_id = self.ps.next_perf_cycle_id();
 
         let can_record = self.ps.sm_start_recording();
@@ -288,11 +300,14 @@ impl RecordingSession {
                 self.ps.window_controller().show_review_near_caret();
             }
 
-            let press_latency = t_press.elapsed().as_millis() as u64;
+            let press_latency = t_press.finish_ms();
             let mut perf = PerfMetrics::new(cycle_id);
             perf.press_latency_ms = Some(press_latency);
             if let Some(mut slot) = crate::util::lock_mutex(&self.perf_slot, "perf") {
-                *slot = Some(perf);
+                *slot = Some(PerfSlot {
+                    metrics: perf,
+                    press_timer: t_press,
+                });
             }
         }
     }
@@ -302,12 +317,22 @@ impl RecordingSession {
     /// [`ReleaseAction`] whose `Deliver` future the caller schedules.
     pub(crate) fn on_release(&self) -> ReleaseAction {
         info!("hotkey release: event received");
-        let t_release = Instant::now();
+        let t_release = PerfTimer::start();
 
-        let mut perf = crate::util::lock_mutex(&self.perf_slot, "perf")
-            .and_then(|mut s| s.take())
-            .unwrap_or_else(|| PerfMetrics::new(self.ps.next_perf_cycle_id()));
-        perf.audio_duration_ms = Some(t_release.elapsed().as_millis() as u64);
+        // Take the press timer with the metrics (no press happened → no
+        // timer; the release instant then stands in for it, which is
+        // what the previous reconstruction produced).
+        let (mut perf, press_timer) =
+            match crate::util::lock_mutex(&self.perf_slot, "perf").and_then(|mut s| s.take()) {
+                Some(slot) => (slot.metrics, slot.press_timer),
+                None => (PerfMetrics::new(self.ps.next_perf_cycle_id()), t_release),
+            };
+        // Hold duration: press -> release.
+        perf.audio_duration_ms = Some(ms_of(
+            t_release
+                .started_at()
+                .duration_since(press_timer.started_at()),
+        ));
 
         let sample_rate = crate::util::lock_mutex(&self.ps.audio_capture(), "audio_capture")
             .and_then(|a| a.sample_rate());
@@ -317,9 +342,6 @@ impl RecordingSession {
 
         let policy = SessionPolicy::from_config(&self.ps.config_cache().read_cached());
         let mode = policy.mode;
-
-        let t_press_for_e2e =
-            t_release - Duration::from_millis(perf.audio_duration_ms.unwrap_or(0));
 
         match decide_release(mode, realtime_accumulated.as_deref()) {
             ReleaseActionKind::Done => {
@@ -359,7 +381,7 @@ impl RecordingSession {
                 self.ps.set_cancel_token(cancel.clone());
                 perf.audio_samples = audio_data.len();
                 perf.audio_sample_rate = native_rate;
-                perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
+                perf.release_latency_ms = Some(t_release.finish_ms());
                 let this = self.clone();
                 ReleaseAction::Deliver(Box::pin(async move {
                     this.run_realtime_fast_path(
@@ -367,7 +389,7 @@ impl RecordingSession {
                         audio_data,
                         native_rate,
                         perf,
-                        t_press_for_e2e,
+                        press_timer,
                         policy,
                         cancel,
                     )
@@ -408,7 +430,7 @@ impl RecordingSession {
                 self.ps.set_cancel_token(cancel.clone());
                 perf.audio_samples = audio_data.len();
                 perf.audio_sample_rate = native_rate;
-                perf.release_latency_ms = Some(t_release.elapsed().as_millis() as u64);
+                perf.release_latency_ms = Some(t_release.finish_ms());
                 let review = matches!(
                     mode,
                     PipelineMode::ClassicReview | PipelineMode::RealtimeReview
@@ -421,7 +443,7 @@ impl RecordingSession {
                         resampled,
                         review,
                         perf,
-                        t_press_for_e2e,
+                        press_timer,
                         policy,
                         cancel,
                     )
@@ -495,7 +517,7 @@ impl RecordingSession {
         resampled: Vec<f32>,
         review: bool,
         mut perf: PerfMetrics,
-        t_press_for_e2e: Instant,
+        press_timer: PerfTimer,
         policy: SessionPolicy,
         cancel: Arc<std::sync::atomic::AtomicBool>,
     ) {
@@ -512,7 +534,7 @@ impl RecordingSession {
         // `Instant::now().elapsed()` at the measurement point measures the
         // lifetime of a fresh instant (always ~0) — the bug this line
         // used to have.
-        let t_transcribe = Instant::now();
+        let t_transcribe = PerfTimer::start();
         let (save_result, transcription) = transcribe_and_save(
             &self.ps,
             audio_for_save,
@@ -523,9 +545,7 @@ impl RecordingSession {
         )
         .await;
 
-        perf.transcription_ms = perf
-            .transcription_ms
-            .or(Some(crate::perf::ms_of(t_transcribe.elapsed())));
+        perf.transcription_ms = perf.transcription_ms.or(Some(t_transcribe.finish_ms()));
 
         // -- Gate 2 (classic): after transcription returns, BEFORE the LLM
         // phase starts. LLM HTTP is non-interruptible once launched, so this
@@ -560,7 +580,7 @@ impl RecordingSession {
             },
             &policy,
             perf,
-            t_press_for_e2e,
+            press_timer,
             &cancel,
             "gate 3",
         )
@@ -576,7 +596,7 @@ impl RecordingSession {
         audio_data: Vec<f32>,
         native_rate: u32,
         perf: PerfMetrics,
-        t_press_for_e2e: Instant,
+        press_timer: PerfTimer,
         policy: SessionPolicy,
         cancel: Arc<std::sync::atomic::AtomicBool>,
     ) {
@@ -607,7 +627,7 @@ impl RecordingSession {
             DeliveryRoute::Direct,
             &policy,
             perf,
-            t_press_for_e2e,
+            press_timer,
             &cancel,
             "gate 3'",
         )
@@ -717,7 +737,7 @@ async fn resolve_llm_text(
     ps.sm_start_llm_refining();
     ps.emitter().emit("llm-refining", serde_json::Value::Null);
 
-    let t_llm = Instant::now();
+    let t_llm = PerfTimer::start();
 
     // Live-read API key per call (rotation-friendly; not in snapshot).
     let live_api_key = ps.config_cache().read_cached().llm_api_key.clone();
@@ -743,7 +763,7 @@ async fn resolve_llm_text(
         })
         .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
 
-    perf.llm_correction_ms = Some(t_llm.elapsed().as_millis() as u64);
+    perf.llm_correction_ms = Some(t_llm.finish_ms());
 
     if outcome.used_llm {
         ps.emitter().emit(
@@ -790,7 +810,7 @@ async fn refine_and_deliver(
     route: DeliveryRoute,
     policy: &SessionPolicy,
     mut perf: PerfMetrics,
-    t_press_for_e2e: Instant,
+    press_timer: PerfTimer,
     cancel: &Arc<std::sync::atomic::AtomicBool>,
     gate_label: &'static str,
 ) {
@@ -842,7 +862,7 @@ async fn refine_and_deliver(
                     save_result,
                     policy,
                     perf,
-                    t_press_for_e2e,
+                    press_timer,
                     policy.llm_enabled,
                 )
                 .await;
@@ -860,7 +880,7 @@ async fn refine_and_deliver(
                     save_result,
                     policy,
                     &mut perf,
-                    t_press_for_e2e,
+                    press_timer,
                     policy.llm_enabled,
                 )
                 .await;

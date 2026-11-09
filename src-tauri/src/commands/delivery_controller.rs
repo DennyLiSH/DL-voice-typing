@@ -5,10 +5,10 @@ use crate::commands::review::ReviewData;
 use crate::commands::window_controller::WindowController;
 use crate::data_saving::SaveResult;
 use crate::error::{AppError, CommandError};
-use crate::perf::PerfMetrics;
+use crate::perf::{PerfMetrics, PerfTimer};
 use crate::state::StateTag;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use super::recording_session::SessionPolicy;
@@ -26,7 +26,7 @@ struct DeliveryContext {
     foreground_hwnd: Option<isize>,
     data_saving: Option<ReviewData>,
     perf: Option<PerfMetrics>,
-    t_press_for_e2e: Option<Instant>,
+    press_timer: Option<PerfTimer>,
 }
 
 impl DeliveryContext {
@@ -35,7 +35,7 @@ impl DeliveryContext {
             foreground_hwnd: None,
             data_saving: None,
             perf: None,
-            t_press_for_e2e: None,
+            press_timer: None,
         }
     }
 
@@ -45,13 +45,13 @@ impl DeliveryContext {
         Option<isize>,
         Option<ReviewData>,
         Option<PerfMetrics>,
-        Option<Instant>,
+        Option<PerfTimer>,
     ) {
         (
             self.foreground_hwnd.take(),
             self.data_saving.take(),
             self.perf.take(),
-            self.t_press_for_e2e.take(),
+            self.press_timer.take(),
         )
     }
 }
@@ -138,7 +138,7 @@ struct DirectInject<'a> {
     save_result: Option<SaveResult>,
     policy: &'a SessionPolicy,
     perf: &'a mut PerfMetrics,
-    t_press_for_e2e: Instant,
+    press_timer: PerfTimer,
     /// Controls both the finish hide_review flag and the error-path review
     /// window hide (the two sites differ in exactly this).
     review_ui_active: bool,
@@ -180,7 +180,7 @@ impl DeliveryController {
         save_result: Option<SaveResult>,
         policy: &SessionPolicy,
         perf: &mut PerfMetrics,
-        t_press_for_e2e: Instant,
+        press_timer: PerfTimer,
         llm_transition: bool,
     ) {
         let transitioned = if llm_transition {
@@ -203,7 +203,7 @@ impl DeliveryController {
             save_result,
             policy,
             perf,
-            t_press_for_e2e,
+            press_timer,
             review_ui_active: false,
             site_label: "inject_direct",
         })
@@ -227,7 +227,7 @@ impl DeliveryController {
         save_result: Option<SaveResult>,
         policy: &SessionPolicy,
         mut perf: PerfMetrics,
-        t_press_for_e2e: Instant,
+        press_timer: PerfTimer,
         llm_transition: bool,
     ) {
         info!(
@@ -320,7 +320,7 @@ impl DeliveryController {
                     None
                 },
             });
-            self.store_context(review_data, perf, t_press_for_e2e);
+            self.store_context(review_data, perf, press_timer);
             return;
         }
 
@@ -341,7 +341,7 @@ impl DeliveryController {
                     None
                 },
             });
-            self.store_context(review_data, perf, t_press_for_e2e);
+            self.store_context(review_data, perf, press_timer);
         } else {
             warn!("show_review: review window not found. Falling back to direct injection.");
             // Clear residual context from any prior cycle; the inject path below
@@ -356,7 +356,7 @@ impl DeliveryController {
                 save_result,
                 policy,
                 perf: &mut perf,
-                t_press_for_e2e,
+                press_timer,
                 review_ui_active: true,
                 site_label: "show_review_fallback",
             })
@@ -501,13 +501,13 @@ impl DeliveryController {
         }
 
         // 2. Inject text in a blocking thread to avoid starving the runtime.
-        let t_inject = Instant::now();
+        let t_inject = PerfTimer::start();
         let inject_result = self.save_and_inject(&text).await;
 
-        ctx.2.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
+        ctx.2.injection_ms = Some(t_inject.finish_ms());
         ctx.2.text_length = text.len();
-        if let Some(t_press_for_e2e) = ctx.3 {
-            ctx.2.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
+        if let Some(press_timer) = ctx.3 {
+            ctx.2.end_to_end_ms = Some(press_timer.finish_ms());
         }
 
         if let Err(ref e) = inject_result {
@@ -567,15 +567,15 @@ impl DeliveryController {
             save_result,
             policy,
             perf,
-            t_press_for_e2e,
+            press_timer,
             review_ui_active,
             site_label,
         } = args;
-        let t_inject = Instant::now();
+        let t_inject = PerfTimer::start();
         let inject_result = self.save_and_inject(&text).await;
 
-        perf.injection_ms = Some(t_inject.elapsed().as_millis() as u64);
-        perf.end_to_end_ms = Some(t_press_for_e2e.elapsed().as_millis() as u64);
+        perf.injection_ms = Some(t_inject.finish_ms());
+        perf.end_to_end_ms = Some(press_timer.finish_ms());
         perf.text_length = text.len();
 
         if let Err(ref e) = inject_result {
@@ -605,7 +605,7 @@ impl DeliveryController {
                 None
             },
         });
-        self.store_context(review_data, perf.clone(), t_press_for_e2e);
+        self.store_context(review_data, perf.clone(), press_timer);
         let ctx = self.take_context();
         self.finish(
             ps,
@@ -634,12 +634,12 @@ impl DeliveryController {
             Option<isize>,
             Option<ReviewData>,
             PerfMetrics,
-            Option<Instant>,
+            Option<PerfTimer>,
         ),
         outcome: FinishOutcome,
         site_label: &'static str,
     ) {
-        let (foreground_hwnd, review_data, ctx_perf, _ctx_t_press) = ctx;
+        let (foreground_hwnd, review_data, ctx_perf, _ctx_press_timer) = ctx;
         debug!(target: "delivery", "finish({site_label}): entered");
 
         match outcome {
@@ -858,12 +858,12 @@ impl DeliveryController {
         &self,
         review_data: Option<ReviewData>,
         perf: PerfMetrics,
-        t_press_for_e2e: Instant,
+        press_timer: PerfTimer,
     ) {
         if let Some(mut ctx) = crate::util::lock_mutex(&self.context, "delivery_context") {
             ctx.data_saving = review_data;
             ctx.perf = Some(perf);
-            ctx.t_press_for_e2e = Some(t_press_for_e2e);
+            ctx.press_timer = Some(press_timer);
         }
     }
 
@@ -873,21 +873,21 @@ impl DeliveryController {
         Option<isize>,
         Option<ReviewData>,
         PerfMetrics,
-        Option<Instant>,
+        Option<PerfTimer>,
     ) {
         let mut perf = PerfMetrics::new(self.perf_history.next_cycle_id());
-        let mut t_press = None;
+        let mut press_timer = None;
         let (hwnd, data) = crate::util::lock_mutex(&self.context, "delivery_context")
             .map(|mut ctx| {
                 let (h, d, p, tp) = ctx.take();
                 if let Some(p) = p {
                     perf = p;
                 }
-                t_press = tp;
+                press_timer = tp;
                 (h, d)
             })
             .unwrap_or((None, None));
-        (hwnd, data, perf, t_press)
+        (hwnd, data, perf, press_timer)
     }
 
     async fn cleanup_review_ui(&self, ps: &PipelineState) {

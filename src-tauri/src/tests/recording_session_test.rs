@@ -16,10 +16,10 @@ use crate::commands::window_controller::NoopWindowController;
 use crate::config::{AppConfig, PipelineMode};
 use crate::llm::MockCorrector;
 use crate::perf::PerfMetrics;
+use crate::perf::PerfTimer;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 /// Test rig: owns the session plus handles to the shared mock components
 /// (same `Arc`s the session cloned into its `PipelineState`).
@@ -235,7 +235,7 @@ async fn run_pipeline_classic_direct_injects() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -262,7 +262,7 @@ async fn run_pipeline_classic_review_enters_reviewing() {
             vec![0.5f32; 1600],
             true,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -290,7 +290,7 @@ async fn run_realtime_fast_path_injects_accumulated() {
             vec![],
             48000,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -319,7 +319,7 @@ async fn run_pipeline_empty_transcription_resets() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -348,7 +348,7 @@ async fn run_pipeline_llm_corrects_then_injects() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -378,7 +378,7 @@ async fn run_pipeline_llm_failure_falls_back_to_raw_and_emits_summary() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -411,6 +411,57 @@ async fn run_pipeline_llm_failure_falls_back_to_raw_and_emits_summary() {
     );
 }
 
+/// Regression: the press instant must reach the release handler.
+///
+/// The hold duration (`audio_duration_ms`) and the end-to-end clock
+/// (`end_to_end_ms`) are both measured from the hotkey press. They used
+/// to be reconstructed by subtracting the (broken, always ~0) hold
+/// duration from the release instant, so both fields read ~0.
+#[tokio::test]
+async fn press_to_release_duration_is_measured_from_the_press() {
+    const HOLD_MS: u64 = 60;
+    let cfg = config(false, false, false);
+    let rig = build_rig(cfg, "raw transcription");
+    rig.session.on_press();
+    // Fill the ring buffer AFTER the press (the press clears it) so the
+    // release takes the full pipeline path — an empty buffer
+    // short-circuits before the delivery.
+    {
+        let ring_buffer = rig.session.ps_ref().ring_buffer();
+        let mut ring = ring_buffer
+            .lock()
+            .unwrap_or_else(|_| panic!("ring buffer lock should not be poisoned"));
+        let samples = vec![0.5f32; 48000];
+        ring.push(&samples);
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(HOLD_MS)).await;
+    match rig.session.on_release() {
+        ReleaseAction::Deliver(fut) => fut.await,
+        ReleaseAction::Done => {}
+    }
+
+    let events = rig.emitter.take_events();
+    let payload = events
+        .iter()
+        .find(|(n, _)| n == "perf-metrics")
+        .map(|(_, v)| v.clone())
+        .expect("the pipeline must emit perf-metrics");
+    let hold = payload["audio_duration_ms"]
+        .as_u64()
+        .expect("audio_duration_ms must be a number");
+    let e2e = payload["end_to_end_ms"]
+        .as_u64()
+        .expect("end_to_end_ms must be a number");
+    assert!(
+        hold >= HOLD_MS / 2,
+        "the hold duration must be measured from the press (>= {HOLD_MS}ms), got {hold}ms"
+    );
+    assert!(
+        e2e >= hold,
+        "the end-to-end clock must cover the hold, got {e2e}ms (hold {hold}ms)"
+    );
+}
+
 /// Regression: `transcription_ms` must measure the transcription, not the
 /// lifetime of a fresh `Instant`. The old code read
 /// `Instant::now().elapsed()` AT the measurement point, which is always
@@ -437,7 +488,7 @@ async fn run_pipeline_records_real_transcription_duration() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -813,7 +864,7 @@ async fn cancel_during_transcribe_skips_speech_error_and_no_injection() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             cancel.clone(),
         )
@@ -866,7 +917,7 @@ async fn cancel_after_llm_drops_result_no_injection_no_review() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             cancel.clone(),
         )
@@ -924,7 +975,7 @@ async fn cancel_before_delivery_skips_both_review_and_inject() {
             vec![0.5f32; 1600],
             true,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             cancel.clone(),
         )
@@ -990,7 +1041,7 @@ async fn cancel_during_fast_path_skips_injection() {
             vec![],
             48000,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             cancel.clone(),
         )
@@ -1090,7 +1141,7 @@ async fn cancel_gate_leaves_restarted_session_intact_classic() {
             vec![0.5f32; 1600],
             false,
             PerfMetrics::new(0),
-            Instant::now(),
+            PerfTimer::start(),
             SessionPolicy::from_config(&config(false, false, true)),
             cancel.clone(),
         )
@@ -1149,7 +1200,7 @@ async fn cancel_gate_leaves_restarted_session_intact_fast_path() {
             vec![],
             48000,
             PerfMetrics::new(0),
-            Instant::now(),
+            PerfTimer::start(),
             SessionPolicy::from_config(&config(true, false, true)),
             cancel.clone(),
         )
@@ -1204,7 +1255,7 @@ async fn cancel_before_whisper_returns_leaves_restarted_session_intact() {
             vec![0.5f32; 1600],
             false,
             PerfMetrics::new(0),
-            Instant::now(),
+            PerfTimer::start(),
             SessionPolicy::from_config(&config(false, false, false)),
             cancel.clone(),
         )
@@ -1241,7 +1292,7 @@ async fn happy_path_clears_cancel_token_slot() {
             vec![0.5f32; 1600],
             false,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -1273,7 +1324,7 @@ async fn review_happy_path_clears_cancel_token_slot() {
             vec![0.5f32; 1600],
             true,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             policy,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )

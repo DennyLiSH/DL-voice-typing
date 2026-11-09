@@ -15,11 +15,11 @@ use crate::config::{AppConfig, ConfigCache};
 use crate::data_saving::SaveResult;
 use crate::llm::MockCorrector;
 use crate::perf::PerfHistory;
+use crate::perf::PerfTimer;
 use crate::speech::mock::MockEngine;
 use crate::state::{StateMachine, StateTag};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use crate::commands::delivery_controller::{FocusOps, InjectError};
 
@@ -95,7 +95,7 @@ async fn test_inject_direct_succeeds() {
             None,
             &policy,
             &mut perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -120,7 +120,7 @@ async fn test_show_review_enters_reviewing() {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -153,7 +153,7 @@ async fn test_show_review_fallback_injects_when_window_missing() {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -188,7 +188,7 @@ async fn show_review_fallback_clears_context() {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -319,7 +319,7 @@ async fn test_clipboard_restore_on_inject_failure() {
             None,
             &policy,
             &mut perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -519,7 +519,7 @@ async fn confirm_review_error_branch_restores_focus() {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -586,7 +586,7 @@ async fn populate_context_via_show_review(ps: &PipelineState) {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -609,7 +609,7 @@ async fn populate_context_via_show_review(ps: &PipelineState) {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -743,7 +743,7 @@ async fn inject_direct_aborts_when_entry_transition_fails() {
             None,
             &policy,
             &mut perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -778,7 +778,7 @@ async fn show_review_aborts_when_entry_transition_fails() {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -875,7 +875,7 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
             save_result,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
@@ -1115,7 +1115,7 @@ async fn was_shown_on_press_confirm_clears_context_and_resets_flag() {
             None,
             &policy,
             perf,
-            Instant::now(),
+            PerfTimer::start(),
             false,
         )
         .await;
