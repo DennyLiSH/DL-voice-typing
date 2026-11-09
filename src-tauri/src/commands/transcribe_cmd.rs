@@ -8,12 +8,12 @@
 //! are delivered as `transcription-*` events, while setup-time failures
 //! (validation, paths, re-entry) return `CommandError`.
 
-use crate::commands::data_management_cmd::resolve_child;
 use crate::commands::delivery_controller::{InjectError, WIN32_FOCUS_OPS};
 use crate::commands::pipeline_state::PipelineState;
 use crate::config::WhisperModel;
 use crate::error::CommandError;
 use crate::llm::correction::CorrectionOutcome;
+use crate::recording_name::resolve_recording;
 use crate::speech::Segment;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -110,8 +110,9 @@ async fn transcribe_impl(
     let token_for_task = token.clone();
     let join = tokio::task::spawn_blocking(move || -> Result<(), CommandError> {
         let base = recordings_base_dir(&ps)?;
-        let wav_path = resolve_child(&base, &filename, "wav")?;
-        let json_path = resolve_child(&base, &filename, "json")?;
+        let files = resolve_recording(&base, &filename)?;
+        let wav_path = files.wav;
+        let json_path = files.json;
 
         // Per-recording model override: whisper builds resolve to either
         // the global engine or a temporary one; non-whisper builds always
@@ -204,7 +205,7 @@ pub fn get_recording_segments(
     filename: String,
 ) -> Result<RecordingSegments, CommandError> {
     let base = recordings_base_dir(&ps)?;
-    let json_path = resolve_child(&base, &filename, "json")?;
+    let json_path = resolve_recording(&base, &filename)?.json;
     let content = std::fs::read_to_string(&json_path)
         .map_err(|e| CommandError::io(e, "failed to read recording metadata"))?;
     let metadata: serde_json::Value = serde_json::from_str(&content)
@@ -258,7 +259,7 @@ pub async fn inject_transcript_text(
     }
     // Validate the filename BEFORE consuming the take-once HWND.
     let base = recordings_base_dir(&ps)?;
-    let json_path = resolve_child(&base, &filename, "json")?;
+    let json_path = resolve_recording(&base, &filename)?.json;
     let hwnd = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd").and_then(|mut g| g.take());
     let Some(hwnd) = hwnd else {
         return Err(CommandError::state(
@@ -617,7 +618,7 @@ fn inject_error_to_command(e: InjectError) -> CommandError {
 // WAV + path helpers
 // ---------------------------------------------------------------------------
 
-/// Base directory for recordings. MUST be canonicalized: `resolve_child`
+/// Base directory for recordings. MUST be canonicalized: `resolve_recording`
 /// compares the canonicalized child (which carries the `\\?\` verbatim
 /// prefix on Windows) with `starts_with(base)` — a raw-string base never
 /// matches, so every existing file would be rejected as "path escapes".
@@ -1277,11 +1278,11 @@ mod tests {
     // --- path traversal ---
 
     #[test]
-    fn test_resolve_child_rejects_traversal() {
+    fn test_resolve_recording_rejects_traversal() {
         let dir = temp_dir("traversal");
-        let result = resolve_child(&dir, "../../etc/passwd", "wav");
+        let result = resolve_recording(&dir, "../../etc/passwd");
         assert!(result.is_err());
-        let result = resolve_child(&dir, "not-a-stem", "wav");
+        let result = resolve_recording(&dir, "not-a-stem");
         assert!(result.is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

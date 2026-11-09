@@ -1,6 +1,7 @@
 use crate::audio::{TARGET_SAMPLE_RATE, resample};
 use crate::config::{AppConfig, Language, WhisperModel};
 use crate::error::AppError;
+use crate::recording_name::{JSON_EXT, WAV_EXT, generate_timestamp_filename};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -141,8 +142,8 @@ pub(crate) fn save_audio(
     fs::create_dir_all(&save_dir)?;
 
     let filename = generate_timestamp_filename();
-    let wav_path = save_dir.join(format!("{filename}.wav"));
-    let json_path = save_dir.join(format!("{filename}.json"));
+    let wav_path = crate::recording_name::sidecar_path(&save_dir, &filename, WAV_EXT);
+    let json_path = crate::recording_name::sidecar_path(&save_dir, &filename, JSON_EXT);
 
     // Resample to 16kHz if needed.
     let resampled = if original_sample_rate != TARGET_SAMPLE_RATE {
@@ -236,25 +237,6 @@ fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Resu
     }
 
     Ok(())
-}
-
-/// Generate a timestamp-based filename (e.g., "2026-04-02_14-30-25").
-pub(crate) fn generate_timestamp_filename() -> String {
-    use time::format_description::well_known::Rfc3339;
-    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    // Format as "YYYY-MM-DD_HH-MM-SS" for filename safety. Both literals are
-    // statically valid; the fallback chain guards against time crate regressions.
-    let text = if let Ok(fmt) = time::format_description::parse_borrowed::<2>(
-        "[year]-[month]-[day]_[hour]-[minute]-[second]",
-    ) {
-        now.format(&fmt)
-    } else if let Ok(fmt) = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]") {
-        now.format(&fmt)
-    } else {
-        tracing::warn!(target: "data_saving", "format literals failed to parse; falling back to Rfc3339");
-        now.format(&Rfc3339)
-    };
-    text.unwrap_or_default()
 }
 
 /// Write JSON metadata atomically: temp file + rename, so a crash mid-write

@@ -4,8 +4,7 @@
 
 use crate::commands::data_management_cmd::{
     FailedDelete, PendingDeletes, SoftDeleteOutcome, ensure_inside, friendly_delete_error,
-    friendly_io_error, is_valid_stem, resolve_base, resolve_child, scan_and_collect,
-    soft_delete_files, sweep_pending_dir,
+    friendly_io_error, resolve_base, scan_and_collect, soft_delete_files, sweep_pending_dir,
 };
 use crate::config::AppConfig;
 use std::fs;
@@ -56,33 +55,6 @@ fn cleanup(dir: &Path) {
 }
 
 #[test]
-fn test_is_valid_stem_accepts_well_formed() {
-    assert!(is_valid_stem("2026-06-24_14-30-25"));
-}
-
-#[test]
-fn test_is_valid_stem_rejects_path_traversal() {
-    assert!(!is_valid_stem(".."));
-    assert!(!is_valid_stem("../etc/passwd"));
-    assert!(!is_valid_stem("2026-06-24_14-30-25.exe"));
-    assert!(!is_valid_stem(""));
-    assert!(!is_valid_stem("2026-06-24_14-30-25 "));
-}
-
-#[test]
-fn test_is_valid_stem_rejects_separator_chars() {
-    assert!(!is_valid_stem("2026/06/24_14-30-25"));
-    assert!(!is_valid_stem("2026-06-24 14-30-25"));
-    assert!(!is_valid_stem("2026-06-24\\14-30-25"));
-}
-
-#[test]
-fn test_is_valid_stem_rejects_wrong_length() {
-    assert!(!is_valid_stem("2026-06-24"));
-    assert!(!is_valid_stem("2026-06-24_14-30-25-extra"));
-}
-
-#[test]
 fn test_resolve_base_empty_returns_none() {
     assert!(resolve_base("").unwrap().is_none());
 }
@@ -106,13 +78,6 @@ fn test_resolve_base_existing_canonicalizes() {
         .expect("some base");
     assert!(resolved.is_absolute());
     cleanup(&dir);
-}
-
-#[test]
-fn test_resolve_child_rejects_invalid_stem() {
-    let base = PathBuf::from("/tmp");
-    let err = resolve_child(&base, "..", "wav").expect_err("should reject");
-    assert_eq!(err.code, "VALIDATION");
 }
 
 #[test]
@@ -228,35 +193,6 @@ fn test_scan_and_collect_empty_query_returns_all() {
 
     let entries_ws = scan_and_collect(&dir, Some("   ")).unwrap();
     assert_eq!(entries_ws.len(), 0); // literal 3-space substring matches nothing
-
-    cleanup(&dir);
-}
-
-#[test]
-fn test_resolve_child_no_traversal_for_valid_stem() {
-    let dir = temp_dir("valid-stem");
-    let base = dir.canonicalize().unwrap();
-    let wav = resolve_child(&base, "2026-06-24_14-30-25", "wav").unwrap();
-    assert!(wav.starts_with(&base));
-
-    cleanup(&dir);
-}
-
-#[test]
-fn test_resolve_child_missing_child_returns_plain_join() {
-    // Despite the historical name (this fn never tested the
-    // directory-junction-rejection path — that is covered by the
-    // dedicated `pending_junction_*` / `sweep_junction_*` tests
-    // below — it only pins down the canonicalize-failure contract).
-    // resolve_child (`src/commands/data_management_cmd.rs:593-597`)
-    // canonicalizes the candidate and, on failure, returns the
-    // unvalidated `base.join(stem, ext)` concatenation. A non-existent
-    // child does NOT error out and is returned as a plain joined path.
-    let dir = temp_dir("resolve-child-missing");
-    let base = dir.canonicalize().unwrap();
-
-    let child = resolve_child(&base, "2026-06-24_14-30-25", "wav").unwrap();
-    assert!(child.starts_with(&base));
 
     cleanup(&dir);
 }
@@ -829,8 +765,8 @@ fn ensure_inside_accepts_child_and_rejects_escape() {
     // Path::starts_with compares by component — a verbatim child never
     // starts_with a plain-form base. fresh_tempdir() returns the plain
     // form, so canonicalize here first (same as the canonicalize precedents
-    // in test_resolve_child_no_traversal_for_valid_stem /
-    // test_resolve_child_missing_child_returns_plain_join).
+    // in recording_name.rs::test_resolve_recording_no_traversal_for_valid_stem /
+    // test_resolve_recording_missing_child_returns_plain_join).
     let base = fresh_tempdir().canonicalize().unwrap();
     let inside = base.join("a.wav");
     std::fs::write(&inside, b"x").unwrap();

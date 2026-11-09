@@ -22,6 +22,12 @@ pub enum AppError {
     #[error("crypto error: {0}")]
     Crypto(String),
 
+    /// Input validation failure (e.g. an illegal recording filename).
+    /// Maps to the `VALIDATION` command-error code — the frontend's
+    /// "文件名不合法" mapping keys on that code.
+    #[error("validation error: {0}")]
+    Validation(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -86,6 +92,7 @@ impl From<AppError> for CommandError {
             AppError::Config(msg) => ("CONFIG", msg.clone()),
             AppError::Hotkey(msg) => ("HOTKEY", msg.clone()),
             AppError::Crypto(msg) => ("CRYPTO", msg.clone()),
+            AppError::Validation(msg) => ("VALIDATION", msg.clone()),
             AppError::Io(io_err) => ("IO", io_err.to_string()),
             AppError::Json(json_err) => ("JSON", json_err.to_string()),
             AppError::Http(http_err) => ("HTTP", http_err.to_string()),

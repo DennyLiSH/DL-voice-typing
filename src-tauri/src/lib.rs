@@ -9,6 +9,7 @@ pub mod hotkey;
 pub mod llm;
 pub mod perf;
 pub mod realtime;
+pub mod recording_name;
 pub mod speech;
 pub mod state;
 pub mod streaming_recorder;

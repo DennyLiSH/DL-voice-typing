@@ -16,7 +16,7 @@ use crate::state::StateTag;
 use crate::streaming_recorder::{
     FinalizeInfo, PushHandle, STOP_TIMEOUT, StreamingRecorder, exceeds_drop_threshold,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -449,7 +449,13 @@ impl RecordOnlySession {
         stem: &str,
         outcome: &Result<FinalizeInfo, AppError>,
     ) -> Result<(), AppError> {
-        let json_path = PathBuf::from(&policy.data_saving_path).join(format!("{stem}.json"));
+        // The stem comes from the recorder itself (always a valid stem),
+        // but resolve it through the naming module so the path rule has a
+        // single owner (and the stem is validated on the way).
+        let json_path = crate::recording_name::recording_json_path(
+            std::path::Path::new(&policy.data_saving_path),
+            stem,
+        )?;
         let (status, duration_seconds, dropped) = match outcome {
             Ok(info) => {
                 let status = if exceeds_drop_threshold(info.dropped_blocks) {
@@ -491,6 +497,7 @@ mod tests {
     use crate::commands::{EventEmitter, MockEmitter};
     use crate::config::{AppConfig, ConfigCache};
     use crate::llm::MockCorrector;
+    use std::path::PathBuf;
 
     /// Test helper: backdate the press on the current session so the next
     /// recover classifies as Normal. Per-session state — no statics, so

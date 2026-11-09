@@ -6,6 +6,9 @@
 
 use crate::config::ConfigCache;
 use crate::error::CommandError;
+use crate::recording_name::{
+    EXTENSIONS, JSON_EXT, WAV_EXT, is_valid_stem, resolve_recording, sidecar_path,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,10 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::ipc::Response;
 use tracing::{info, warn};
-
-/// Pattern: `YYYY-MM-DD_HH-MM-SS` (19 chars total). Validated without regex
-/// to avoid pulling in the regex crate for one fixed pattern.
-const FILENAME_LEN: usize = 19;
 
 /// One recording entry returned to the frontend.
 #[derive(Serialize)]
@@ -97,7 +96,7 @@ pub struct SoftDeleteBatch {
 /// Per-batch undo state. One entry per soft-delete batch.
 pub(crate) struct PendingEntry {
     /// `(orig_path, pending_path)` pairs — wav + json for each stem.
-    /// All paths were validated through `is_valid_stem` + `resolve_child`
+    /// All paths were validated through `recording_name::is_valid_stem` + `resolve_recording`
     /// before insertion, so they are guaranteed to live under the user's
     /// `data_saving_path`.
     pub(crate) pairs: Vec<(PathBuf, PathBuf)>,
@@ -291,7 +290,7 @@ pub(crate) struct SoftDeleteOutcome {
 ///
 /// **Defense layers (M4):**
 /// 1. `is_valid_stem` per filename (reject path separators, length, format).
-/// 2. `resolve_child` (canonicalize + starts_with) for orig path.
+/// 2. `resolve_recording` (canonicalize + starts_with) for orig path.
 /// 3. After `create_dir_all(pending)`, canonicalize pending and assert it
 ///    still starts with `base_canonical` — `.dl_pending` swapped for a
 ///    junction (mklink /J, no admin) is rejected wholesale.
@@ -344,32 +343,36 @@ pub(crate) fn soft_delete_files(base: &Path, filenames: &[String]) -> SoftDelete
             });
             continue;
         }
+        // Resolve both sidecars once: `resolve_recording` canonicalizes
+        // each child and verifies it stays under `base`; we then re-check
+        // against the canonical base (matters on Windows where canonical
+        // paths use the UNC-prefixed form while the caller passes a plain
+        // path).
+        let files = match resolve_recording(&base_canon, filename) {
+            Ok(f) => f,
+            Err(e) => {
+                failed.push(FailedDelete {
+                    filename: filename.clone(),
+                    error: friendly_delete_error(&CommandError::from(e)),
+                });
+                continue;
+            }
+        };
         let mut ok = true;
         let mut pair_moved: Vec<(PathBuf, PathBuf)> = Vec::new();
-        for ext in ["wav", "json"] {
-            // `resolve_child` already canonicalizes the child and verifies
-            // it stays under `base`; we then re-check against the canonical
-            // base (matters on Windows where canonical paths use the `\\?\`
-            // UNC prefix while the caller passes a plain path).
-            let orig = match resolve_child(&base_canon, filename, ext) {
-                Ok(p) => p,
-                Err(e) => {
-                    failed.push(FailedDelete {
-                        filename: filename.clone(),
-                        error: friendly_delete_error(&e),
-                    });
-                    ok = false;
-                    break;
-                }
-            };
+        for (ext, orig) in EXTENSIONS
+            .iter()
+            .copied()
+            .zip([files.wav.as_path(), files.json.as_path()])
+        {
             if !orig.exists() {
                 // Target state already reached (file was already moved or
-                // never existed). Skip without counting — `moved` is the
+                // never existed). Skip without counting - `moved` is the
                 // number of successfully *transitioned* stems, not files.
                 continue;
             }
-            let dest = pending.join(format!("{filename}.{ext}"));
-            let move_res = std::fs::rename(&orig, &dest);
+            let dest = sidecar_path(&pending, &files.stem, ext);
+            let move_res = std::fs::rename(orig, &dest);
             if let Err(e) = move_res {
                 failed.push(FailedDelete {
                     filename: filename.clone(),
@@ -382,7 +385,7 @@ pub(crate) fn soft_delete_files(base: &Path, filenames: &[String]) -> SoftDelete
                 ok = false;
                 break;
             }
-            pair_moved.push((orig, dest));
+            pair_moved.push((orig.to_path_buf(), dest));
         }
         if ok {
             moved += 1;
@@ -447,7 +450,7 @@ pub fn sweep_pending_dir(config: &crate::config::schema::AppConfig) {
         if !is_valid_stem(stem) {
             continue;
         }
-        if ext != "wav" && ext != "json" {
+        if !EXTENSIONS.contains(&ext) {
             continue;
         }
         if std::fs::remove_file(&path).is_ok() {
@@ -508,47 +511,6 @@ pub(crate) fn ensure_inside(base: &Path, candidate: &Path) -> Result<PathBuf, st
     Ok(canon)
 }
 
-/// Validate that `filename` is a `YYYY-MM-DD_HH-MM-SS` stem and contains no
-/// path separators or other escape characters. Combined with canonicalize-based
-/// checks at resolve time, this is defense-in-depth against path traversal.
-pub(crate) fn is_valid_stem(filename: &str) -> bool {
-    if filename.len() != FILENAME_LEN {
-        return false;
-    }
-    let bytes = filename.as_bytes();
-    let is_dash_at = |i: usize| bytes[i] == b'-';
-    let is_under_at = |i: usize| bytes[i] == b'_';
-    let is_digit_at = |i: usize| bytes[i].is_ascii_digit();
-
-    // Layout: YYYY-MM-DD_HH-MM-SS
-    // Indices: 0-3 digits, 4 dash, 5-6 digits, 7 dash, 8-9 digits,
-    //          10 underscore, 11-12 digits, 13 dash, 14-15 digits,
-    //          16 dash, 17-18 digits.
-    [
-        is_digit_at(0),
-        is_digit_at(1),
-        is_digit_at(2),
-        is_digit_at(3),
-        is_dash_at(4),
-        is_digit_at(5),
-        is_digit_at(6),
-        is_dash_at(7),
-        is_digit_at(8),
-        is_digit_at(9),
-        is_under_at(10),
-        is_digit_at(11),
-        is_digit_at(12),
-        is_dash_at(13),
-        is_digit_at(14),
-        is_digit_at(15),
-        is_dash_at(16),
-        is_digit_at(17),
-        is_digit_at(18),
-    ]
-    .iter()
-    .all(|&ok| ok)
-}
-
 /// Resolve `data_saving_path` and return the canonicalized base directory.
 /// Returns Ok(None) when path is empty (treated as "feature not configured").
 /// Returns Ok(Some(dir)) when the path exists and is canonicalizable.
@@ -567,34 +529,6 @@ pub(crate) fn resolve_base(path_str: &str) -> Result<Option<PathBuf>, CommandErr
             "IO",
             format!("failed to canonicalize data_saving_path: {e}"),
         )),
-    }
-}
-
-/// Build the full path for a recording file (.wav or .json) under `base`,
-/// verifying the canonicalized result is still inside `base`.
-pub(crate) fn resolve_child(
-    base: &Path,
-    filename: &str,
-    ext: &str,
-) -> Result<PathBuf, CommandError> {
-    if !is_valid_stem(filename) {
-        return Err(CommandError::validation(format!(
-            "invalid recording filename: {filename}"
-        )));
-    }
-    let child = base.join(format!("{filename}.{ext}"));
-    match child.canonicalize() {
-        Ok(canon) => {
-            if !canon.starts_with(base) {
-                return Err(CommandError::validation("path escapes data_saving_path"));
-            }
-            Ok(canon)
-        }
-        Err(_) => {
-            // File does not exist (canonicalize fails on missing paths).
-            // Caller decides whether that is an error.
-            Ok(child)
-        }
     }
 }
 
@@ -701,7 +635,7 @@ pub(crate) fn scan_and_collect(
         let Some(ext) = path.extension() else {
             continue;
         };
-        if ext != "json" {
+        if ext != JSON_EXT {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
@@ -745,7 +679,7 @@ pub(crate) fn scan_and_collect(
         }
 
         // WAV size (0 if missing). Do not fail the scan when WAV is unreadable.
-        let wav_path = base.join(format!("{stem}.wav"));
+        let wav_path = sidecar_path(base, stem, WAV_EXT);
         let wav_size = std::fs::metadata(&wav_path).map(|m| m.len()).unwrap_or(0);
 
         entries.push(RecordingEntry {
@@ -914,23 +848,23 @@ pub async fn get_data_usage(
             if !is_valid_stem(stem) {
                 continue;
             }
-            let Some(ext) = path.extension() else {
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
                 continue;
             };
             // Only count WAV+JSON pairs that match the timestamp pattern.
             // Orphan WAV (no JSON) is excluded — the JSON is the truth source.
-            if ext != "wav" && ext != "json" {
+            if !EXTENSIONS.contains(&ext) {
                 continue;
             }
-            if ext == "wav" {
-                let json_sibling = base.join(format!("{stem}.json"));
+            if ext == WAV_EXT {
+                let json_sibling = sidecar_path(&base, stem, JSON_EXT);
                 if !json_sibling.exists() {
                     continue; // orphan WAV, skip
                 }
             }
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             total_bytes = total_bytes.saturating_add(size);
-            if ext == "json" {
+            if ext == JSON_EXT {
                 recording_count = recording_count.saturating_add(1);
             }
         }
@@ -965,7 +899,7 @@ pub async fn read_recording_audio(
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, CommandError> {
         let base = resolve_base_existing(&path_str)?;
-        let wav = resolve_child(&base, &filename, "wav")?;
+        let wav = resolve_recording(&base, &filename)?.wav;
         if !wav.exists() {
             return Err(CommandError::new(
                 "NOT_FOUND",

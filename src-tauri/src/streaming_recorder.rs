@@ -7,9 +7,9 @@
 //! salvages files whose finalize never ran (crash / forced stop).
 
 use crate::audio::{Resampler, TARGET_SAMPLE_RATE};
-use crate::commands::data_management_cmd::is_valid_stem;
-use crate::data_saving::{f32_to_i16_clamped, generate_timestamp_filename};
+use crate::data_saving::f32_to_i16_clamped;
 use crate::error::AppError;
+use crate::recording_name::{WAV_EXT, generate_timestamp_filename, is_valid_stem};
 use std::fs;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -124,7 +124,7 @@ impl StreamingRecorder {
     pub fn start(dir: &Path, device_sample_rate: u32) -> Result<Self, AppError> {
         fs::create_dir_all(dir)?;
         let stem = generate_timestamp_filename();
-        let wav_path = dir.join(format!("{stem}.wav"));
+        let wav_path = crate::recording_name::sidecar_path(dir, &stem, WAV_EXT);
         let file = fs::File::create(&wav_path)?;
         let mut writer = BufWriter::new(file);
         write_placeholder_header(&mut writer)?;
