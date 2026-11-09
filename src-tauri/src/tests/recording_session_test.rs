@@ -67,9 +67,29 @@ fn build_rig_full(
     wc: Arc<dyn crate::commands::window_controller::WindowController>,
     engine_ready: bool,
 ) -> Rig {
+    build_rig_full_with_delay(
+        cfg,
+        engine_text,
+        corrector,
+        wc,
+        engine_ready,
+        std::time::Duration::ZERO,
+    )
+}
+
+/// `build_rig_full` plus an artificial transcription delay — lets a test
+/// exercise the perf timers (a zero-delay engine makes every duration 0).
+fn build_rig_full_with_delay(
+    cfg: AppConfig,
+    engine_text: &str,
+    corrector: MockCorrector,
+    wc: Arc<dyn crate::commands::window_controller::WindowController>,
+    engine_ready: bool,
+    engine_delay: std::time::Duration,
+) -> Rig {
     let sm = Arc::new(Mutex::new(StateMachine::new()));
     let ac = Arc::new(Mutex::new(MockAudioCapture::new()));
-    let mut engine = MockEngine::new(engine_text);
+    let mut engine = MockEngine::new(engine_text).with_delay(engine_delay);
     engine.set_ready(engine_ready);
     let engine = Arc::new(engine);
     let clipboard = Arc::new(MockClipboard::new());
@@ -388,6 +408,53 @@ async fn run_pipeline_llm_failure_falls_back_to_raw_and_emits_summary() {
     assert_eq!(
         rig.clipboard.injected(),
         vec!["raw transcription".to_string()]
+    );
+}
+
+/// Regression: `transcription_ms` must measure the transcription, not the
+/// lifetime of a fresh `Instant`. The old code read
+/// `Instant::now().elapsed()` AT the measurement point, which is always
+/// ~0 — the field was never a real measurement.
+#[tokio::test]
+async fn run_pipeline_records_real_transcription_duration() {
+    const DELAY_MS: u64 = 60;
+    let cfg = config(false, false, false);
+    let rig = build_rig_full_with_delay(
+        cfg.clone(),
+        "raw transcription",
+        MockCorrector::new("corrected"),
+        Arc::new(NoopWindowController),
+        true,
+        std::time::Duration::from_millis(DELAY_MS),
+    );
+    to_transcribing(&rig.sm);
+    let perf = PerfMetrics::new(0);
+    let policy = SessionPolicy::from_config(&cfg);
+    rig.session
+        .run_pipeline(
+            vec![],
+            48000,
+            vec![0.5f32; 1600],
+            false,
+            perf,
+            Instant::now(),
+            policy,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await;
+
+    let events = rig.emitter.take_events();
+    let payload = events
+        .iter()
+        .find(|(n, _)| n == "perf-metrics")
+        .map(|(_, v)| v.clone())
+        .expect("the pipeline must emit perf-metrics");
+    let ms = payload["transcription_ms"]
+        .as_u64()
+        .expect("transcription_ms must be a number");
+    assert!(
+        ms >= DELAY_MS / 2,
+        "transcription_ms must cover the engine delay (>= {DELAY_MS}ms), got {ms}ms"
     );
 }
 

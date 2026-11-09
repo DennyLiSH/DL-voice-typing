@@ -1,11 +1,15 @@
 use crate::error::AppError;
 use crate::speech::SpeechEngine;
+use std::time::Duration;
 
 /// Mock speech engine for testing.
 pub struct MockEngine {
     response: String,
     ready: bool,
     segments: Option<Vec<crate::speech::Segment>>,
+    /// Artificial transcription delay — lets a test exercise the perf
+    /// timers (a zero-delay engine would make every duration 0).
+    delay: Duration,
 }
 
 impl MockEngine {
@@ -15,7 +19,14 @@ impl MockEngine {
             response: response.into(),
             ready: true,
             segments: None,
+            delay: Duration::ZERO,
         }
+    }
+
+    /// Make every transcription take at least `delay`.
+    pub fn with_delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
     }
 
     /// Change the fixed response returned by `transcribe_sync`.
@@ -40,6 +51,9 @@ impl SpeechEngine for MockEngine {
     fn transcribe_sync(&self, _samples: &[f32]) -> Result<String, AppError> {
         if !self.ready {
             return Err(AppError::Speech("mock engine not ready".to_string()));
+        }
+        if !self.delay.is_zero() {
+            std::thread::sleep(self.delay);
         }
         Ok(self.response.clone())
     }

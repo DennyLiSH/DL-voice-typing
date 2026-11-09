@@ -508,6 +508,11 @@ impl RecordingSession {
         let _cancel_guard = CancelGuard::new(&self.ps);
 
         // -- Save audio and transcribe in parallel --
+        // The timer must be started BEFORE the call: reading
+        // `Instant::now().elapsed()` at the measurement point measures the
+        // lifetime of a fresh instant (always ~0) — the bug this line
+        // used to have.
+        let t_transcribe = Instant::now();
         let (save_result, transcription) = transcribe_and_save(
             &self.ps,
             audio_for_save,
@@ -520,7 +525,7 @@ impl RecordingSession {
 
         perf.transcription_ms = perf
             .transcription_ms
-            .or(Some(Instant::now().elapsed().as_millis() as u64));
+            .or(Some(crate::perf::ms_of(t_transcribe.elapsed())));
 
         // -- Gate 2 (classic): after transcription returns, BEFORE the LLM
         // phase starts. LLM HTTP is non-interruptible once launched, so this

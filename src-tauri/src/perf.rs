@@ -2,6 +2,17 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+/// Milliseconds of a duration, as `u64`.
+///
+/// Pure function so the conversion is unit-testable without a clock.
+/// Saturating (not truncating): a duration longer than ~584 million
+/// years would wrap on a plain `as u64` cast and produce a nonsense
+/// perf number.
+pub fn ms_of(d: Duration) -> u64 {
+    d.as_millis().min(u64::MAX as u128) as u64
+}
 
 /// Performance metrics for a single voice-typing cycle (hotkey press → injection complete).
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +153,27 @@ impl Default for PerfHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ms_of_zero() {
+        assert_eq!(ms_of(Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn test_ms_of_sub_millisecond_truncates_to_zero() {
+        // Sub-millisecond phases are reported as 0 ms - the perf panel
+        // shows whole milliseconds.
+        assert_eq!(ms_of(Duration::from_micros(999)), 0);
+        assert_eq!(ms_of(Duration::from_millis(1)), 1);
+    }
+
+    #[test]
+    fn test_ms_of_large_value_saturates_instead_of_wrapping() {
+        // A plain `as u64` cast would wrap here and report a nonsense
+        // duration (a small number) for an absurd one.
+        let absurd = Duration::from_secs(u64::MAX);
+        assert_eq!(ms_of(absurd), u64::MAX);
+    }
 
     #[test]
     fn test_new_metrics_all_none() {
