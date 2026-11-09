@@ -191,4 +191,34 @@ mod tests {
         assert!(!outcome.used_llm);
         assert_eq!(outcome.text, "raw");
     }
+
+    /// The fallback message must live in exactly one place — this
+    /// constant. Both call sites used to spell it out; a stray literal
+    /// in either file means the two copies can drift again.
+    #[test]
+    fn test_fallback_message_byte_identical_across_sites() {
+        const MESSAGE: &str = "LLM 纠错失败，已保留原始转录";
+        assert_eq!(LLM_FALLBACK_USER_MSG, MESSAGE);
+        let recording_session = include_str!("../commands/recording_session.rs");
+        let transcribe_cmd = include_str!("../commands/transcribe_cmd.rs");
+        // Check-face evidence: both scraped files must actually contain
+        // the correction call sites. Without this the "no literal" scan
+        // could pass over an empty/renamed file.
+        assert!(
+            recording_session.contains("resolve_llm_text"),
+            "the scraped recording_session.rs must contain the correction call site"
+        );
+        assert!(
+            transcribe_cmd.contains("run_llm_correction"),
+            "the scraped transcribe_cmd.rs must contain the correction call site"
+        );
+        assert!(
+            !recording_session.contains(MESSAGE),
+            "recording_session.rs must reference the shared constant, not a literal"
+        );
+        assert!(
+            !transcribe_cmd.contains(MESSAGE),
+            "transcribe_cmd.rs must reference the shared constant, not a literal"
+        );
+    }
 }

@@ -13,6 +13,7 @@ use crate::commands::delivery_controller::{InjectError, WIN32_FOCUS_OPS};
 use crate::commands::pipeline_state::PipelineState;
 use crate::config::WhisperModel;
 use crate::error::CommandError;
+use crate::llm::correction::CorrectionOutcome;
 use crate::speech::Segment;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -496,23 +497,17 @@ fn run_transcription(
     let transcription: String = segments.iter().map(|s| s.text.as_str()).collect();
     let llm_corrected = if use_llm {
         match run_llm_correction(ps, &transcription) {
-            Some(Ok(corrected)) => Some(corrected),
-            Some(Err(e)) => {
-                let api_key = ps.config_cache().read_cached().llm_api_key.clone();
-                if api_key.is_empty() {
-                    // Unreachable in practice (run_llm_correction gates on a
-                    // non-empty key) — warn, because the api_key replace layer
-                    // of the redaction is skipped and that should be visible
-                    // in the info-level production log, not just debug.
-                    warn!("transcribe: LLM redaction missing api_key context");
-                }
-                warn!(
-                    "transcribe: LLM correction failed for {filename}: {}",
-                    crate::llm::redact_error_detail(&e.to_string(), &api_key)
-                );
+            Some(outcome) if outcome.used_llm => Some(outcome.text),
+            Some(_) => {
+                // The correction failed — the raw transcription is kept
+                // and the user gets the fixed Chinese summary (the
+                // redacted English detail went to the log inside
+                // `llm::correction::correct_with_fallback`).
                 ps.emitter().emit(
                     "transcription-error",
-                    serde_json::json!({"message": "LLM 纠错失败，已保留原始转录"}),
+                    serde_json::json!({
+                        "message": crate::llm::correction::LLM_FALLBACK_USER_MSG
+                    }),
                 );
                 None
             }
@@ -544,11 +539,16 @@ fn run_transcription(
 
 /// Run LLM correction on the merged transcription.
 /// `None` = LLM not attempted (disabled or incomplete config);
-/// `Some(Err)` = attempted and failed (caller keeps the raw transcription).
-fn run_llm_correction(
-    ps: &PipelineState,
-    text: &str,
-) -> Option<Result<String, crate::error::AppError>> {
+/// `Some(outcome)` = attempted — `outcome.used_llm` tells whether the
+/// correction succeeded (the caller keeps the raw transcription when it
+/// did not).
+///
+/// The corrector resolution + correction + fallback live in
+/// `llm::correction`, shared with the classic pipeline — including the
+/// cache write-back policy (the transcribe window writes the rebuilt
+/// corrector back into the shared slot, so the next classic session
+/// benefits from it).
+fn run_llm_correction(ps: &PipelineState, text: &str) -> Option<CorrectionOutcome> {
     let cfg = ps.config_cache().read_cached();
     if !cfg.llm_enabled
         || cfg.llm_api_url.is_empty()
@@ -561,22 +561,37 @@ fn run_llm_correction(
         "transcription-progress",
         serde_json::json!({"percent": 100, "stage": "llm"}),
     );
-    if let Some(corrected) = ps
-        .with_cached_llm(|c| {
-            c.as_ref()
-                .filter(|x| x.matches_config(&cfg.llm_api_url, &cfg.llm_api_key, &cfg.llm_model))
-                .map(|x| x.correct_sync(text))
+    // The LLM API key stays in-process — never logged, never sent to the
+    // frontend.
+    //
+    // Lock protocol: the verb holds the slot lock for the duration of
+    // `correct_sync` (HTTP via block_in_place). `correct_sync` must stay
+    // INSIDE the closure so the cache invariant (no concurrent rebuild
+    // while a corrector is mid-HTTP) holds.
+    //
+    // A poisoned slot lock used to be survivable here: the old code fell
+    // back to an uncached client. Keep that — the cache is an
+    // optimization, not a requirement.
+    let outcome = ps
+        .with_cached_llm(|slot| {
+            let corrector = crate::llm::correction::resolve_corrector(
+                slot,
+                &cfg.llm_api_url,
+                &cfg.llm_api_key,
+                &cfg.llm_model,
+            );
+            crate::llm::correction::correct_with_fallback(&corrector, text, &cfg.llm_api_key)
         })
-        .flatten()
-    {
-        return Some(corrected);
-    }
-    let client = crate::llm::LLMClient::new(
-        cfg.llm_api_url.clone(),
-        cfg.llm_api_key.clone(),
-        cfg.llm_model.clone(),
-    );
-    Some(client.correct_sync(text))
+        .unwrap_or_else(|| {
+            let corrector: std::sync::Arc<dyn crate::llm::TextCorrector> =
+                std::sync::Arc::new(crate::llm::LLMClient::new(
+                    cfg.llm_api_url.clone(),
+                    cfg.llm_api_key.clone(),
+                    cfg.llm_model.clone(),
+                ));
+            crate::llm::correction::correct_with_fallback(&corrector, text, &cfg.llm_api_key)
+        });
+    Some(outcome)
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,6 +1139,38 @@ mod tests {
                 .is_none_or(|s| s.as_array().is_some_and(|a| a.is_empty()))
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The transcribe window must write the rebuilt corrector back into the
+    /// shared `cached_llm` slot — one cache policy for both callers (the
+    /// classic pipeline benefits from the corrector built here).
+    ///
+    /// Without this assertion a future "don't write back" change would
+    /// keep every other gate green: the correction still works, the slot
+    /// just stays empty.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_llm_correction_writes_corrector_back_to_cache() {
+        let cfg = AppConfig {
+            llm_enabled: true,
+            // Unreachable endpoint — the correction fails, but the
+            // corrector must still have been built and cached.
+            llm_api_url: "http://127.0.0.1:1/v1/chat/completions".to_string(),
+            llm_api_key: "k".to_string(),
+            llm_model: "m".to_string(),
+            ..Default::default()
+        };
+        let (ps, _emitter, _clipboard) = build_ps(cfg, None);
+        assert!(
+            ps.with_cached_llm(|c| c.is_none()).unwrap_or(false),
+            "the slot must start empty"
+        );
+
+        let outcome = run_llm_correction(&ps, "文本");
+        assert!(outcome.is_some(), "the LLM must have been attempted");
+        assert!(
+            ps.with_cached_llm(|c| c.is_some()).unwrap_or(false),
+            "the rebuilt corrector must be written back into the shared slot"
+        );
     }
 
     /// LLM regression: a 5xx from the LLM endpoint must keep the raw
