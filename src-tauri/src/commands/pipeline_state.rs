@@ -1245,6 +1245,75 @@ mod sm_verb_tests {
         );
     }
 
+    /// Constructor-shape ratchet: the PipelineState constructor call must
+    /// survive in exactly ONE place — inside `TestComponents::build()`.
+    /// (The token is spelled apart in this file so the scrape below does
+    /// not match the test's own text.)
+    ///
+    /// Every test constructs its PipelineState through the builder, so
+    /// adding, removing or reordering a constructor parameter can no
+    /// longer leave some call sites behind: the ratchet turns that into a
+    /// red test instead of a silent divergence between two construction
+    /// shapes.
+    #[test]
+    fn pipeline_state_new_call_sites_are_ratcheted() {
+        // Assembled at compile time so this test's own source never
+        // spells the contiguous token it scrapes for (same trick as the
+        // sm_call pairing test in this file).
+        const NEEDLE: &str = concat!("PipelineState", "::new(");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        collect_rs_files(std::path::Path::new("src"), &mut files);
+        // Check-face evidence: the walk must have found the source tree
+        // (a wrong working directory would otherwise make the count
+        // vacuously zero).
+        assert!(
+            files.len() >= 10,
+            "the source walk found only {} files — the test's working directory \
+             must be the crate root",
+            files.len()
+        );
+        let mut hits: Vec<(std::path::PathBuf, usize)> = Vec::new();
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let count = text.matches(NEEDLE).count();
+            if count > 0 {
+                hits.push((path.clone(), count));
+            }
+        }
+        assert_eq!(
+            hits.len(),
+            1,
+            "the PipelineState constructor call must survive in exactly one file \
+             (TestComponents::build) — got: {hits:?}"
+        );
+        assert!(
+            hits[0].0.ends_with("pipeline_state.rs"),
+            "the surviving call site must be in pipeline_state.rs, got: {:?}",
+            hits[0].0
+        );
+        assert_eq!(
+            hits[0].1, 1,
+            "pipeline_state.rs must contain exactly one constructor call site"
+        );
+    }
+
+    /// Collect every `.rs` file under `dir` (recursive).
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+
     #[test]
     fn hide_overlays_hides_floating_and_conditional_review() {
         let calls = Arc::new(Mutex::new(Vec::new()));
