@@ -1005,49 +1005,35 @@ mod tests_session_policy {
 
     #[test]
     fn session_policy_field_coverage_audits_all_appconfig_fields() {
-        use std::collections::HashSet;
-
         // Serialize AppConfig to enumerate all pub fields dynamically. A
         // hand-maintained field list would silently miss new fields; serde
         // enumeration forces authors adding a new field to either snapshot
         // it in SessionPolicy or document it in KNOWN_UNSNAPSHOTED_FIELDS.
-        let cfg = AppConfig::default();
-        let json = match serde_json::to_value(&cfg) {
-            Ok(v) => v,
-            Err(e) => panic!("AppConfig must serialize: {e}"),
-        };
-        let obj = match json.as_object() {
-            Some(o) => o,
-            None => panic!("AppConfig must serialize to a JSON object"),
-        };
-        let all_fields: HashSet<&str> = obj.keys().map(|s| s.as_str()).collect();
+        // The shared helper owns the enumeration and the assertion (the
+        // record-only pipeline audits itself with the same one).
 
         // SessionPolicy direct coverage (SessionPolicy::from_config maps these 1:1).
         // Note: AppConfig field is `llm_model`, SessionPolicy field is `llm_api_model`.
         let direct_snapshot: &[&str] = &["llm_enabled", "language", "llm_api_url", "llm_model"];
 
         // Indirect coverage via SaveConfig::from_app_config. `language` is also
-        // in SaveConfig but already in direct_snapshot; HashSet dedupes.
+        // in SaveConfig but already in direct_snapshot.
         let save_config_covered: &[&str] =
             &["data_saving_enabled", "data_saving_path", "whisper_model"];
 
         // Indirect coverage via pipeline_mode() folded into SessionPolicy.mode.
         let mode_covered: &[&str] = &["realtime_transcription", "review_before_paste"];
 
-        let mut covered: HashSet<&str> = HashSet::new();
+        let mut covered: Vec<&str> = Vec::new();
         covered.extend(direct_snapshot.iter().copied());
         covered.extend(save_config_covered.iter().copied());
         covered.extend(mode_covered.iter().copied());
-        covered.extend(KNOWN_UNSNAPSHOTED_FIELDS.iter().copied());
 
-        for field in all_fields {
-            assert!(
-                covered.contains(field),
-                "AppConfig field '{field}' not covered by SessionPolicy or KNOWN_UNSNAPSHOTED_FIELDS \
-                 — add it to SessionPolicy::from_config for snapshot, or to \
-                 KNOWN_UNSNAPSHOTED_FIELDS for documented exclusion"
-            );
-        }
+        crate::tests::policy_audit::assert_policy_covers_all_appconfig_fields(
+            "SessionPolicy",
+            &covered,
+            KNOWN_UNSNAPSHOTED_FIELDS,
+        );
     }
 }
 
