@@ -46,7 +46,7 @@ fn build_ps_with_clipboard_and_review(
         clipboard,
         Arc::new(PerfHistory::new()),
         ConfigCache::new(AppConfig::default()),
-        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
+        Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("corrected"))))),
         Arc::new(Mutex::new(None)),
         Arc::new(NoopWindowController),
         emitter.clone(),

@@ -81,7 +81,7 @@ fn build_rig_full(
         clipboard.clone(),
         Arc::new(crate::perf::PerfHistory::new()),
         crate::config::ConfigCache::new(cfg),
-        Arc::new(Mutex::new(Some(Box::new(corrector)))),
+        Arc::new(Mutex::new(Some(Arc::new(corrector)))),
         Arc::new(Mutex::new(None)),
         wc,
         emitter.clone(),
@@ -381,9 +381,7 @@ async fn run_pipeline_llm_failure_falls_back_to_raw_and_emits_summary() {
         .expect("llm-error must be emitted on failure");
     assert_eq!(
         llm_error,
-        serde_json::Value::String(
-            crate::commands::recording_session::LLM_ERROR_USER_MSG.to_string()
-        )
+        serde_json::Value::String(crate::llm::correction::LLM_FALLBACK_USER_MSG.to_string())
     );
     // Fallback path: raw transcription is still injected.
     assert!(names.contains(&"injection-complete".to_string()));

@@ -1,5 +1,7 @@
 pub mod prompt;
 
+pub(crate) mod correction;
+
 use crate::error::AppError;
 use crate::llm::prompt::build_correction_prompt;
 use serde::{Deserialize, Serialize};

@@ -561,15 +561,6 @@ fn run_llm_correction(
         "transcription-progress",
         serde_json::json!({"percent": 100, "stage": "llm"}),
     );
-    // Prefer the cached corrector when it matches the current config (tests
-    // inject a mock there); otherwise build a fresh client. The LLM API key
-    // stays in-process — never logged, never sent to the frontend.
-    //
-    // Lock protocol: the verb holds the slot lock for the duration of
-    // `correct_sync` (HTTP via block_in_place). Previously open-coded across
-    // this site + recording_session x2 — see PipelineState::with_cached_llm.
-    // `correct_sync` must stay INSIDE the closure so the cache invariant
-    // (no concurrent rebuild while a corrector is mid-HTTP) holds.
     if let Some(corrected) = ps
         .with_cached_llm(|c| {
             c.as_ref()
@@ -707,7 +698,7 @@ mod tests {
 
     fn build_ps(
         config: AppConfig,
-        corrector: Option<Box<dyn crate::llm::TextCorrector>>,
+        corrector: Option<Arc<dyn crate::llm::TextCorrector>>,
     ) -> (PipelineState, Arc<MockEmitter>, Arc<MockClipboard>) {
         let emitter = Arc::new(MockEmitter::new());
         let clipboard = Arc::new(MockClipboard::new());
@@ -1057,7 +1048,7 @@ mod tests {
         };
         let corrector =
             MockCorrector::new("纠正后的文本").with_config("http://llm.local", "k", "m");
-        let (ps, emitter, _) = build_ps(cfg, Some(Box::new(corrector)));
+        let (ps, emitter, _) = build_ps(cfg, Some(Arc::new(corrector)));
         let json_path = write_pending_json(&dir, "2026-08-18_10-00-02");
         let samples = vec![0.0f32; 16000];
 
@@ -1190,7 +1181,10 @@ mod tests {
         let llm_err = events.iter().find(|(n, _)| n == "transcription-error");
         assert!(llm_err.is_some());
         if let Some((_, payload)) = llm_err {
-            assert_eq!(payload["message"], "LLM 纠错失败，已保留原始转录");
+            assert_eq!(
+                payload["message"],
+                crate::llm::correction::LLM_FALLBACK_USER_MSG
+            );
         }
 
         let content = std::fs::read_to_string(&json_path);

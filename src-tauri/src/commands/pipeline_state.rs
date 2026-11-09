@@ -31,7 +31,7 @@ pub(crate) struct TestComponents {
     pub(crate) clipboard: Arc<dyn ClipboardProvider>,
     pub(crate) config_cache: ConfigCache,
     pub(crate) perf_history: Arc<crate::perf::PerfHistory>,
-    pub(crate) cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
+    pub(crate) cached_llm: Arc<Mutex<Option<Arc<dyn TextCorrector>>>>,
     pub(crate) realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
     pub(crate) window_controller: Arc<dyn WindowController>,
     pub(crate) emitter: Arc<dyn EventEmitter>,
@@ -82,7 +82,7 @@ pub struct PipelineState {
     clipboard: Arc<dyn ClipboardProvider>,
     perf_history: Arc<PerfHistory>,
     config_cache: ConfigCache,
-    cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
+    cached_llm: Arc<Mutex<Option<Arc<dyn TextCorrector>>>>,
     realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
     window_controller: Arc<dyn WindowController>,
     emitter: Arc<dyn EventEmitter>,
@@ -116,7 +116,7 @@ impl PipelineState {
         clipboard: Arc<dyn ClipboardProvider>,
         perf_history: Arc<PerfHistory>,
         config_cache: ConfigCache,
-        cached_llm: Arc<Mutex<Option<Box<dyn TextCorrector>>>>,
+        cached_llm: Arc<Mutex<Option<Arc<dyn TextCorrector>>>>,
         realtime_transcriber: Arc<Mutex<Option<RealtimeTranscriber>>>,
         window_controller: Arc<dyn WindowController>,
         emitter: Arc<dyn EventEmitter>,
@@ -196,7 +196,7 @@ impl PipelineState {
             perf_history,
             config_cache: app.state::<ConfigCache>().inner().clone(),
             cached_llm: app
-                .state::<Arc<Mutex<Option<Box<dyn TextCorrector>>>>>()
+                .state::<Arc<Mutex<Option<Arc<dyn TextCorrector>>>>>()
                 .inner()
                 .clone(),
             realtime_transcriber: app
@@ -291,7 +291,7 @@ impl PipelineState {
     /// inside the closure, matching the prior open-coded pattern.
     pub(crate) fn with_cached_llm<R>(
         &self,
-        f: impl FnOnce(&mut Option<Box<dyn TextCorrector>>) -> R,
+        f: impl FnOnce(&mut Option<Arc<dyn TextCorrector>>) -> R,
     ) -> Option<R> {
         crate::util::lock_mutex(&self.cached_llm, "cached_llm").map(|mut guard| f(&mut guard))
     }
@@ -743,7 +743,7 @@ mod sm_verb_tests {
             Arc::new(MockClipboard::new()),
             Arc::new(PerfHistory::new()),
             ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
+            Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("corrected"))))),
             Arc::new(Mutex::new(None)),
             Arc::new(NoopWindowController),
             emitter,
@@ -1103,7 +1103,7 @@ mod sm_verb_tests {
         );
         // The verb can also mutate the slot (seed for downstream tests).
         ps_empty.with_cached_llm(|c| {
-            *c = Some(Box::new(MockCorrector::new("seeded")));
+            *c = Some(Arc::new(MockCorrector::new("seeded")));
         });
         assert_eq!(
             ps_empty.with_cached_llm(|c| c.is_some()),

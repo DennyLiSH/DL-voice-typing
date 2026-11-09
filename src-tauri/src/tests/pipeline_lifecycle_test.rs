@@ -28,7 +28,7 @@ fn build_ps() -> PipelineState {
         clipboard,
         Arc::new(PerfHistory::new()),
         crate::config::ConfigCache::new(AppConfig::default()),
-        Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("corrected"))))),
+        Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("corrected"))))),
         Arc::new(Mutex::new(None)),
         Arc::new(NoopWindowController),
         emitter,

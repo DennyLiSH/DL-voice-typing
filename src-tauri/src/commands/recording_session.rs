@@ -14,7 +14,6 @@ use crate::audio::{TARGET_SAMPLE_RATE, resample, rms};
 use crate::config::{AppConfig, Language, PipelineMode};
 use crate::data_saving::{SaveConfig, SaveResult};
 use crate::error::AppError;
-use crate::llm::LLMClient;
 use crate::perf::PerfMetrics;
 use std::future::Future;
 use std::pin::Pin;
@@ -23,14 +22,6 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use super::pipeline_state::{CancelGuard, PipelineState};
-
-/// User-facing payload for the `llm-error` event. The floating window is
-/// 160x60px of text space — it gets this fixed Chinese summary while the
-/// redacted English detail goes to the tracing log (see `resolve_llm_text`).
-/// Wording matches transcribe_cmd's `transcription-error` message; payload
-/// shape differs (bare string vs `{"message": …}`) because the consumers
-/// differ (floating window vs transcribe window).
-pub(crate) const LLM_ERROR_USER_MSG: &str = "LLM 纠错失败，已保留原始转录";
 
 /// User-facing payload for the `speech-error` not-ready branch, routed by
 /// model-file presence. Pure function so the routing is testable without
@@ -701,59 +692,17 @@ async fn transcribe_and_save(
     (save_result, transcription)
 }
 
-/// Ensure the cached corrector matches the given config, replacing it if mismatched.
-/// Returns `Ok(true)` when the cache was rebuilt, `Ok(false)` when the existing
-/// corrector was kept. Returns Err only on lock poisoning. HTTP calls happen
-/// later in `resolve_llm_text`.
-///
-/// Boundary: `live_api_key` must stay read inside `resolve_llm_text` and be
-/// passed in here as a parameter — do NOT move the read into this helper.
-/// Rationale: preserve the "key rotation live-read per call" contract (see
-/// SessionPolicy doc) so a rotated key takes effect on the next call without
-/// invalidating the rest of the session policy snapshot.
-///
-/// Security note: the DPAPI boundary is unchanged — the key is decrypted from
-/// ConfigCache per call and held as a plaintext String inside LLMClient;
-/// Box<dyn TextCorrector> adds no new exposure surface.
-///
-/// Lock protocol: acquired twice via the `with_cached_llm` verb — once to
-/// check the predicate, once to write the new client. The two-phase lock
-/// is acceptable here because the only concurrent writers are LLM paths
-/// themselves (resolve_llm_text, transcribe_cmd::maybe_run_llm_correction)
-/// and each enters this helper single-threaded; interleaving two callers
-/// both rebuilding simultaneously is benign (last writer wins, identical
-/// client). Collapsing into one lock window would extend lock duration to
-/// include the `LLMClient::new` reqwest build (cheap, but unnecessary).
-fn refresh_cached_llm(
-    ps: &PipelineState,
-    api_url: &str,
-    api_key: &str,
-    model: &str,
-) -> Result<bool, AppError> {
-    let needs_new = ps
-        .with_cached_llm(|c| {
-            c.as_ref()
-                .is_none_or(|x| !x.matches_config(api_url, api_key, model))
-        })
-        .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
-    if needs_new {
-        ps.with_cached_llm(|c| {
-            *c = Some(Box::new(LLMClient::new(
-                api_url.to_string(),
-                api_key.to_string(),
-                model.to_string(),
-            )))
-        })
-        .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
-    }
-    Ok(needs_new)
-}
-
 /// Resolve LLM-corrected text. Handles cache lookup, client creation, and fallback.
 ///
 /// API key is read live from `ConfigCache` (not snapshotted in `policy`) so a
 /// rotated key takes effect on the next call without invalidating the rest of
 /// the session policy.
+///
+/// The corrector resolution + correction + fallback all live in
+/// `llm::correction` (shared with the transcribe window) — this function
+/// owns only the classic-specific parts: the state transition, the perf
+/// measurement and the `llm-refining` / `llm-complete` / `llm-error`
+/// events.
 async fn resolve_llm_text(
     ps: &PipelineState,
     policy: &SessionPolicy,
@@ -768,51 +717,41 @@ async fn resolve_llm_text(
     // Live-read API key per call (rotation-friendly; not in snapshot).
     let live_api_key = ps.config_cache().read_cached().llm_api_key.clone();
 
-    // Ensure the cached corrector matches config, creating a new one if needed.
-    // live_api_key is still read live per call (line above) so a rotated key
-    // forces a rebuild — see refresh_cached_llm doc for the boundary contract.
-    refresh_cached_llm(
-        ps,
-        &policy.llm_api_url,
-        &live_api_key,
-        &policy.llm_api_model,
-    )?;
-
-    // Call correct_sync while holding the cached_llm lock (holds lock for HTTP duration).
-    // The verb collapses what was previously a lock-protocol copy-pasted at 3 sites
-    // (recording_session x2, transcribe_cmd x1) into a single owner-method — see
-    // PipelineState::with_cached_llm.
-    let result = ps
-        .with_cached_llm(|c| {
-            c.as_ref()
-                .ok_or_else(|| AppError::Llm("no LLM corrector available".to_string()))?
-                .correct_sync(transcription)
+    // Resolve the corrector and run the correction inside ONE slot-lock
+    // window: the lock is held for the duration of the HTTP call (the
+    // pre-existing "HTTP inside the lock" invariant), so no corrector can
+    // be rebuilt while this one is mid-request.
+    //
+    // `with_cached_llm` returns None when the slot lock is poisoned — the
+    // same condition that made the previous `refresh_cached_llm` return
+    // Err, and the caller (`refine_and_deliver`) falls back to the raw
+    // transcription in both cases.
+    let outcome = ps
+        .with_cached_llm(|slot| {
+            let corrector = crate::llm::correction::resolve_corrector(
+                slot,
+                &policy.llm_api_url,
+                &live_api_key,
+                &policy.llm_api_model,
+            );
+            crate::llm::correction::correct_with_fallback(&corrector, transcription, &live_api_key)
         })
         .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
 
     perf.llm_correction_ms = Some(t_llm.elapsed().as_millis() as u64);
 
-    match result {
-        Ok(corrected) => {
-            ps.emitter().emit(
-                "llm-complete",
-                serde_json::to_value(&corrected).unwrap_or_default(),
-            );
-            Ok(corrected)
-        }
-        Err(e) => {
-            warn!(
-                target: "llm",
-                "LLM correction failed, using raw transcription: {}",
-                crate::llm::redact_error_detail(&e.to_string(), &live_api_key)
-            );
-            ps.emitter().emit(
-                "llm-error",
-                serde_json::to_value(LLM_ERROR_USER_MSG).unwrap_or_default(),
-            );
-            Ok(transcription.to_string())
-        }
+    if outcome.used_llm {
+        ps.emitter().emit(
+            "llm-complete",
+            serde_json::to_value(&outcome.text).unwrap_or_default(),
+        );
+    } else {
+        ps.emitter().emit(
+            "llm-error",
+            serde_json::to_value(crate::llm::correction::LLM_FALLBACK_USER_MSG).unwrap_or_default(),
+        );
     }
+    Ok(outcome.text)
 }
 
 /// Where the delivery's data-saving result comes from. Classic resolves
@@ -1088,137 +1027,6 @@ mod tests_session_policy {
 }
 
 #[cfg(test)]
-mod tests_refresh_cached_llm {
-    use super::*;
-    use crate::audio::MockAudioCapture;
-    use crate::clipboard::MockClipboard;
-    use crate::commands::MockEmitter;
-    use crate::commands::review_provider::MockReviewProvider;
-    use crate::commands::window_controller::NoopWindowController;
-    use crate::config::{AppConfig, ConfigCache};
-    use crate::llm::MockCorrector;
-    use crate::perf::PerfHistory;
-    use crate::speech::mock::MockEngine;
-    use crate::state::StateMachine;
-
-    /// Build a fresh PipelineState with an empty cached_llm slot, then seed
-    /// it with the supplied config so `refresh_cached_llm` sees the same
-    /// starting state as the old raw-Mutex test did. Mirrors `build_test_ps`
-    /// in pipeline_state.rs::sm_verb_tests but is local to keep test
-    /// independence.
-    fn make_ps_with_cached(url: &str, key: &str, model: &str) -> PipelineState {
-        let emitter: Arc<dyn crate::commands::EventEmitter> = Arc::new(MockEmitter::new());
-        let ps = PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            emitter,
-            Arc::new(MockReviewProvider::new()),
-        );
-        ps.with_cached_llm(|c| {
-            *c = Some(Box::new(
-                MockCorrector::new("ok").with_config(url, key, model),
-            ))
-        });
-        ps
-    }
-
-    fn make_ps_empty() -> PipelineState {
-        let emitter: Arc<dyn crate::commands::EventEmitter> = Arc::new(MockEmitter::new());
-        PipelineState::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(Mutex::new(MockAudioCapture::new())),
-            Arc::new(MockEngine::new("test")),
-            Arc::new(MockClipboard::new()),
-            Arc::new(PerfHistory::new()),
-            ConfigCache::new(AppConfig::default()),
-            Arc::new(Mutex::new(None)),
-            Arc::new(Mutex::new(None)),
-            Arc::new(NoopWindowController),
-            emitter,
-            Arc::new(MockReviewProvider::new()),
-        )
-    }
-
-    /// Refresh and return the rebuilt flag, panicking on unexpected Err.
-    fn refresh(ps: &PipelineState, url: &str, key: &str, model: &str) -> bool {
-        refresh_cached_llm(ps, url, key, model)
-            .unwrap_or_else(|e| panic!("refresh_cached_llm should succeed in this test: {e}"))
-    }
-
-    #[test]
-    fn skips_rebuild_when_config_matches() {
-        // CRITICAL: this is the safety net for the `!c.matches_config(...)`
-        // inversion in refresh_cached_llm — a missing `!` would silently
-        // force a rebuild whenever config matches, breaking the cache. The
-        // test must stay green after the with_cached_llm migration.
-        let ps = make_ps_with_cached("u", "k", "m");
-        assert!(!refresh(&ps, "u", "k", "m"), "expected no rebuild");
-    }
-
-    #[test]
-    fn rebuilds_when_api_url_differs() {
-        let ps = make_ps_with_cached("u1", "k", "m");
-        assert!(refresh(&ps, "u2", "k", "m"), "expected rebuild");
-    }
-
-    #[test]
-    fn rebuilds_when_api_key_differs() {
-        // Validates the live-key rotation property: a rotated key forces rebuild
-        // even though policy (url+model) is unchanged.
-        let ps = make_ps_with_cached("u", "k1", "m");
-        assert!(
-            refresh(&ps, "u", "k2", "m"),
-            "expected rebuild on key rotation"
-        );
-    }
-
-    #[test]
-    fn rebuilds_when_model_differs() {
-        let ps = make_ps_with_cached("u", "k", "m1");
-        assert!(refresh(&ps, "u", "k", "m2"), "expected rebuild");
-    }
-
-    #[test]
-    fn rebuilds_when_cache_empty() {
-        let ps = make_ps_empty();
-        assert!(
-            refresh(&ps, "u", "k", "m"),
-            "expected rebuild on first insertion"
-        );
-    }
-
-    #[test]
-    fn returns_err_when_mutex_poisoned() {
-        // Covers the lock-poisoned error path — without this, only the Ok branch
-        // of refresh_cached_llm would be exercised by the suite. We poison the
-        // underlying Mutex directly via the slot — the verb path inherits the
-        // poison and surfaces None → Err.
-        let ps = make_ps_empty();
-        // PipelineState holds trait-object Arcs (ReviewProvider, EventEmitter)
-        // which are not RefUnwindSafe — wrap in AssertUnwindSafe, same idiom
-        // as cancel_guard_drop_drains_token_slot_on_panic_unwind.
-        let ps_ptr: *const PipelineState = &ps;
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let ps_ref: &PipelineState = unsafe { &*ps_ptr };
-            let slot = ps_ref.test_components().cached_llm.clone();
-            let _g = slot
-                .lock()
-                .unwrap_or_else(|_| panic!("initial lock should succeed"));
-            panic!("intentional poison");
-        }));
-        let result = refresh_cached_llm(&ps, "u", "k", "m");
-        assert!(result.is_err(), "poisoned mutex must surface as Err");
-    }
-}
-
-#[cfg(test)]
 mod tests_normalize_chinese_punctuation {
     use super::*;
 
@@ -1285,5 +1093,69 @@ mod tests_normalize_chinese_punctuation {
             None => panic!("preprocess_audio should return Some for loud audio"),
         };
         assert!(resampled.len() < 4800);
+    }
+}
+
+#[cfg(test)]
+mod tests_resolve_llm_text {
+    use super::*;
+    use crate::audio::MockAudioCapture;
+    use crate::clipboard::MockClipboard;
+    use crate::commands::MockEmitter;
+    use crate::commands::review_provider::MockReviewProvider;
+    use crate::commands::window_controller::NoopWindowController;
+    use crate::config::{AppConfig, ConfigCache};
+    use crate::perf::PerfHistory;
+    use crate::speech::mock::MockEngine;
+    use crate::state::StateMachine;
+
+    fn make_ps() -> PipelineState {
+        let emitter: Arc<dyn crate::commands::EventEmitter> = Arc::new(MockEmitter::new());
+        PipelineState::new(
+            Arc::new(Mutex::new(StateMachine::new())),
+            Arc::new(Mutex::new(MockAudioCapture::new())),
+            Arc::new(MockEngine::new("test")),
+            Arc::new(MockClipboard::new()),
+            Arc::new(PerfHistory::new()),
+            ConfigCache::new(AppConfig::default()),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(NoopWindowController),
+            emitter,
+            Arc::new(MockReviewProvider::new()),
+        )
+    }
+
+    /// A poisoned `cached_llm` slot must surface as an error, not as a
+    /// silent "no corrector" — the caller (`refine_and_deliver`) falls
+    /// back to the raw transcription on an error.
+    ///
+    /// This covers the lock-poison branch that the removed
+    /// `refresh_cached_llm` test used to guard: the slot lock is now
+    /// taken once (resolve + correct in one window), so the poisoned
+    /// case has to be pinned at the new call site.
+    #[tokio::test]
+    async fn returns_err_when_cached_llm_slot_lock_is_poisoned() {
+        let ps = make_ps();
+        // PipelineState holds trait-object Arcs (ReviewProvider, EventEmitter)
+        // which are not RefUnwindSafe — wrap in AssertUnwindSafe, same idiom
+        // as the cancel-guard unwind test.
+        let ps_ptr: *const PipelineState = &ps;
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let ps_ref: &PipelineState = unsafe { &*ps_ptr };
+            let slot = ps_ref.test_components().cached_llm.clone();
+            let _g = slot
+                .lock()
+                .unwrap_or_else(|_| panic!("initial lock should succeed"));
+            panic!("intentional poison");
+        }));
+
+        let policy = SessionPolicy::from_config(&AppConfig::default());
+        let mut perf = PerfMetrics::new(0);
+        let result = resolve_llm_text(&ps, &policy, "raw transcription", &mut perf).await;
+        assert!(
+            result.is_err(),
+            "a poisoned slot lock must surface as Err so the caller falls back to the raw transcription"
+        );
     }
 }

@@ -524,7 +524,7 @@ mod tests {
             Arc::new(MockClipboard::new()),
             Arc::new(PerfHistory::new()),
             ConfigCache::new(config),
-            Arc::new(Mutex::new(Some(Box::new(MockCorrector::new("x"))))),
+            Arc::new(Mutex::new(Some(Arc::new(MockCorrector::new("x"))))),
             Arc::new(Mutex::new(None)),
             wc,
             emitter.clone() as Arc<dyn EventEmitter>,
