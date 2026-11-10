@@ -56,6 +56,30 @@ impl DeliveryContext {
     }
 }
 
+/// Build the review context payload.
+///
+/// The `llm_text` rule — "the LLM output is persisted only when the LLM
+/// actually ran" — used to be spelled out at each of the three sites
+/// that build a `ReviewData`. Changing the persisted shape meant three
+/// edits, and a missed one compiled fine (the rule had no name and no
+/// guard).
+fn build_review_data(
+    save_result: &Option<SaveResult>,
+    raw_transcription: &str,
+    llm_text: &str,
+    llm_enabled: bool,
+) -> Option<ReviewData> {
+    save_result.as_ref().map(|sr| ReviewData {
+        json_path: sr.json_path.clone(),
+        raw_transcription: raw_transcription.to_string(),
+        llm_text: if llm_enabled {
+            Some(llm_text.to_string())
+        } else {
+            None
+        },
+    })
+}
+
 /// Single authority for the post-transcription delivery lifecycle.
 ///
 /// Owns clipboard ordering, focus restoration, window visibility, state
@@ -311,15 +335,12 @@ impl DeliveryController {
                 final_text.len()
             );
 
-            let review_data = save_result.map(|sr| ReviewData {
-                json_path: sr.json_path,
-                raw_transcription: transcription.clone(),
-                llm_text: if policy.llm_enabled {
-                    Some(final_text.clone())
-                } else {
-                    None
-                },
-            });
+            let review_data = build_review_data(
+                &save_result,
+                &transcription,
+                &final_text,
+                policy.llm_enabled,
+            );
             self.store_context(review_data, perf, press_timer);
             return;
         }
@@ -332,15 +353,12 @@ impl DeliveryController {
 
         if self.window_controller.show_review_near_caret() {
             debug!("show_review: window shown, review-show emitted");
-            let review_data = save_result.map(|sr| ReviewData {
-                json_path: sr.json_path,
-                raw_transcription: transcription.clone(),
-                llm_text: if policy.llm_enabled {
-                    Some(final_text.clone())
-                } else {
-                    None
-                },
-            });
+            let review_data = build_review_data(
+                &save_result,
+                &transcription,
+                &final_text,
+                policy.llm_enabled,
+            );
             self.store_context(review_data, perf, press_timer);
         } else {
             warn!("show_review: review window not found. Falling back to direct injection.");
@@ -596,15 +614,8 @@ impl DeliveryController {
             return;
         }
 
-        let review_data = save_result.map(|sr| ReviewData {
-            json_path: sr.json_path,
-            raw_transcription: transcription,
-            llm_text: if policy.llm_enabled {
-                Some(text.clone())
-            } else {
-                None
-            },
-        });
+        let review_data =
+            build_review_data(&save_result, &transcription, &text, policy.llm_enabled);
         self.store_context(review_data, perf.clone(), press_timer);
         let ctx = self.take_context();
         self.finish(
@@ -894,5 +905,40 @@ impl DeliveryController {
         self.window_controller.hide_floating();
         self.window_controller.hide_review();
         ps.review().set_shown_on_press(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn save_result() -> SaveResult {
+        SaveResult {
+            wav_path: PathBuf::from("/tmp/a.wav"),
+            json_path: PathBuf::from("/tmp/a.json"),
+        }
+    }
+
+    /// The rule the three former call sites each spelled out: the LLM
+    /// output is persisted only when the LLM actually ran.
+    #[test]
+    fn review_data_omits_the_llm_text_when_the_llm_did_not_run() {
+        let data = build_review_data(&Some(save_result()), "raw", "final", false);
+        let data = data.expect("a save result yields review data");
+        assert!(data.llm_text.is_none());
+        assert_eq!(data.raw_transcription, "raw");
+    }
+
+    #[test]
+    fn review_data_carries_the_llm_text_when_the_llm_ran() {
+        let data = build_review_data(&Some(save_result()), "raw", "final", true);
+        let data = data.expect("a save result yields review data");
+        assert_eq!(data.llm_text, Some("final".to_string()));
+    }
+
+    #[test]
+    fn review_data_is_none_without_a_save_result() {
+        assert!(build_review_data(&None, "raw", "final", true).is_none());
     }
 }
