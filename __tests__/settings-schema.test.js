@@ -119,6 +119,30 @@ describe('hotkey slot single source (HOTKEY_SLOTS)', () => {
         }
     });
 
+    it('settings-form.js derives its hotkey prefixes from HOTKEY_SLOTS', () => {
+        // The prefix loops used to hardcode the four slot prefixes. A
+        // fifth slot would have been known to the schema and the preview
+        // path while these loops silently skipped it.
+        const src = readFileSync(
+            new URL('../ui/settings-form.js', import.meta.url),
+            'utf8',
+        );
+        // A single prefix may still appear (the DOM_DEFS entry for the
+        // primary slot, one-off preview calls) — what must not come back
+        // is an ARRAY literal listing the slots.
+        const literals = src.match(/\[[^\]]*\]/g) ?? [];
+        for (const literal of literals) {
+            const listed = HOTKEY_SLOTS.filter((s) =>
+                literal.includes(`'${s.prefix}'`),
+            );
+            expect(
+                listed.length,
+                `settings-form.js must not list slot prefixes in an array literal: ${literal}`,
+            ).toBeLessThan(2);
+        }
+        expect(src).toContain('for (const { prefix } of HOTKEY_SLOTS)');
+    });
+
     it('optional set is exactly the two open-window slots', () => {
         expect(
             HOTKEY_SLOTS.filter((s) => s.optional).map((s) => s.key),

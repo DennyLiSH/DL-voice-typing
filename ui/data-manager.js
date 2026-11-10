@@ -472,103 +472,97 @@ function showUndoToast(result) {
     }
 }
 
-async function handleSingleDelete(filename) {
+/**
+ * The shared soft-delete orchestration.
+ *
+ * Both delete handlers ran the same sequence — confirm → soft-delete →
+ * undo toast → clear the audio/expanded/selection state → recompute the
+ * page → reload → partial-failure message. Only the COPY differed (the
+ * confirmation count, the failure prefixes and the partial-failure
+ * wording), and the copy is an audited artifact — it is passed in, not
+ * rewritten.
+ *
+ * @param {string[]} filenames - the recordings to delete
+ * @param {object} opts
+ * @param {number} opts.confirmCount - the count shown in the confirmation
+ * @param {string} opts.errorPrefix - the prefix of the failure message
+ * @param {(result: object, failedList: string) => string} opts.partialMessage
+ *   - the partial-failure copy
+ */
+async function softDeleteAndRefresh(
+    filenames,
+    { confirmCount, errorPrefix, partialMessage },
+) {
     const ok = await confirmDialog({
         title: '删除录音',
-        message: deleteConfirmMessage(1),
+        message: deleteConfirmMessage(confirmCount),
         danger: true,
     });
     if (!ok) return;
     try {
         // Soft-delete → 5-second undo window. The pending-toast replaces the
         // old hard-delete (which had no recourse once confirmed).
-        const result = await call('soft_delete_recordings', {
-            filenames: [filename],
-        });
-        showUndoToast(result);
-        // Clear audio state if it was this row (constraint #10a).
-        if (dataState.audioPlayerRowId === filename) {
-            releaseAudio();
-        }
-        dataState.selectedFiles.delete(filename);
-        if (dataState.expandedRowId === filename) {
-            dataState.expandedRowId = null;
-        }
-        // Auto-navigate to last valid page if current becomes empty (constraint #9).
-        const itemsOnPage = dataState.items.length;
-        if (itemsOnPage === 1 && dataState.offset > 0) {
-            const newOffset = computeOffsetAfterDeletion(
-                dataState.total,
-                1,
-                dataState.limit,
-                dataState.offset,
-            );
-            await loadRecordingsPage(newOffset);
-        } else {
-            await loadRecordingsPage(dataState.offset);
-        }
-        if (result.failed && result.failed.length > 0) {
-            const failedList = result.failed
-                .map((f) => `${f.filename}：${f.error}`)
-                .join('\n');
-            showDataError(`部分删除失败：\n${failedList}`);
-        }
-    } catch (e) {
-        showDataError(`删除失败：${errorMessage(e, '未知错误')}`);
-    }
-}
-
-async function handleBatchDelete() {
-    const count = dataState.selectedFiles.size;
-    if (count === 0) return;
-    const ok = await confirmDialog({
-        title: '删除录音',
-        message: deleteConfirmMessage(count),
-        danger: true,
-    });
-    if (!ok) return;
-    const filenames = Array.from(dataState.selectedFiles);
-    try {
         const result = await call('soft_delete_recordings', { filenames });
         showUndoToast(result);
-        dataState.selectedFiles.clear();
-        // Clear audio if it was a selected row.
+        // Clear audio state if it was one of the deleted rows (constraint #10a).
         if (
             dataState.audioPlayerRowId &&
             filenames.includes(dataState.audioPlayerRowId)
         ) {
             releaseAudio();
         }
+        // Drop the deleted rows from the selection.
+        filenames.forEach((name) => {
+            dataState.selectedFiles.delete(name);
+        });
         if (
             dataState.expandedRowId &&
             filenames.includes(dataState.expandedRowId)
         ) {
             dataState.expandedRowId = null;
         }
-        // Compute new offset using fresh total (constraint #9 + F6).
-        // `moved` is the count of stems that actually transitioned to
-        // pending; `filenames.length` is the user's selection (used for
-        // page math since the user no longer expects those rows to exist).
-        const deletedCount = filenames.length;
+        // Auto-navigate to the last valid page if the current becomes empty
+        // (constraint #9 + F6). `moved` is the count of stems that actually
+        // transitioned to pending; `filenames.length` is the user's selection
+        // (used for page math since the user no longer expects those rows to
+        // exist).
         const newOffset = computeOffsetAfterDeletion(
             dataState.total,
-            deletedCount,
+            filenames.length,
             dataState.limit,
             dataState.offset,
         );
         await loadRecordingsPage(newOffset);
-        // Show partial success message (constraint F3).
+        // Partial success message (constraint F3).
         if (result.failed && result.failed.length > 0) {
             const failedList = result.failed
                 .map((f) => `${f.filename}：${f.error}`)
                 .join('\n');
-            showDataError(
-                `已移动 ${result.moved} 条到待撤销，失败 ${result.failed.length} 条：\n${failedList}`,
-            );
+            showDataError(partialMessage(result, failedList));
         }
     } catch (e) {
-        showDataError(`批量删除失败：${errorMessage(e, '未知错误')}`);
+        showDataError(`${errorPrefix}${errorMessage(e, '未知错误')}`);
     }
+}
+
+async function handleSingleDelete(filename) {
+    await softDeleteAndRefresh([filename], {
+        confirmCount: 1,
+        errorPrefix: '删除失败：',
+        partialMessage: (_result, failedList) =>
+            `部分删除失败：\n${failedList}`,
+    });
+}
+
+async function handleBatchDelete() {
+    const count = dataState.selectedFiles.size;
+    if (count === 0) return;
+    await softDeleteAndRefresh(Array.from(dataState.selectedFiles), {
+        confirmCount: count,
+        errorPrefix: '批量删除失败：',
+        partialMessage: (result, failedList) =>
+            `已移动 ${result.moved} 条到待撤销，失败 ${result.failed.length} 条：\n${failedList}`,
+    });
 }
 
 /**

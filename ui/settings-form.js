@@ -499,12 +499,10 @@ modelInput.addEventListener('input', updateDirtyState);
 // of the two combos. The form fetches the spec via specFromUI(); any of
 // these 8 inputs being toggled must mark the form dirty AND refresh the
 // live preview label (spec: 预览文本 "Ctrl+Shift+A").
-for (const prefix of [
-    'hotkey',
-    'record-only-hotkey',
-    'open-settings-hotkey',
-    'open-transcribe-hotkey',
-]) {
+// The slot list is derived from SETTINGS_FIELDS (single source) — a
+// fifth slot would otherwise be missing from these loops while the
+// schema and the preview path already knew about it.
+for (const { prefix } of HOTKEY_SLOTS) {
     // Optional-chaining matches populateMainKeySelects' missing-element
     // tolerance: module-init must not crash when a host DOM lacks the
     // open-* controls (test fixtures, embedded reuse).
@@ -520,12 +518,7 @@ for (const prefix of [
 
 function onHotkeyComboChange() {
     updateDirtyState();
-    for (const prefix of [
-        'hotkey',
-        'record-only-hotkey',
-        'open-settings-hotkey',
-        'open-transcribe-hotkey',
-    ]) {
+    for (const { prefix } of HOTKEY_SLOTS) {
         updateHotkeyPreview(prefix);
     }
     updateHotkeyWarnings();
