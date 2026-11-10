@@ -1,5 +1,7 @@
 use crate::error::AppError;
-use crate::hotkey::{CancelEscCallback, HotkeyCallback, HotkeyEvent, HotkeyManager};
+use crate::hotkey::{
+    CancelEscCallback, HotkeyCallback, HotkeyEvent, HotkeyManager, SPEC_SLOTS, SlotKind,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -225,14 +227,11 @@ fn validate_no_conflict(
     self_slot: SlotKind,
 ) -> Result<(), AppError> {
     // M6-a conflict matrix: pairwise comparison across all spec slots. Any
-    // matching pair (ignoring self_slot) errors with the same backend msg
-    // shape that get_pair_conflict_msg produces for the frontend.
-    let slots: [SlotKind; 4] = [
-        SlotKind::Primary,
-        SlotKind::RecordOnly,
-        SlotKind::OpenSettings,
-        SlotKind::OpenTranscribe,
-    ];
+    // matching pair (ignoring self_slot) errors with the backend message
+    // shape the frontend sees.
+    //
+    // The slot list comes from `SPEC_SLOTS` (the single source shared with
+    // the config boundary) — only the spec lookup is local.
     let spec_of = |kind: SlotKind| -> Option<HotkeySpec> {
         match kind {
             SlotKind::Primary => hs.primary.as_ref().map(|(s, _)| *s),
@@ -241,7 +240,8 @@ fn validate_no_conflict(
             SlotKind::OpenTranscribe => hs.open_transcribe.as_ref().map(|(s, _)| *s),
         }
     };
-    for other in slots {
+    for slot in SPEC_SLOTS.iter() {
+        let other = slot.kind;
         if other == self_slot {
             continue;
         }
@@ -250,31 +250,11 @@ fn validate_no_conflict(
         {
             return Err(AppError::Hotkey(format!(
                 "hotkey already used by {} slot",
-                slot_label(other)
+                slot.hook_label
             )));
         }
     }
     Ok(())
-}
-
-fn slot_label(kind: SlotKind) -> &'static str {
-    match kind {
-        SlotKind::Primary => "primary",
-        SlotKind::RecordOnly => "record-only",
-        SlotKind::OpenSettings => "open-settings",
-        SlotKind::OpenTranscribe => "open-transcribe",
-    }
-}
-
-/// Identifies which of the four user-facing slots a `register*` call is
-/// filling. Used by `validate_no_conflict` to look only at the OTHER
-/// slots' specs, keeping the helper symmetric.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SlotKind {
-    Primary,
-    RecordOnly,
-    OpenSettings,
-    OpenTranscribe,
 }
 
 static HOOK_STATE: Mutex<Option<HookState>> = Mutex::new(None);

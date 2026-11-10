@@ -145,6 +145,62 @@ pub type HotkeyCallback = Box<dyn Fn(HotkeyEvent) + Send + Sync>;
 pub type CancelEscCallback = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// Hotkey event types.
+/// Which user-facing hotkey slot a registration fills.
+///
+/// The identity of a slot is shared knowledge: the config boundary
+/// (`config/schema.rs`) and the hook boundary (`hotkey/windows.rs`) both
+/// need to know the slot list, so it lives here — next to the
+/// descriptor table that names the slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotKind {
+    Primary,
+    RecordOnly,
+    OpenSettings,
+    OpenTranscribe,
+}
+
+/// One hotkey slot.
+pub(crate) struct SlotDescriptor {
+    /// Which slot this is.
+    pub kind: SlotKind,
+    /// The AppConfig field name — the config layer's identity for the
+    /// slot (used in its conflict message).
+    pub config_field: &'static str,
+    /// The label the hook layer uses in its conflict message.
+    pub hook_label: &'static str,
+}
+
+/// Every user-facing hotkey slot, in canonical order.
+///
+/// The config boundary and the hook boundary both derive their conflict
+/// matrix from this table: the slot list, its order and its labels
+/// therefore exist in exactly one place. The two matrices stay separate
+/// — they check different things (config fields vs registered slots) and
+/// their messages differ — but they no longer each carry their own copy
+/// of the slot list.
+pub(crate) const SPEC_SLOTS: [SlotDescriptor; 4] = [
+    SlotDescriptor {
+        kind: SlotKind::Primary,
+        config_field: "hotkey",
+        hook_label: "primary",
+    },
+    SlotDescriptor {
+        kind: SlotKind::RecordOnly,
+        config_field: "record_only_hotkey",
+        hook_label: "record-only",
+    },
+    SlotDescriptor {
+        kind: SlotKind::OpenSettings,
+        config_field: "open_settings_hotkey",
+        hook_label: "open-settings",
+    },
+    SlotDescriptor {
+        kind: SlotKind::OpenTranscribe,
+        config_field: "open_transcribe_hotkey",
+        hook_label: "open-transcribe",
+    },
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyEvent {
     /// Hotkey was pressed (start recording).

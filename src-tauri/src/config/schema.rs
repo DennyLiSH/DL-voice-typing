@@ -1,5 +1,6 @@
 use crate::error::AppError;
 use crate::hotkey::windows::HotkeySpec;
+use crate::hotkey::{SPEC_SLOTS, SlotKind};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -477,14 +478,23 @@ impl AppConfig {
                 "invalid record_only_hotkey: {key}"
             )));
         }
-        // Four spec slots must be pairwise distinct where set (M6-a matrix at
-        // the config boundary; the hook layer re-checks at register time).
-        let slots: [(&str, Option<HotkeySpec>); 4] = [
-            ("hotkey", Some(self.hotkey)),
-            ("record_only_hotkey", Some(self.record_only_hotkey)),
-            ("open_settings_hotkey", self.open_settings_hotkey),
-            ("open_transcribe_hotkey", self.open_transcribe_hotkey),
-        ];
+        // The spec slots must be pairwise distinct where set (M6-a matrix
+        // at the config boundary; the hook layer re-checks at register
+        // time). The slot list comes from `SPEC_SLOTS` — the single
+        // source shared with the hook boundary; only the spec lookup is
+        // local (the two layers check different things).
+        let slots: Vec<(&str, Option<HotkeySpec>)> = SPEC_SLOTS
+            .iter()
+            .map(|slot| {
+                let spec = match slot.kind {
+                    SlotKind::Primary => Some(self.hotkey),
+                    SlotKind::RecordOnly => Some(self.record_only_hotkey),
+                    SlotKind::OpenSettings => self.open_settings_hotkey,
+                    SlotKind::OpenTranscribe => self.open_transcribe_hotkey,
+                };
+                (slot.config_field, spec)
+            })
+            .collect();
         for i in 0..slots.len() {
             for j in (i + 1)..slots.len() {
                 if let (Some(a), Some(b)) = (slots[i].1, slots[j].1)
