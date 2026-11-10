@@ -1,6 +1,7 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog, isDialogOpen } from './lib/confirm-dialog.js';
+import { EVENTS } from './lib/events.js';
 import { bindFirstRunBanner, showIfRequested } from './lib/first-run-banner.js';
 import { isFormDirty } from './lib/form-state.js';
 import { populateMainKeySelects } from './lib/hotkeys.js';
@@ -214,7 +215,7 @@ window.addEventListener('beforeunload', (e) => {
 
 // --- Shared Tauri Event Listeners ---
 
-listen('hotkey-error', (event) => {
+listen(EVENTS.hotkeyError, (event) => {
     showError(event.payload);
 });
 

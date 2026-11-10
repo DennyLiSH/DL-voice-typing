@@ -26,6 +26,7 @@ import {
     buildStatusBadges,
     formatStemForDisplay,
 } from './lib/data-management.js';
+import { EVENTS } from './lib/events.js';
 import { createAudioSlot, createRovingList } from './lib/recording-list.js';
 import { loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
@@ -698,13 +699,13 @@ async function initModelSelect() {
 // popping a misleading toast. error/progress payloads carry no filename
 // (transcribe_cmd.rs), so the stem's presence is the ownership proof there.
 
-listen('transcription-progress', (event) => {
+listen(EVENTS.transcriptionProgress, (event) => {
     if (state.transcribingStem === null) return;
     const { percent, stage } = event.payload || {};
     setProgress(percent ?? 0, stage ?? 'whisper');
 });
 
-listen('transcription-done', (event) => {
+listen(EVENTS.transcriptionDone, (event) => {
     if (state.transcribingStem === null) return;
     if (event.payload?.filename !== state.transcribingStem) return;
     finishTranscriptionUI();
@@ -714,14 +715,14 @@ listen('transcription-done', (event) => {
     }
 });
 
-listen('transcription-cancelled', (event) => {
+listen(EVENTS.transcriptionCancelled, (event) => {
     if (state.transcribingStem === null) return;
     if (event.payload?.filename !== state.transcribingStem) return;
     finishTranscriptionUI();
     showToast('转录已取消');
 });
 
-listen('transcription-error', (event) => {
+listen(EVENTS.transcriptionError, (event) => {
     if (state.transcribingStem === null) return;
     finishTranscriptionUI();
     const msg = event.payload?.message;
@@ -729,6 +730,6 @@ listen('transcription-error', (event) => {
 });
 
 // A new record-only recording landed while the window is open.
-listen('record-only-finished', () => {
+listen(EVENTS.recordOnlyFinished, () => {
     loadList();
 });

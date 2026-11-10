@@ -1,3 +1,5 @@
+import { EVENTS, subscribe } from './events.js';
+
 /**
  * Undo toast for soft-deleted recordings.
  *
@@ -38,7 +40,9 @@ let movedCount = 0;
 let finalized = false;
 let onUndoRef = null;
 let currentBatchId = null;
-let unlistenFinalize = null;
+// The subscribe handle (idempotent unlisten) — the adapter owns the
+// "await the Promise<UnlistenFn> before removing the listener" detail.
+let finalizeHandle = null;
 
 const TICK_MS = 1000;
 const DISMISS_MS = 2000;
@@ -126,10 +130,8 @@ export function destroyPendingToast() {
  * stored and awaited at unbind time.
  */
 export function bindFinalizeListener() {
-    if (unlistenFinalize) return;
-    const listen = window.__TAURI__?.event?.listen;
-    if (!listen) return;
-    unlistenFinalize = listen('pending-deletes-finalized', (e) => {
+    if (finalizeHandle) return;
+    finalizeHandle = subscribe(EVENTS.pendingDeletesFinalized, (e) => {
         const id = e?.payload?.id;
         if (toastEl && id != null && id === currentBatchId) {
             enterFinalized();
@@ -142,15 +144,9 @@ export function bindFinalizeListener() {
  * Safe to call when nothing is bound (no-op).
  */
 export async function unbindFinalizeListener() {
-    if (unlistenFinalize) {
-        try {
-            const unlisten = await unlistenFinalize;
-            if (typeof unlisten === 'function') unlisten();
-        } catch (_e) {
-            // Window already gone — listen()'s promise may reject on teardown.
-        }
-        unlistenFinalize = null;
-    }
+    if (!finalizeHandle) return;
+    await finalizeHandle.unlisten();
+    finalizeHandle = null;
 }
 
 function tick() {

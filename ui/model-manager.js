@@ -1,5 +1,6 @@
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
+import { EVENTS } from './lib/events.js';
 import { hideIfVisible } from './lib/first-run-banner.js';
 import { notifyFormChange } from './lib/form-state.js';
 import { modelActionView } from './lib/model-view.js';
@@ -187,7 +188,7 @@ async function cancelDownload() {
 }
 
 // Listen for download progress events
-listen('download-progress', (event) => {
+listen(EVENTS.downloadProgress, (event) => {
     const { size, percent } = event.payload;
     if (size !== activeDownload) return;
 
@@ -197,7 +198,7 @@ listen('download-progress', (event) => {
 });
 
 // Listen for background model loading completion
-listen('model-loaded', () => {
+listen(EVENTS.modelLoaded, () => {
     loadComputeMode();
 });
 
