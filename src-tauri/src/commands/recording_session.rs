@@ -18,7 +18,6 @@ use crate::perf::{PerfMetrics, PerfTimer, ms_of};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 use super::pipeline_state::{CancelGuard, PipelineState};
@@ -235,30 +234,25 @@ impl RecordingSession {
             self.ps.clear_ring();
 
             // Start audio capture with RMS-emitting callback (~30 fps).
-            let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
             if let Some(mut ac_guard) =
                 crate::util::lock_mutex(&self.ps.audio_capture(), "audio_capture")
             {
                 let ring_buf_for_audio = self.ps.ring_buffer();
                 let emitter_for_rms = self.ps.emitter();
-                let last_rms_for_cb = Arc::clone(&last_rms_emit);
+                let rms_sink = Arc::new(move |rms_val: f32| {
+                    emitter_for_rms.emit(
+                        "audio-rms",
+                        serde_json::to_value(rms_val).unwrap_or_default(),
+                    );
+                });
+                let on_rms = crate::audio::throttled_rms_callback(33, rms_sink);
                 let start_result = ac_guard.start(Box::new(move |data: &[f32]| {
                     if let Some(mut buf) =
                         crate::util::lock_mutex(&ring_buf_for_audio, "audio_ring_buffer")
                     {
                         buf.push(data);
                     }
-                    let rms_val = rms::calculate_rms(data);
-                    if let Some(mut last) =
-                        crate::util::lock_mutex(&last_rms_for_cb, "last_rms_emit")
-                        && last.elapsed() >= Duration::from_millis(33)
-                    {
-                        *last = Instant::now();
-                        emitter_for_rms.emit(
-                            "audio-rms",
-                            serde_json::to_value(rms_val).unwrap_or_default(),
-                        );
-                    }
+                    on_rms(data);
                 }));
 
                 if let Err(e) = start_result {

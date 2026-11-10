@@ -7,7 +7,7 @@
 //! backpressure monitor, the watchdog, and the tray reset, so timeout and
 //! error mapping live in exactly one place.
 
-use crate::audio::{AudioCallback, TARGET_SAMPLE_RATE, rms};
+use crate::audio::{AudioCallback, TARGET_SAMPLE_RATE};
 use crate::commands::pipeline_state::PipelineState;
 use crate::config::{Language, WhisperModel};
 use crate::error::AppError;
@@ -375,25 +375,20 @@ impl RecordOnlySession {
         // mutually exclusive (atomic state gate), so the shared name cannot
         // collide.
         let emitter_for_rms = ps.emitter();
-        let last_rms_emit = Arc::new(Mutex::new(Instant::now()));
-        let last_rms_for_cb = Arc::clone(&last_rms_emit);
+        let rms_sink = Arc::new(move |rms_val: f32| {
+            emitter_for_rms.emit(
+                "audio-rms",
+                serde_json::to_value(rms_val).unwrap_or_default(),
+            );
+        });
+        let on_rms = crate::audio::throttled_rms_callback(RMS_EMIT_INTERVAL_MS, rms_sink);
         let on_data: AudioCallback = Box::new(move |data: &[f32]| {
             let handle = crate::util::lock_mutex(&cell_for_cb, "record_only_push")
                 .and_then(|g| g.as_ref().cloned());
             if let Some(handle) = handle {
                 handle.push(data);
             }
-            let rms_val = rms::calculate_rms(data);
-            if let Some(mut last) =
-                crate::util::lock_mutex(&last_rms_for_cb, "record_only_rms_emit")
-                && last.elapsed() >= Duration::from_millis(RMS_EMIT_INTERVAL_MS)
-            {
-                *last = Instant::now();
-                emitter_for_rms.emit(
-                    "audio-rms",
-                    serde_json::to_value(rms_val).unwrap_or_default(),
-                );
-            }
+            on_rms(data);
         });
 
         // Start capture first so the device sample rate is known before the

@@ -4,7 +4,38 @@ use crate::error::AppError;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::error;
+
+/// A cpal callback that emits the block's RMS level at most every
+/// `interval_ms`.
+///
+/// Both recording sessions emit the same `audio-rms` event from their
+/// audio callback, with the same shape — calculate the RMS, emit it at
+/// most every N milliseconds — but with different intervals (the
+/// classic pipeline 33ms, the record-only session 100ms) and different
+/// sinks for the audio itself. The shape used to be copied into both
+/// sessions, which meant a fix to the throttle had to be made twice.
+///
+/// The returned closure takes every audio block; the sink receives the
+/// RMS value, throttled. Storing the audio stays the caller's job (the
+/// two sessions store it in different places).
+pub(crate) fn throttled_rms_callback(
+    interval_ms: u64,
+    sink: Arc<dyn Fn(f32) + Send + Sync>,
+) -> impl Fn(&[f32]) + Send + Sync {
+    let last_emit = Arc::new(Mutex::new(Instant::now()));
+    move |data: &[f32]| {
+        let rms_val = rms::calculate_rms(data);
+        if let Some(mut last) = crate::util::lock_mutex(&last_emit, "rms_emit")
+            && last.elapsed() >= Duration::from_millis(interval_ms)
+        {
+            *last = Instant::now();
+            sink(rms_val);
+        }
+    }
+}
 
 /// Target sample rate for Whisper (16 kHz).
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
