@@ -7,14 +7,7 @@ import { isFormDirty } from './lib/form-state.js';
 import { populateMainKeySelects } from './lib/hotkeys.js';
 import { HOTKEY_SLOTS } from './lib/settings-schema.js';
 import { showError } from './lib/ui-utils.js';
-import {
-    loadComputeMode,
-    populateModelSelect,
-    setCustomModels,
-    setModelStatus,
-    setSelectedModel,
-    updateModelAction,
-} from './model-manager.js';
+import { initModels, loadComputeMode } from './model-manager.js';
 import {
     populateFields,
     setDirtyCheckEnabled,
@@ -235,11 +228,11 @@ export async function init() {
         showIfRequested();
         bindFirstRunBanner();
         setDirtyCheckEnabled(false);
-        setSelectedModel(config.whisper_model);
-        setModelStatus(modelsData.built_in);
-        setCustomModels(modelsData.custom);
-        populateModelSelect();
-        updateModelAction();
+        initModels({
+            selected: config.whisper_model,
+            builtInStatus: modelsData.built_in,
+            customModels: modelsData.custom,
+        });
         loadComputeMode();
         populateFields(config);
         updateDirtyState();

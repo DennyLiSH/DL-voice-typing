@@ -31,6 +31,14 @@ let activeDownload = null;
 // mirrored with src-tauri/src/config/schema.rs BUILT_IN_MODELS — drift
 // is pinned by __tests__/model-table-contract.test.js.
 
+/**
+ * Rebuild the model <select> from the module state.
+ *
+ * @param {boolean} converge - when false, the rebuild skips the
+ * convergence guard (the custom group may not be loaded yet). This is
+ * an internal detail of `initModels` / `setSelectedModel`; external
+ * callers want the default (converge).
+ */
 export function populateModelSelect(converge = true) {
     whisperModelSelect.innerHTML = '';
 
@@ -220,6 +228,26 @@ export function setSelectedModel(model) {
     // (app-shell init calls this before setCustomModels). Callers own the
     // final populate.
     populateModelSelect(false);
+}
+
+/**
+ * Initialize the model section from the loaded config + model list.
+ *
+ * The five-step sequence (selected model → status → custom models →
+ * populate → action button) is an ordering contract: the first step
+ * rebuilds the select without the custom group (it is not loaded yet),
+ * the last populate converges it. A caller that performs the steps in
+ * the wrong order ends up with a select that does not show the selected
+ * model — so the sequence lives here, not in the caller.
+ *
+ * @param {{selected: string, builtInStatus: object, customModels: Array}} models
+ */
+export function initModels({ selected, builtInStatus, customModels }) {
+    setSelectedModel(selected);
+    setModelStatus(builtInStatus);
+    setCustomModels(customModels);
+    populateModelSelect();
+    updateModelAction();
 }
 
 // The module variable is the single source of truth; the DOM select is a
