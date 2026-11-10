@@ -41,32 +41,29 @@ import {
     shouldAutoScroll,
     uiFlags,
 } from './lib/transcribe.js';
+import { createTranscribeController } from './lib/transcribe-controller.js';
 
 const { listen } = window.__TAURI__.event;
 
 const state = {
     items: [],
-    selected: null,
     segments: [],
     edits: new Map(),
-    // M1-a: user is editing the full merged text (segments locked).
-    // Lives here, NOT on document.body classList — the body is a render
-    // surface; state on it is invisible to readers and fragile to DOM
-    // resets.
-    mergedEditing: false,
     activeSegment: -1,
-    // In-flight operation phase (Axis A, mutually exclusive). Recording
-    // status and edits stay orthogonal axes rendered via uiFlags.
-    phase: PHASE.IDLE,
-    // Ownership token for transcription-* events: set when WE start a
-    // transcription, cleared when it ends. Events arriving with no local
-    // in-flight stem (e.g. window re-created mid-transcription) are ignored
-    // so stale events never reset buttons or pop misleading toasts.
-    transcribingStem: null,
     durationMs: 0,
     status: null,
     droppedBlocks: 0,
 };
+
+// The decision layer: the phase state machine, the transcription
+// ownership token, the merged-edit lock and the selection guard. The
+// rendering stays here — the controller only decides.
+const controller = createTranscribeController({
+    onRender: () => {
+        syncUI();
+        renderList();
+    },
+});
 
 const $ = (id) => document.getElementById(id);
 
@@ -120,12 +117,10 @@ async function loadList() {
         });
         state.items = filterRecordOnly(resp.items);
         // Rule 1: selection deleted elsewhere → clear it.
-        if (
-            state.selected &&
-            !state.items.some((it) => it.filename === state.selected)
-        ) {
+        const selected = controller.selectedStem();
+        if (selected && !state.items.some((it) => it.filename === selected)) {
             clearDetail();
-            state.selected = null;
+            controller.clearSelection();
         }
         if (errBar) errBar.hidden = true;
         // Cap hint is based on the PRE-filter length: the 200 limit is applied
@@ -163,12 +158,12 @@ function buildListRow(item) {
     row.className = 'rec-row';
     row.dataset.filename = item.filename;
     row.setAttribute('role', 'option');
-    const isSelected = item.filename === state.selected;
+    const isSelected = item.filename === controller.selectedStem();
     row.setAttribute('aria-selected', String(isSelected));
     if (isSelected) row.classList.add('selected');
     // Rule 2 + BC(C5)#1: any in-flight phase locks list switching (visual
     // symmetry with the selectRecording entry guard).
-    if (state.phase !== PHASE.IDLE) row.classList.add('disabled');
+    if (controller.phase() !== PHASE.IDLE) row.classList.add('disabled');
 
     const ts = document.createElement('span');
     ts.className = 'rec-row-ts';
@@ -202,6 +197,7 @@ function clearDetail() {
     if (empty) empty.hidden = true;
     state.segments = [];
     state.edits.clear();
+    controller.clearEdits();
     state.activeSegment = -1;
     state.durationMs = 0;
     state.status = null;
@@ -214,11 +210,11 @@ function clearDetail() {
 
 async function selectRecording(filename) {
     // Unified entry guard (BC(C5)#1): no switching while any op is in flight.
-    if (state.phase !== PHASE.IDLE) return;
-    if (state.selected === filename) return;
+    if (!controller.canSelect()) return;
+    if (controller.selectedStem() === filename) return;
     // Rule 1: full state reset on switch.
     clearDetail();
-    state.selected = filename;
+    controller.select(filename);
     renderList();
 
     const detail = $('detail');
@@ -237,18 +233,18 @@ async function selectRecording(filename) {
             // it calls attachAudio internally; on failure it rethrows so the
             // outer catch folds it into the existing toast path (no onFail).
             audioSlot.bind(audioEl(), filename, {
-                isStale: () => state.selected !== filename,
+                isStale: () => !controller.isSelected(filename),
             }),
         ]);
         // Stale guard: selection cleared/changed while loading.
-        if (state.selected !== filename) return;
+        if (!controller.isSelected(filename)) return;
         state.segments = Array.isArray(segs.segments) ? segs.segments : [];
         state.durationMs = segs.duration_ms || 0;
         state.status = segs.transcription_status || 'pending';
         state.droppedBlocks = segs.dropped_blocks || 0;
         renderDetail();
     } catch (e) {
-        if (state.selected !== filename) return;
+        if (!controller.isSelected(filename)) return;
         showToast(errorMessage(e, '加载录音失败'), true);
     } finally {
         // DR-1.2: phase reset covers every exit (success / stale ×2 / toast)
@@ -311,12 +307,13 @@ function buildSegmentRow(index, seg) {
     input.setAttribute('aria-label', `段落 ${index + 1}`);
     // M1-a: while the user is editing the full merged text, segment inputs
     // are disabled to prevent the merge from clobbering their edits.
-    if (state.mergedEditing) {
+    if (controller.isMergedEditing()) {
         input.disabled = true;
     }
     // Rule 5: edits feed the merged text only, never the segment.
     input.addEventListener('input', () => {
         state.edits.set(index, input.value);
+        controller.markEditsDirty();
         updateMerged();
     });
     row.appendChild(input);
@@ -363,7 +360,7 @@ function enterMergedEditMode() {
     // Lock segment edits to prevent segment changes from clobbering the
     // user's full-text edit (the mergeSegmentTexts call in updateMerged
     // would otherwise overwrite whatever they typed).
-    state.mergedEditing = true;
+    controller.enterMergedEdit();
     merged.focus();
 }
 
@@ -376,7 +373,7 @@ function exitMergedEditMode() {
     merged.classList.remove('editing');
     edit.hidden = false;
     done.hidden = true;
-    state.mergedEditing = false;
+    controller.exitMergedEdit();
     // final_text is captured from #merged.value at inject time; nothing
     // to persist here. Trigger syncUI in case button states depend on
     // emptiness (they do via mergedEmpty).
@@ -389,8 +386,8 @@ function exitMergedEditMode() {
 // phase means visually. Cheap; safe to call on every keystroke.
 function syncUI() {
     const flags = uiFlags({
-        phase: state.phase,
-        selected: state.selected,
+        phase: controller.phase(),
+        selected: controller.selectedStem(),
         status: state.status,
         mergedEmpty:
             mergeSegmentTexts(state.segments, state.edits).trim() === '',
@@ -417,22 +414,22 @@ function syncUI() {
     if (spinner) spinner.hidden = !flags.injectSpinnerVisible;
 }
 
-// Single transition point for the phase state machine. Phase changes are
-// rare events, so re-rendering the list (row .disabled ↔ listLocked) here
-// is acceptable and keeps the two in sync by construction.
+// Single transition point for the phase state machine. The controller
+// owns the transition table (illegal transitions are rejected); the
+// render happens through its `onRender` callback — phase changes are rare
+// events, so re-rendering the list (row .disabled ↔ listLocked) here is
+// acceptable and keeps the two in sync by construction.
 function setPhase(phase) {
-    state.phase = phase;
-    syncUI();
-    renderList();
+    return controller.setPhase(phase);
 }
 
 // --- Transcription ---------------------------------------------------------
 
 async function startTranscription() {
-    if (state.phase !== PHASE.IDLE || !state.selected) return;
+    if (controller.phase() !== PHASE.IDLE || !controller.selectedStem()) return;
     // Re-transcribing wipes the user's segment edits on completion
     // (reloadSelectedDetail re-reads stored segments) — confirm first.
-    if (state.edits.size > 0) {
+    if (controller.hasEdits()) {
         const ok = await confirmDialog({
             title: '重新转录',
             message: '重新转录将清除当前所有编辑，确定继续？',
@@ -442,20 +439,18 @@ async function startTranscription() {
         });
         if (!ok) return;
     }
-    state.transcribingStem = state.selected;
-    setPhase(PHASE.TRANSCRIBING);
+    controller.beginTranscription(controller.selectedStem());
     setProgress(0, 'whisper');
     try {
         await call('transcribe_recording', {
-            filename: state.selected,
+            filename: controller.selectedStem(),
             useLlm: Boolean($('chk-llm')?.checked),
             model: $('transcribe-model')?.value || null,
         });
         // Outcome arrives via transcription-* events.
     } catch (e) {
         // Stem cleared at the same site as the phase reset (DR-1.2).
-        state.transcribingStem = null;
-        setPhase(PHASE.IDLE);
+        controller.endTranscription();
         showToast(errorMessage(e, '转录启动失败'), true);
     }
 }
@@ -487,22 +482,23 @@ function setProgress(percent, stage) {
 
 function finishTranscriptionUI() {
     // Stem cleared at the same site as the phase reset (DR-1.2).
-    state.transcribingStem = null;
-    setPhase(PHASE.IDLE);
+    controller.endTranscription();
 }
 
 // Rule 8: after done, re-read stored segments (single source of truth).
 async function reloadSelectedDetail() {
-    if (!state.selected) return;
+    const selected = controller.selectedStem();
+    if (!selected) return;
     try {
         const segs = await call('get_recording_segments', {
-            filename: state.selected,
+            filename: selected,
         });
         state.segments = Array.isArray(segs.segments) ? segs.segments : [];
         state.durationMs = segs.duration_ms || 0;
         state.status = segs.transcription_status || 'pending';
         state.droppedBlocks = segs.dropped_blocks || 0;
         state.edits.clear();
+        controller.clearEdits();
         renderDetail();
     } catch (e) {
         reportError(e, 'reload_segments');
@@ -512,19 +508,20 @@ async function reloadSelectedDetail() {
 // --- Injection -------------------------------------------------------------
 
 async function injectText() {
-    if (state.phase !== PHASE.IDLE || !state.selected) return;
+    if (!controller.canInject()) return;
     // M1-a: when the user is editing the merged text, the textarea holds
     // their authoritative version; segments + edits may be stale relative
     // to it. Otherwise rebuild from segments (which respects per-segment
     // edits via the state.edits map).
-    const text = state.mergedEditing
-        ? ($('merged')?.value ?? '')
-        : mergeSegmentTexts(state.segments, state.edits);
+    const text = controller.textForInjection(
+        $('merged')?.value ?? '',
+        mergeSegmentTexts(state.segments, state.edits),
+    );
     if (text.trim() === '') return;
     setPhase(PHASE.INJECTING);
     try {
         await call('inject_transcript_text', {
-            filename: state.selected,
+            filename: controller.selectedStem(),
             text,
         });
         showToast('粘贴成功');
@@ -623,13 +620,13 @@ function wireEvents() {
         });
         // Roving keyboard model lives in the controller; we only tell it
         // what to do on activate. Phase-locked rows render with .disabled
-        // (renderList), which is exactly `state.phase !== PHASE.IDLE` —
+        // (renderList), which is exactly "the controller is not idle" —
         // the controller's onActivate gate is equivalent.
         listNav = createRovingList({
             container: list,
             rowSelector: '.rec-row',
             onActivate: (filename) => {
-                if (state.phase !== PHASE.IDLE) return;
+                if (!controller.canSelect()) return;
                 selectRecording(filename);
             },
         });
@@ -701,30 +698,28 @@ async function initModelSelect() {
 // (transcribe_cmd.rs), so the stem's presence is the ownership proof there.
 
 listen(EVENTS.transcriptionProgress, (event) => {
-    if (state.transcribingStem === null) return;
+    if (!controller.ownsEvent()) return;
     const { percent, stage } = event.payload || {};
     setProgress(percent ?? 0, stage ?? 'whisper');
 });
 
 listen(EVENTS.transcriptionDone, (event) => {
-    if (state.transcribingStem === null) return;
-    if (event.payload?.filename !== state.transcribingStem) return;
+    if (!controller.ownsEvent(event.payload?.filename)) return;
     finishTranscriptionUI();
     showToast('转录完成');
-    if (event.payload?.filename === state.selected) {
+    if (event.payload?.filename === controller.selectedStem()) {
         reloadSelectedDetail();
     }
 });
 
 listen(EVENTS.transcriptionCancelled, (event) => {
-    if (state.transcribingStem === null) return;
-    if (event.payload?.filename !== state.transcribingStem) return;
+    if (!controller.ownsEvent(event.payload?.filename)) return;
     finishTranscriptionUI();
     showToast('转录已取消');
 });
 
 listen(EVENTS.transcriptionError, (event) => {
-    if (state.transcribingStem === null) return;
+    if (!controller.ownsEvent()) return;
     finishTranscriptionUI();
     const msg = event.payload?.message;
     showToast(typeof msg === 'string' && msg ? msg : '转录失败', true);
