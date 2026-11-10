@@ -15,10 +15,11 @@ use crate::error::CommandError;
 use crate::llm::correction::CorrectionOutcome;
 use crate::recording_name::resolve_recording;
 use crate::speech::Segment;
+use crate::util::TakeOnceSlot;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tracing::{error, info, warn};
 
@@ -28,16 +29,16 @@ pub struct PendingTranscribe {
     /// Foreground HWND captured when the transcribe window opens. Taken by
     /// `inject_transcript_text` (success or failure) and cleared on window
     /// close — a second inject without reopening finds None and errors.
-    hwnd: Mutex<Option<isize>>,
-    /// Cancel token for the in-flight transcription; replaced per run.
-    cancel_token: Mutex<Option<Arc<AtomicBool>>>,
+    hwnd: TakeOnceSlot<isize>,
+    /// Cancel token for the in-flight transcription; claimed per run.
+    cancel_token: TakeOnceSlot<Arc<AtomicBool>>,
 }
 
 impl PendingTranscribe {
     pub fn new() -> Self {
         Self {
-            hwnd: Mutex::new(None),
-            cancel_token: Mutex::new(None),
+            hwnd: TakeOnceSlot::new("pt_hwnd"),
+            cancel_token: TakeOnceSlot::new("pt_cancel_token"),
         }
     }
 }
@@ -186,10 +187,7 @@ pub fn cancel_transcription(pt: tauri::State<'_, PendingTranscribe>) -> Result<(
 /// Testable core of `cancel_transcription`: set the in-flight token, or
 /// error when no transcription is running (shared with tests).
 fn cancel_in_flight(pt: &PendingTranscribe) -> Result<(), CommandError> {
-    let Some(guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token") else {
-        return Err(CommandError::lock("cancel token lock poisoned"));
-    };
-    match guard.as_ref() {
+    match pt.cancel_token.snapshot() {
         Some(token) => {
             token.store(true, Ordering::SeqCst);
             Ok(())
@@ -229,10 +227,7 @@ fn peek_inject_target(pt: &PendingTranscribe) -> Option<String> {
     // Copy the HWND out and drop the guard before any Win32 call — same
     // lock discipline as the inject path's take-then-call (GetWindowTextW
     // sends WM_GETTEXT and can block).
-    let hwnd: isize = {
-        let guard = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd")?;
-        *guard.as_ref()?
-    };
+    let hwnd: isize = pt.hwnd.snapshot()?;
     if crate::win32::is_window_valid(hwnd) {
         crate::win32::get_window_title(hwnd)
     } else {
@@ -260,7 +255,7 @@ pub async fn inject_transcript_text(
     // Validate the filename BEFORE consuming the take-once HWND.
     let base = recordings_base_dir(&ps)?;
     let json_path = resolve_recording(&base, &filename)?.json;
-    let hwnd = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd").and_then(|mut g| g.take());
+    let hwnd = pt.hwnd.take();
     let Some(hwnd) = hwnd else {
         return Err(CommandError::state(
             "目标窗口句柄已失效，请重新打开转录窗口",
@@ -303,17 +298,13 @@ pub(crate) fn open_window_impl<R: tauri::Runtime>(
     pt: &PendingTranscribe,
 ) -> Result<(), CommandError> {
     // Reject re-entry while a transcription is in flight.
-    if let Some(guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token")
-        && guard.is_some()
-    {
+    if pt.cancel_token.snapshot().is_some() {
         return Err(CommandError::state("转录进行中，请等待完成或取消"));
     }
     // Capture the target HWND BEFORE showing our window (which would steal
     // the foreground). Overwrites any stale handle from a previous session.
     let hwnd = crate::win32::get_foreground_hwnd();
-    if let Some(mut guard) = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd") {
-        *guard = Some(hwnd);
-    }
+    pt.hwnd.replace(hwnd);
     let win = app
         .get_webview_window("transcribe")
         .ok_or_else(|| CommandError::state("转录窗口未初始化"))?;
@@ -326,12 +317,8 @@ pub(crate) fn open_window_impl<R: tauri::Runtime>(
 /// Window closed: cancel any in-flight transcription, clear the HWND so
 /// later injects are rejected until the window is reopened.
 pub(crate) fn on_transcribe_window_closed(pt: &PendingTranscribe) {
-    if let Some(mut guard) = crate::util::lock_mutex(&pt.hwnd, "pt_hwnd") {
-        *guard = None;
-    }
-    if let Some(mut guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token")
-        && let Some(token) = guard.take()
-    {
+    pt.hwnd.clear();
+    if let Some(token) = pt.cancel_token.take() {
         token.store(true, Ordering::SeqCst);
     }
 }
@@ -342,22 +329,16 @@ pub(crate) fn on_transcribe_window_closed(pt: &PendingTranscribe) {
 
 /// Claim the in-flight slot, returning the fresh cancel token.
 fn begin_transcription(pt: &PendingTranscribe) -> Result<Arc<AtomicBool>, CommandError> {
-    let Some(mut guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token") else {
-        return Err(CommandError::lock("cancel token lock poisoned"));
-    };
-    if guard.is_some() {
+    let token = Arc::new(AtomicBool::new(false));
+    if !pt.cancel_token.claim(token.clone()) {
         return Err(CommandError::state("已有转录任务进行中，请等待完成或取消"));
     }
-    let token = Arc::new(AtomicBool::new(false));
-    *guard = Some(token.clone());
     Ok(token)
 }
 
 /// Release the in-flight slot (called after the task finishes for any reason).
 fn end_transcription(pt: &PendingTranscribe) {
-    if let Some(mut guard) = crate::util::lock_mutex(&pt.cancel_token, "pt_cancel_token") {
-        guard.take();
-    }
+    pt.cancel_token.clear();
 }
 
 /// RAII release for the in-flight slot: Drop runs on every exit path,
@@ -700,6 +681,7 @@ fn segments_from_metadata(metadata: &serde_json::Value) -> RecordingSegments {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     use crate::clipboard::MockClipboard;
     use crate::commands::record_only_session::RecordOnlySession;
@@ -830,11 +812,7 @@ mod tests {
         on_transcribe_window_closed(&pt);
         assert!(token.load(Ordering::Relaxed));
         // After close, cancel reports nothing in flight.
-        assert!(
-            crate::util::lock_mutex(&pt.cancel_token, "t")
-                .map(|g| g.is_none())
-                .unwrap_or(false)
-        );
+        assert!(pt.cancel_token.snapshot().is_none());
     }
 
     // --- fast-cancel race (P3 E2E fix): the in-flight slot must be claimed
@@ -891,9 +869,7 @@ mod tests {
         let mut claimed = false;
         for _ in 0..1000 {
             tokio::task::yield_now().await;
-            if let Some(g) = crate::util::lock_mutex(&pt.cancel_token, "t")
-                && g.is_some()
-            {
+            if pt.cancel_token.snapshot().is_some() {
                 claimed = true;
                 break;
             }
@@ -951,14 +927,9 @@ mod tests {
     #[test]
     fn test_window_close_clears_hwnd() {
         let pt = PendingTranscribe::new();
-        if let Some(mut g) = crate::util::lock_mutex(&pt.hwnd, "t") {
-            *g = Some(12345);
-        }
+        pt.hwnd.replace(12345);
         on_transcribe_window_closed(&pt);
-        let cleared = crate::util::lock_mutex(&pt.hwnd, "t")
-            .map(|g| g.is_none())
-            .unwrap_or(false);
-        assert!(cleared);
+        assert!(pt.hwnd.snapshot().is_none());
     }
 
     // --- run_transcription ---
@@ -1439,9 +1410,7 @@ mod tests {
     #[test]
     fn test_peek_inject_target_none_for_invalid_hwnd() {
         let pt = PendingTranscribe::new();
-        if let Some(mut g) = crate::util::lock_mutex(&pt.hwnd, "t") {
-            *g = Some(0);
-        }
+        pt.hwnd.replace(0);
         // HWND 0 is never a valid window.
         assert_eq!(peek_inject_target(&pt), None);
     }

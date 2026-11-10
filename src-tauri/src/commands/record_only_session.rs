@@ -78,9 +78,36 @@ pub(crate) fn set_mistouch_scheduler(f: MistouchScheduler) {
 }
 
 fn dispatch_mistouch(stem: &str, dir: &str) {
+    // The production scheduler is a process-wide OnceLock — a test cannot
+    // claim it (it would leak into every other test in the binary). The
+    // thread-local override lets one test observe the dispatch.
+    #[cfg(test)]
+    {
+        let test_scheduler = TEST_MISTOUCH_SCHEDULER.with(|slot| slot.borrow().clone());
+        if let Some(f) = test_scheduler {
+            f(stem, dir);
+            return;
+        }
+    }
     if let Some(f) = MISTOUCH_SCHEDULER.get() {
         f(stem, dir);
     }
+}
+
+// Test-only scheduler override (thread-local; the production scheduler is
+// a process-wide OnceLock that a test must not claim).
+#[cfg(test)]
+thread_local! {
+    static TEST_MISTOUCH_SCHEDULER: std::cell::RefCell<Option<MistouchScheduler>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Register the scheduler for the current test only.
+#[cfg(test)]
+pub(crate) fn set_test_mistouch_scheduler(f: MistouchScheduler) {
+    TEST_MISTOUCH_SCHEDULER.with(|slot| {
+        slot.borrow_mut().replace(f);
+    });
 }
 
 /// Session-level config snapshot taken at press time, so mid-session
@@ -517,6 +544,31 @@ impl RecordOnlySession {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mistouch_dispatch_reaches_the_registered_scheduler() {
+        // The destructive half of the mistouch discard (soft-delete +
+        // tray undo) runs through the registered scheduler — the event
+        // bus must NOT carry it (any webview could forge the payload and
+        // drive file deletion). The scheduler is a process-wide OnceLock
+        // in production; the thread-local seam lets a test observe the
+        // dispatch without claiming it for the whole test binary.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_for_cb = seen.clone();
+        set_test_mistouch_scheduler(Arc::new(move |stem, dir| {
+            seen_for_cb
+                .lock()
+                .unwrap_or_else(|_| panic!("seen lock should not be poisoned"))
+                .push((stem.to_string(), dir.to_string()));
+        }));
+        dispatch_mistouch("2026-11-10_10-00-00", "/tmp/data");
+        let seen = seen
+            .lock()
+            .unwrap_or_else(|_| panic!("seen lock should not be poisoned"));
+        assert_eq!(seen.len(), 1, "the scheduler must be invoked once");
+        assert_eq!(seen[0].0, "2026-11-10_10-00-00");
+        assert_eq!(seen[0].1, "/tmp/data");
+    }
+
     use super::*;
 
     use crate::commands::window_controller::NoopWindowController;
