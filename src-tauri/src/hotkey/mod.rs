@@ -274,6 +274,45 @@ pub trait HotkeyManager: Send {
 mod tests {
     use super::*;
 
+    /// The slot list and the config's hotkey fields must stay in step: a
+    /// new hotkey field without a slot (or a slot without a field) would
+    /// be half-wired — the config would accept it while the hook layer
+    /// never registers it.
+    #[test]
+    fn spec_slots_match_the_config_hotkey_fields() {
+        let json = serde_json::to_value(crate::config::AppConfig::default())
+            .expect("AppConfig must serialize");
+        let obj = json
+            .as_object()
+            .expect("AppConfig must serialize to a JSON object");
+        let config_fields: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+
+        // The hotkey fields of the config (the naming convention the
+        // schema uses: `hotkey` plus `*_hotkey`).
+        let hotkey_fields: Vec<&str> = config_fields
+            .iter()
+            .copied()
+            .filter(|name| *name == "hotkey" || name.ends_with("_hotkey"))
+            .collect();
+
+        assert_eq!(
+            hotkey_fields.len(),
+            SPEC_SLOTS.len(),
+            "the config's hotkey fields and SPEC_SLOTS must be the same size:              config={hotkey_fields:?} slots={:?}",
+            SPEC_SLOTS
+                .iter()
+                .map(|s| s.config_field)
+                .collect::<Vec<_>>()
+        );
+        for slot in SPEC_SLOTS.iter() {
+            assert!(
+                config_fields.contains(&slot.config_field),
+                "SPEC_SLOTS names a config field that does not exist: {}",
+                slot.config_field
+            );
+        }
+    }
+
     #[test]
     fn key_name_vk_roundtrip() {
         // Every NAMED_KEYS entry must roundtrip — but the alias vk must
