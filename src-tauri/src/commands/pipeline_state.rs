@@ -1382,9 +1382,7 @@ mod sm_verb_tests {
             Arc::new(MockEngine::new("test")),
             Arc::new(MockEmitter::new()),
             16_000,
-            crate::realtime::RealtimePolicy {
-                language: crate::config::Language::Zh,
-            },
+            crate::config::Language::Zh,
         ));
         ps.stop_realtime_leftover();
         ps.stop_realtime_leftover(); // idempotent

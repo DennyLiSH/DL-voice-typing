@@ -56,21 +56,6 @@ fn sleep_or_stop(running: &AtomicBool, total_ms: u64, stop_poll_ms: u64) {
     }
 }
 
-/// Interval between transcription attempts (milliseconds).
-const STEP_MS: u64 = 500;
-
-/// Shorter sleep when audio buffer is still empty or very short (milliseconds).
-const SHORT_STEP_MS: u64 = 100;
-
-/// Sleep interval for polling the stop flag (milliseconds).
-const STOP_POLL_MS: u64 = 50;
-
-/// Audio window size for each transcription (seconds).
-const WINDOW_SECS: u32 = 5;
-
-/// RMS threshold below which audio is considered silent.
-const VAD_THRESHOLD: f32 = 0.02;
-
 /// Minimum overlap ratio to consider two consecutive partials as continuous speech.
 /// Below this threshold, we treat the new partial as a fresh segment.
 const MIN_OVERLAP_RATIO: f32 = 0.5;
@@ -81,63 +66,51 @@ const EDIT_DISTANCE_RATIO: f32 = 0.1;
 /// Fuzzy matching only tries the top-N longest candidates (performance guard).
 const FUZZY_TOP_N: usize = 3;
 
-/// Frame size for speech energy detection (100ms at 16kHz = 1600 samples).
-const ENERGY_FRAME_SAMPLES: usize = 1600;
-
-/// Per-frame RMS threshold for speech energy detection.
-const ENERGY_FRAME_THRESHOLD: f32 = 0.04;
-
-/// Minimum number of high-energy frames required to consider audio as containing speech.
-const ENERGY_MIN_FRAMES: usize = 5;
-
 /// Tunable configuration for the realtime transcription loop.
 ///
-/// Groups loop-policy (timing/window) and VAD-tuning constants into a single
-/// struct so the loop body reads as `config.step_ms` etc. instead of bare
-/// module constants. Values are sourced from the module-level `const`s by
-/// `DEFAULT` to keep a single source of truth.
+/// The struct is the SINGLE source of truth for the loop's timing, window
+/// and VAD tuning — the module-level constants that used to mirror these
+/// fields are gone. They were a mirror tax: two sources for one fact,
+/// plus a pin test whose only job was to notice when they drifted.
 ///
 /// Text-overlap constants (`MIN_OVERLAP_RATIO` / `EDIT_DISTANCE_RATIO` /
 /// `FUZZY_TOP_N`) are intentionally NOT in this struct — they are intrinsic
 /// to `TextAccumulator`'s algorithm and stay as module-level `const`.
 pub(crate) struct RealtimeLoopConfig {
+    /// Interval between transcription attempts (milliseconds).
     pub step_ms: u64,
+    /// Shorter sleep when the audio buffer is still empty or very short.
     pub short_step_ms: u64,
+    /// Sleep interval for polling the stop flag (milliseconds).
     pub stop_poll_ms: u64,
+    /// Audio window size for each transcription (seconds).
     pub window_secs: u32,
+    /// RMS threshold below which audio is considered silent.
     pub vad_threshold: f32,
+    /// Frame size for speech energy detection (100ms at 16kHz = 1600 samples).
     pub energy_frame_samples: usize,
+    /// Per-frame RMS threshold for speech energy detection.
     pub energy_frame_threshold: f32,
+    /// Minimum number of high-energy frames for the audio to count as speech.
     pub energy_min_frames: usize,
 }
 
 impl RealtimeLoopConfig {
     pub(crate) const DEFAULT: Self = Self {
-        step_ms: STEP_MS,
-        short_step_ms: SHORT_STEP_MS,
-        stop_poll_ms: STOP_POLL_MS,
-        window_secs: WINDOW_SECS,
-        vad_threshold: VAD_THRESHOLD,
-        energy_frame_samples: ENERGY_FRAME_SAMPLES,
-        energy_frame_threshold: ENERGY_FRAME_THRESHOLD,
-        energy_min_frames: ENERGY_MIN_FRAMES,
+        step_ms: 500,
+        short_step_ms: 100,
+        stop_poll_ms: 50,
+        window_secs: 5,
+        vad_threshold: 0.02,
+        energy_frame_samples: 1600,
+        energy_frame_threshold: 0.04,
+        energy_min_frames: 5,
     };
 }
 
-/// Session-scoped config snapshot for the realtime transcription thread.
-///
-/// Seeded from `SessionPolicy` at `RealtimeTranscriber::start` — the thread
-/// must NEVER read `ConfigCache` directly (same rationale as SessionPolicy:
-/// an in-flight session must not observe mid-recording config mutations).
-/// Currently consumed only by the startup trace log; extend this struct
-/// (not the call sites) when the loop needs more config.
-pub struct RealtimePolicy {
-    pub(crate) language: crate::config::Language,
-}
-
 /// Check whether the audio contains sustained speech energy.
-/// Splits the audio into 100ms frames and requires at least `ENERGY_MIN_FRAMES` frames
-/// to exceed `ENERGY_FRAME_THRESHOLD` RMS. This distinguishes real speech (clear energy
+/// Splits the audio into 100ms frames and requires at least `energy_min_frames` frames
+/// to exceed `energy_frame_threshold` RMS. This distinguishes real speech (clear energy
 /// peaks from syllables) from ambient noise (uniform low energy).
 fn has_speech_energy(resampled: &[f32], config: &RealtimeLoopConfig) -> bool {
     if resampled.len() < config.energy_frame_samples {
@@ -481,7 +454,12 @@ impl RealtimeTranscriber {
         engine: Arc<dyn SpeechEngine>,
         emitter: Arc<dyn crate::commands::EventEmitter + Send + Sync>,
         sample_rate: u32,
-        policy: RealtimePolicy,
+        // Seeded from `SessionPolicy` at the call site — the thread must
+        // NEVER read `ConfigCache` directly (same rationale as
+        // SessionPolicy: an in-flight session must not observe mid-recording
+        // config mutations). Currently consumed only by the startup trace
+        // log.
+        language: crate::config::Language,
     ) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
@@ -492,7 +470,7 @@ impl RealtimeTranscriber {
             let _span = tracing::info_span!("realtime_transcriber").entered();
             tracing::info!(
                 "realtime transcriber started (language={}, sample_rate={sample_rate})",
-                policy.language.code()
+                language.code()
             );
             let mut resampler = Resampler::new(sample_rate, TARGET_SAMPLE_RATE);
             let config = RealtimeLoopConfig::DEFAULT;
@@ -628,14 +606,14 @@ mod tests {
     fn test_vad_rms_detects_speech() {
         let loud = vec![0.5f32; 16000];
         let rms = rms::calculate_rms(&loud);
-        assert!(rms >= VAD_THRESHOLD);
+        assert!(rms >= RealtimeLoopConfig::DEFAULT.vad_threshold);
     }
 
     #[test]
     fn test_vad_rms_detects_silence() {
         let silent = vec![0.0f32; 16000];
         let rms = rms::calculate_rms(&silent);
-        assert!(rms < VAD_THRESHOLD);
+        assert!(rms < RealtimeLoopConfig::DEFAULT.vad_threshold);
     }
 
     #[test]
@@ -658,8 +636,8 @@ mod tests {
         let mut audio = vec![0.0f32; 80_000];
         // Fill 5 frames (each 1600 samples) with high-amplitude signal
         for i in 0..5 {
-            let start = i * ENERGY_FRAME_SAMPLES;
-            for j in 0..ENERGY_FRAME_SAMPLES {
+            let start = i * RealtimeLoopConfig::DEFAULT.energy_frame_samples;
+            for j in 0..RealtimeLoopConfig::DEFAULT.energy_frame_samples {
                 audio[start + j] = 0.2; // RMS = 0.2, well above 0.04
             }
         }
@@ -668,11 +646,11 @@ mod tests {
 
     #[test]
     fn test_has_speech_energy_too_few_frames() {
-        // Only 4 high-energy frames (< ENERGY_MIN_FRAMES=5) → no speech energy
+        // Only 4 high-energy frames (< energy_min_frames=5) → no speech energy
         let mut audio = vec![0.0f32; 80_000];
         for i in 0..4 {
-            let start = i * ENERGY_FRAME_SAMPLES;
-            for j in 0..ENERGY_FRAME_SAMPLES {
+            let start = i * RealtimeLoopConfig::DEFAULT.energy_frame_samples;
+            for j in 0..RealtimeLoopConfig::DEFAULT.energy_frame_samples {
                 audio[start + j] = 0.2;
             }
         }
@@ -847,12 +825,10 @@ mod tests {
             engine,
             emitter.clone(),
             16_000,
-            RealtimePolicy {
-                language: crate::config::Language::Zh,
-            },
+            crate::config::Language::Zh,
         );
 
-        // Wait long enough for one transcription cycle (STEP_MS=500 + processing).
+        // Wait long enough for one transcription cycle (step_ms=500 + processing).
         thread::sleep(Duration::from_millis(800));
         rt.stop_and_wait();
 
@@ -865,7 +841,7 @@ mod tests {
 
     #[test]
     fn test_realtime_loop_silent_audio_no_events() {
-        // All zeros → RMS = 0, below VAD_THRESHOLD → no transcription
+        // All zeros → RMS = 0, below the VAD threshold → no transcription
         let audio = Arc::new(MockAudioSource::new(vec![0.0f32; 16_000 * 5]));
         let engine = Arc::new(MockEngine::new("should not emit"));
         let emitter = Arc::new(MockEventEmitter::new());
@@ -875,9 +851,7 @@ mod tests {
             engine,
             emitter.clone(),
             16_000,
-            RealtimePolicy {
-                language: crate::config::Language::Zh,
-            },
+            crate::config::Language::Zh,
         );
 
         thread::sleep(Duration::from_millis(800));
@@ -904,9 +878,7 @@ mod tests {
             engine,
             emitter.clone(),
             16_000,
-            RealtimePolicy {
-                language: crate::config::Language::Zh,
-            },
+            crate::config::Language::Zh,
         );
 
         // Two cycles → same text emitted twice (accumulate dedups identical).
@@ -1189,18 +1161,5 @@ mod tests {
         let running = AtomicBool::new(true);
         let outcome = push_and_emit("text", &acc, &NoopEmitter, &running);
         assert!(matches!(outcome, PushOutcome::Poisoned));
-    }
-
-    #[test]
-    fn test_realtime_loop_config_default_matches_legacy_constants() {
-        let c = RealtimeLoopConfig::DEFAULT;
-        assert_eq!(c.step_ms, STEP_MS);
-        assert_eq!(c.short_step_ms, SHORT_STEP_MS);
-        assert_eq!(c.stop_poll_ms, STOP_POLL_MS);
-        assert_eq!(c.window_secs, WINDOW_SECS);
-        assert_eq!(c.vad_threshold, VAD_THRESHOLD);
-        assert_eq!(c.energy_frame_samples, ENERGY_FRAME_SAMPLES);
-        assert_eq!(c.energy_frame_threshold, ENERGY_FRAME_THRESHOLD);
-        assert_eq!(c.energy_min_frames, ENERGY_MIN_FRAMES);
     }
 }

@@ -279,9 +279,7 @@ impl RecordingSession {
                         self.ps.engine(),
                         self.ps.emitter(),
                         sr,
-                        crate::realtime::RealtimePolicy {
-                            language: policy.language,
-                        },
+                        policy.language,
                     );
                     self.ps.set_realtime_transcriber(rt);
                 }
