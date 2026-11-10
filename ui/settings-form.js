@@ -84,7 +84,9 @@ const recordOnlyHotkeySelect = document.getElementById('record-only-hotkey');
 // State
 let loadedConfig = null;
 let dirtyCheckEnabled = false;
-let loadedAutostart = false;
+// The autostart state read back from the OS after a save — a
+// different source than the toggle's DOM state (the third channel).
+let savedAutostartState = false;
 
 // Subscribe to form change events (model selection etc.) to recompute dirty state.
 // Returns unsubscribe; we don't unsubscribe for the lifetime of the settings window.
@@ -111,6 +113,66 @@ const hotkeyField = ({ prefix, optional, fallback }) => ({
         else writeSpecToUI(prefix, v ?? fallback);
         updateHotkeyPreview(prefix);
     },
+});
+
+// --- Toggles -----------------------------------------------------------
+//
+// The handles are created here (DOM_DEFS below needs their get/set) and
+// the sections keep their original order.
+// --- LLM Toggle ---
+
+function updateLlmFieldsState(enabled) {
+    llmFields.classList.toggle('disabled', !enabled);
+    for (const input of llmFields.querySelectorAll('input')) {
+        input.disabled = !enabled;
+    }
+    testBtn.disabled = !enabled;
+}
+
+const llmToggleState = bindToggle(llmToggle, {
+    onToggle: updateLlmFieldsState,
+});
+
+// --- Data Saving Toggle ---
+
+function updateDataSavingFieldsState(enabled) {
+    dataSavingFields.classList.toggle('disabled', !enabled);
+    for (const input of dataSavingFields.querySelectorAll('input')) {
+        input.disabled = !enabled;
+    }
+    btnBrowsePath.disabled = !enabled;
+}
+
+const dataSavingToggleState = bindToggle(dataSavingToggle, {
+    onToggle: updateDataSavingFieldsState,
+});
+
+// --- Review Before Paste Toggle ---
+
+const reviewToggleState = bindToggle(reviewToggle);
+
+// --- Autostart Toggle ---
+
+const autostartToggleState = bindToggle(autostartToggle, {
+    guard: () => autostartToggle.classList.contains('disabled'),
+});
+
+// --- Realtime Transcription Toggle ---
+
+const realtimeToggleState = bindToggle(realtimeToggle);
+
+// --- Record-Only Mode Toggle ---
+
+function updateRecordOnlyHotkeyState(enabled) {
+    recordOnlyHotkeyGroup.classList.toggle('disabled', !enabled);
+    recordOnlyHotkeySelect.disabled = !enabled;
+    document.getElementById('record-only-hotkey-ctrl').disabled = !enabled;
+    document.getElementById('record-only-hotkey-shift').disabled = !enabled;
+    document.getElementById('record-only-hotkey-alt').disabled = !enabled;
+}
+
+const recordOnlyToggleState = bindToggle(recordOnlyToggle, {
+    onToggle: updateRecordOnlyHotkeyState,
 });
 
 /**
@@ -141,10 +203,9 @@ const DOM_DEFS = {
         set: setSelectedModel,
     },
     llm_enabled: {
-        get: () => llmToggle.classList.contains('active'),
+        get: () => llmToggleState.get(),
         set: (v) => {
-            llmToggle.classList.toggle('active', !!v);
-            llmToggle.setAttribute('aria-checked', String(!!v));
+            llmToggleState.set(v);
             updateLlmFieldsState(!!v);
         },
     },
@@ -183,10 +244,9 @@ const DOM_DEFS = {
         },
     },
     data_saving_enabled: {
-        get: () => dataSavingToggle.classList.contains('active'),
+        get: () => dataSavingToggleState.get(),
         set: (v) => {
-            dataSavingToggle.classList.toggle('active', !!v);
-            dataSavingToggle.setAttribute('aria-checked', String(!!v));
+            dataSavingToggleState.set(v);
             updateDataSavingFieldsState(!!v);
         },
     },
@@ -197,35 +257,28 @@ const DOM_DEFS = {
         },
     },
     review_before_paste: {
-        get: () => reviewToggle.classList.contains('active'),
-        set: (v) => {
-            reviewToggle.classList.toggle('active', !!v);
-            reviewToggle.setAttribute('aria-checked', String(!!v));
-        },
+        get: () => reviewToggleState.get(),
+        set: (v) => reviewToggleState.set(v),
     },
     realtime_transcription: {
-        get: () => realtimeToggle.classList.contains('active'),
-        set: (v) => {
-            realtimeToggle.classList.toggle('active', !!v);
-            realtimeToggle.setAttribute('aria-checked', String(!!v));
-        },
+        get: () => realtimeToggleState.get(),
+        set: (v) => realtimeToggleState.set(v),
     },
     autostart: {
-        get: () => autostartToggle.classList.contains('active'),
+        get: () => autostartToggleState.get(),
         set: (v) => {
-            loadedAutostart = !!v;
-            autostartToggle.classList.toggle('active', loadedAutostart);
-            autostartToggle.setAttribute(
-                'aria-checked',
-                String(loadedAutostart),
-            );
+            // The third channel stays: `savedAutostartState` carries the
+            // state READ BACK FROM THE OS after a save, which is a
+            // different source than the toggle's DOM state — merging
+            // them would couple the form to the OS.
+            savedAutostartState = !!v;
+            autostartToggleState.set(v);
         },
     },
     record_only_enabled: {
-        get: () => recordOnlyToggle.classList.contains('active'),
+        get: () => recordOnlyToggleState.get(),
         set: (v) => {
-            recordOnlyToggle.classList.toggle('active', !!v);
-            recordOnlyToggle.setAttribute('aria-checked', String(!!v));
+            recordOnlyToggleState.set(v);
             updateRecordOnlyHotkeyState(!!v);
         },
     },
@@ -305,18 +358,35 @@ function applyFieldsToForm(config) {
 // --- Toggle helper ---
 
 /**
- * Bind click + keydown handlers to a toggle button.
+ * Bind click + keydown handlers to a toggle button and return its
+ * handle.
+ *
+ * A toggle's state lives in TWO DOM places — the `active` class and the
+ * `aria-checked` attribute — and both used to be written by hand in two
+ * places per toggle (the click handler and the populate path). The
+ * handle's `set` is now the only writer and its `get` the only reader,
+ * so the two can never drift.
  *
  * @param {HTMLElement} el - the toggle button element
  * @param {Object} [opts]
  * @param {(isActive: boolean) => void} [opts.onToggle] - called after toggle state changes (e.g., disable dependent inputs)
  * @param {() => boolean} [opts.guard] - returns true to skip the click (e.g., disabled check)
+ * @returns {{get: () => boolean, set: (value: boolean) => void, el: HTMLElement}}
  */
 function bindToggle(el, { onToggle, guard } = {}) {
+    function get() {
+        return el.classList.contains('active');
+    }
+    /** The only writer of the toggle's DOM state (class + aria). */
+    function set(value) {
+        const active = !!value;
+        el.classList.toggle('active', active);
+        el.setAttribute('aria-checked', String(active));
+    }
     el.addEventListener('click', () => {
         if (guard?.()) return;
-        const isActive = el.classList.toggle('active');
-        el.setAttribute('aria-checked', String(isActive));
+        const isActive = !get();
+        set(isActive);
         if (onToggle) onToggle(isActive);
         updateDirtyState();
     });
@@ -326,57 +396,8 @@ function bindToggle(el, { onToggle, guard } = {}) {
             el.click();
         }
     });
+    return { get, set, el };
 }
-
-// --- LLM Toggle ---
-
-function updateLlmFieldsState(enabled) {
-    llmFields.classList.toggle('disabled', !enabled);
-    for (const input of llmFields.querySelectorAll('input')) {
-        input.disabled = !enabled;
-    }
-    testBtn.disabled = !enabled;
-}
-
-bindToggle(llmToggle, { onToggle: updateLlmFieldsState });
-
-// --- Data Saving Toggle ---
-
-function updateDataSavingFieldsState(enabled) {
-    dataSavingFields.classList.toggle('disabled', !enabled);
-    for (const input of dataSavingFields.querySelectorAll('input')) {
-        input.disabled = !enabled;
-    }
-    btnBrowsePath.disabled = !enabled;
-}
-
-bindToggle(dataSavingToggle, { onToggle: updateDataSavingFieldsState });
-
-// --- Review Before Paste Toggle ---
-
-bindToggle(reviewToggle);
-
-// --- Autostart Toggle ---
-
-bindToggle(autostartToggle, {
-    guard: () => autostartToggle.classList.contains('disabled'),
-});
-
-// --- Realtime Transcription Toggle ---
-
-bindToggle(realtimeToggle);
-
-// --- Record-Only Mode Toggle ---
-
-function updateRecordOnlyHotkeyState(enabled) {
-    recordOnlyHotkeyGroup.classList.toggle('disabled', !enabled);
-    recordOnlyHotkeySelect.disabled = !enabled;
-    document.getElementById('record-only-hotkey-ctrl').disabled = !enabled;
-    document.getElementById('record-only-hotkey-shift').disabled = !enabled;
-    document.getElementById('record-only-hotkey-alt').disabled = !enabled;
-}
-
-bindToggle(recordOnlyToggle, { onToggle: updateRecordOnlyHotkeyState });
 
 // --- Folder Browser ---
 
@@ -727,7 +748,7 @@ function setSaveStatus(message, type) {
 // wrapper); the outer one only sees wrapper-reported probe failures.
 async function syncAutostart() {
     try {
-        const wantAutostart = autostartToggle.classList.contains('active');
+        const wantAutostart = autostartToggleState.get();
         const autostartAvailable = await call('is_autostart_available');
         if (autostartAvailable) {
             try {
@@ -746,7 +767,7 @@ async function syncAutostart() {
                 return false;
             }
         }
-        loadedAutostart = wantAutostart;
+        savedAutostartState = wantAutostart;
         return true;
     } catch (_e) {
         return false;
@@ -773,7 +794,7 @@ export function setDirtyCheckEnabled(enabled) {
 }
 
 export function getLoadedAutostart() {
-    return loadedAutostart;
+    return savedAutostartState;
 }
 
 if (resetDefaultsBtn) {
