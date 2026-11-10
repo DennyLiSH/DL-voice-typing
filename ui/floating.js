@@ -7,6 +7,7 @@ import {
     remapRms,
 } from './floating-utils.js';
 import { INJECTION_ERROR_MSG } from './lib/errors.js';
+import { EVENTS } from './lib/events.js';
 
 const { listen } = window.__TAURI__.event;
 
@@ -299,14 +300,14 @@ function showProcessing(label) {
 }
 
 // Listen for events from Rust backend
-listen('recording-start', () => {
+listen(EVENTS.recordingStart, () => {
     show();
     showRecording();
     transcriptText.textContent = '';
     transcriptText.classList.remove('visible');
 });
 
-listen('audio-rms', (event) => {
+listen(EVENTS.audioRms, (event) => {
     if (indicator.classList.contains('record-only')) {
         updateRecordOnlyLevel(event.payload);
     } else {
@@ -314,24 +315,24 @@ listen('audio-rms', (event) => {
     }
 });
 
-listen('transcription-partial', (event) => {
+listen(EVENTS.transcriptionPartial, (event) => {
     transcriptText.textContent = event.payload;
     transcriptText.classList.add('visible');
 });
 
-listen('transcription-complete', () => {
+listen(EVENTS.transcriptionComplete, () => {
     showProcessing('转录中… 按 Esc 取消');
 });
 
-listen('llm-refining', () => {
+listen(EVENTS.llmRefining, () => {
     showProcessing('AI 纠错中… 按 Esc 取消');
 });
 
-listen('injection-complete', () => {
+listen(EVENTS.injectionComplete, () => {
     hide();
 });
 
-listen('pipeline-cancelled', () => {
+listen(EVENTS.pipelineCancelled, () => {
     // Esc-cancel swallowed the keypress in the hook; the backend has already
     // reset the state machine and hidden the floating window via the
     // WindowController, but we hide() defensively in case the user pressed
@@ -340,27 +341,27 @@ listen('pipeline-cancelled', () => {
     hide();
 });
 
-listen('injection-error', (event) => {
+listen(EVENTS.injectionError, (event) => {
     showError('injection-error', event.payload);
 });
 
-listen('speech-error', (event) => {
+listen(EVENTS.speechError, (event) => {
     showError('speech-error', event.payload);
 });
 
-listen('llm-error', (event) => {
+listen(EVENTS.llmError, (event) => {
     showError('llm-error', event.payload);
 });
 
 // Record-only mode: long-session indicator (corner-pinned breathing circle
 // + mm:ss timer). Payloads are OBJECTS ({stem}/{stem,status}/{message}),
 // unlike the bare-string error payloads above.
-listen('record-only-started', () => {
+listen(EVENTS.recordOnlyStarted, () => {
     show();
     showRecordOnly();
 });
 
-listen('record-only-finished', (event) => {
+listen(EVENTS.recordOnlyFinished, (event) => {
     stopRecordOnlyTimer();
     setTranscriptAnnouncement('polite');
     indicator.classList.remove('record-only');
@@ -383,7 +384,7 @@ listen('record-only-finished', (event) => {
     }
 });
 
-listen('record-only-error', (event) => {
+listen(EVENTS.recordOnlyError, (event) => {
     // Not routed through showError: it resolves defaults by event name and
     // passes object payloads straight to errorDisplayText, which falls back
     // to the table key and would lose the backend message. Unpack here.
@@ -408,7 +409,7 @@ listen('record-only-error', (event) => {
 // hide). A new press during the 2.5s window is safe: show() clears the
 // pending hideTimeout and showRecordOnly() rewrites the text (design
 // review 2026-09-29 finding A).
-listen('record-only-discarded', () => {
+listen(EVENTS.recordOnlyDiscarded, () => {
     stopRecordOnlyTimer();
     setTranscriptAnnouncement('polite');
     indicator.classList.remove('record-only');

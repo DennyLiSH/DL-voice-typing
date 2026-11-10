@@ -1,4 +1,5 @@
 import { call } from './lib/api.js';
+import { EVENTS } from './lib/events.js';
 import { formatInjectionError } from './review-utils.js';
 
 const { listen } = window.__TAURI__.event;
@@ -28,7 +29,7 @@ textarea.addEventListener('input', () => {
 });
 
 // Populate textarea when the backend shows this pre-created window.
-listen('review-show', async () => {
+listen(EVENTS.reviewShow, async () => {
     userEdited = false;
     textarea.value = '';
     errorMsg.textContent = '';
@@ -53,7 +54,7 @@ listen('review-show', async () => {
 
 // Real-time accumulated transcription — write directly into textarea.
 // The backend already deduplicates via suffix-matching, so this IS the final text.
-listen('transcription-partial', (event) => {
+listen(EVENTS.transcriptionPartial, (event) => {
     if (!isClosing) {
         const newText = event.payload || '';
         if (newText && !userEdited) {
@@ -66,7 +67,7 @@ listen('transcription-partial', (event) => {
 });
 
 // Pipeline error: close review window if no text.
-listen('speech-error', () => {
+listen(EVENTS.speechError, () => {
     if (!textarea.value && !isClosing) {
         container.classList.remove('visible');
     }
@@ -74,7 +75,7 @@ listen('speech-error', () => {
 
 // Clipboard injection failed (event emitted by text_injector / review backend
 // when confirm_inject's spawned task fails). Show error and re-enable buttons.
-listen('injection-error', (event) => {
+listen(EVENTS.injectionError, (event) => {
     if (!isClosing) {
         // textContent (not innerHTML) — payload is backend string, no HTML parsing
         // length cap (inside formatInjectionError) prevents UI overflow on long error
