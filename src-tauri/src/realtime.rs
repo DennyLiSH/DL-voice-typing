@@ -298,8 +298,6 @@ pub struct TextAccumulator {
     confirmed: String,
     /// Content characters (punctuation-stripped) of the last partial, reused via scratch buffer.
     last_content: Vec<char>,
-    /// Raw text of the last partial (preserves original formatting).
-    last_raw: String,
     /// Scratch buffer for parsing new partial content without allocation.
     scratch: Vec<char>,
 }
@@ -309,7 +307,6 @@ impl TextAccumulator {
         Self {
             confirmed: String::new(),
             last_content: Vec::new(),
-            last_raw: String::new(),
             scratch: Vec::new(),
         }
     }
@@ -318,7 +315,6 @@ impl TextAccumulator {
     pub fn push(&mut self, new_partial: &str) -> &str {
         if self.confirmed.is_empty() {
             self.confirmed = new_partial.to_string();
-            self.last_raw = new_partial.to_string();
             self.update_last_content(new_partial);
             return &self.confirmed;
         }
@@ -337,11 +333,9 @@ impl TextAccumulator {
         if overlap_len > 0 {
             let byte_offset = content_char_offset(new_partial, overlap_len);
             self.confirmed.push_str(&new_partial[byte_offset..]);
-            self.last_raw = new_partial.to_string();
             std::mem::swap(&mut self.last_content, &mut self.scratch);
         } else {
             // No overlap: Whisper re-transcribed differently. Don't append to prevent explosion.
-            self.last_raw = new_partial.to_string();
             std::mem::swap(&mut self.last_content, &mut self.scratch);
         }
 
@@ -356,7 +350,6 @@ impl TextAccumulator {
     /// Take the accumulated text, clearing the internal state.
     pub fn take(&mut self) -> String {
         self.last_content.clear();
-        self.last_raw.clear();
         self.scratch.clear();
         std::mem::take(&mut self.confirmed)
     }
@@ -365,7 +358,6 @@ impl TextAccumulator {
     pub fn clear(&mut self) {
         self.confirmed.clear();
         self.last_content.clear();
-        self.last_raw.clear();
         self.scratch.clear();
     }
 
@@ -471,7 +463,6 @@ fn find_longest_suffix_prefix(a: &[char], b: &[char]) -> usize {
 fn accumulate(accumulated: &str, prev_partial: &str, new_partial: &str) -> String {
     let mut acc = TextAccumulator {
         confirmed: accumulated.to_string(),
-        last_raw: prev_partial.to_string(),
         last_content: prev_partial.chars().filter(|c| !is_punct(*c)).collect(),
         scratch: Vec::new(),
     };

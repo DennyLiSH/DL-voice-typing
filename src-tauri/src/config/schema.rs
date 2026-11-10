@@ -11,18 +11,6 @@ pub const LANGUAGES: &[(&str, &str)] = &[
     ("ko", "한국어"),
 ];
 
-/// Available Whisper models: (size, filename, display size).
-pub const WHISPER_MODELS: &[(&str, &str, &str)] = &[
-    ("tiny", "ggml-tiny.bin", "75MB"),
-    ("tiny-q8_0", "ggml-tiny-q8_0.bin", "~40MB"),
-    ("base", "ggml-base.bin", "142MB"),
-    ("base-q8_0", "ggml-base-q8_0.bin", "~75MB"),
-    ("small", "ggml-small.bin", "466MB"),
-    ("small-q8_0", "ggml-small-q8_0.bin", "~250MB"),
-    ("medium", "ggml-medium.bin", "1.5GB"),
-    ("medium-q8_0", "ggml-medium-q8_0.bin", "~800MB"),
-];
-
 /// Download mirror options: (id, display name, base URL).
 pub const DOWNLOAD_MIRRORS: &[(&str, &str, &str)] = &[
     (
