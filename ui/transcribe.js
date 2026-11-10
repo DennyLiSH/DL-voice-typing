@@ -27,7 +27,7 @@ import {
     formatStemForDisplay,
 } from './lib/data-management.js';
 import { errorMessage } from './lib/errors.js';
-import { EVENTS } from './lib/events.js';
+import { decodeObjectPayload, EVENTS } from './lib/events.js';
 import { createAudioSlot, createRovingList } from './lib/recording-list.js';
 import { loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
@@ -699,21 +699,23 @@ async function initModelSelect() {
 
 listen(EVENTS.transcriptionProgress, (event) => {
     if (!controller.ownsEvent()) return;
-    const { percent, stage } = event.payload || {};
+    const { percent, stage } = decodeObjectPayload(event.payload);
     setProgress(percent ?? 0, stage ?? 'whisper');
 });
 
 listen(EVENTS.transcriptionDone, (event) => {
-    if (!controller.ownsEvent(event.payload?.filename)) return;
+    const { filename } = decodeObjectPayload(event.payload);
+    if (!controller.ownsEvent(filename)) return;
     finishTranscriptionUI();
     showToast('转录完成');
-    if (event.payload?.filename === controller.selectedStem()) {
+    if (filename === controller.selectedStem()) {
         reloadSelectedDetail();
     }
 });
 
 listen(EVENTS.transcriptionCancelled, (event) => {
-    if (!controller.ownsEvent(event.payload?.filename)) return;
+    const { filename } = decodeObjectPayload(event.payload);
+    if (!controller.ownsEvent(filename)) return;
     finishTranscriptionUI();
     showToast('转录已取消');
 });
@@ -721,8 +723,11 @@ listen(EVENTS.transcriptionCancelled, (event) => {
 listen(EVENTS.transcriptionError, (event) => {
     if (!controller.ownsEvent()) return;
     finishTranscriptionUI();
-    const msg = event.payload?.message;
-    showToast(typeof msg === 'string' && msg ? msg : '转录失败', true);
+    const { message } = decodeObjectPayload(event.payload);
+    showToast(
+        typeof message === 'string' && message ? message : '转录失败',
+        true,
+    );
 });
 
 // A new record-only recording landed while the window is open.
