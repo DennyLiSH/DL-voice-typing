@@ -314,8 +314,6 @@ impl DeliveryController {
                 "(function(){{\
                  var t=document.getElementById('review-text');\
                  if(t){{t.value={json_text};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
-                 var p=document.getElementById('preview');\
-                 if(p){{p.textContent='';p.classList.remove('visible');}}\
                  var b=document.getElementById('btn-confirm');\
                  if(b){{b.disabled=false;}}\
                  }})()"
