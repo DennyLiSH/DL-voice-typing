@@ -56,35 +56,98 @@ impl OpenSlotRegistrar for WindowsHotkeyManager {
     }
 }
 
-fn window_slot_label(kind: crate::commands::WindowKind) -> &'static str {
-    match kind {
-        crate::commands::WindowKind::Settings => "settings",
-        crate::commands::WindowKind::Transcribe => "transcribe",
+/// Which spec slot a swap touches.
+#[derive(Clone, Copy)]
+enum SpecSlot {
+    /// The primary hotkey slot.
+    Primary,
+    /// An open-window slot (settings / transcribe).
+    Open(crate::commands::WindowKind),
+}
+
+impl SpecSlot {
+    /// The slot's label in error messages — the hook layer's own label
+    /// for the slot (see `hotkey::SPEC_SLOTS`).
+    fn label(&self) -> &'static str {
+        match self {
+            SpecSlot::Primary => "primary",
+            SpecSlot::Open(crate::commands::WindowKind::Settings) => "open-settings",
+            SpecSlot::Open(crate::commands::WindowKind::Transcribe) => "open-transcribe",
+        }
+    }
+}
+
+/// The operations a spec-slot swap needs.
+///
+/// A trait so the swap transaction can be driven by a test double (the
+/// real path runs inside a Tauri app).
+trait SpecSlotSwap {
+    /// Unregister the slot. The primary slot reports its failure; the
+    /// open-window slots clear theirs by design (their errors were
+    /// ignored at the call sites).
+    fn unregister_slot(&mut self, slot: SpecSlot) -> Result<(), String>;
+    /// Register the slot.
+    fn register_slot(
+        &mut self,
+        slot: SpecSlot,
+        spec: crate::hotkey::windows::HotkeySpec,
+        cb: crate::hotkey::HotkeyCallback,
+    ) -> Result<(), String>;
+}
+
+impl SpecSlotSwap for WindowsHotkeyManager {
+    fn unregister_slot(&mut self, slot: SpecSlot) -> Result<(), String> {
+        // Unregister ONLY this slot — a full unregister would wipe the
+        // cancel_esc slot the Esc-cancel dispatcher reads (M2 fix).
+        match slot {
+            SpecSlot::Primary => self
+                .unregister_primary()
+                .map_err(|e| format!("unregister failed: {e}")),
+            SpecSlot::Open(kind) => {
+                self.unregister_open_slot(kind);
+                Ok(())
+            }
+        }
+    }
+
+    fn register_slot(
+        &mut self,
+        slot: SpecSlot,
+        spec: crate::hotkey::windows::HotkeySpec,
+        cb: crate::hotkey::HotkeyCallback,
+    ) -> Result<(), String> {
+        match slot {
+            SpecSlot::Primary => self.register(spec, cb).map_err(|e| e.to_string()),
+            SpecSlot::Open(kind) => self.register_open_slot(kind, spec, cb),
+        }
     }
 }
 
 /// Single-slot swap: unregister → register (or clear) → on failure
 /// re-register the OLD spec so the slot never goes dead; a failed revert
-/// only warns (slot dead until restart). Message texts byte-identical to
-/// the former inline blocks (they surface via hotkey-error to the
-/// settings UI).
-fn swap_open_slot(
-    hm: &mut dyn OpenSlotRegistrar,
-    kind: crate::commands::WindowKind,
+/// only warns (slot dead until restart).
+///
+/// The primary slot and the open-window slots used to run this
+/// transaction twice — the primary inline in `save_settings`, the open
+/// slots in `swap_open_slot` — with slightly different messages and
+/// different error handling. One implementation owns it now.
+fn swap_spec_slot(
+    hm: &mut impl SpecSlotSwap,
+    slot: SpecSlot,
     new: Option<crate::hotkey::windows::HotkeySpec>,
     old: Option<crate::hotkey::windows::HotkeySpec>,
     make_cb: impl Fn() -> crate::hotkey::HotkeyCallback,
 ) -> Result<(), String> {
-    let label = window_slot_label(kind);
-    hm.unregister_open_slot(kind);
+    let label = slot.label();
+    hm.unregister_slot(slot)?;
     let Some(spec) = new else { return Ok(()) };
-    if let Err(e) = hm.register_open_slot(kind, spec, make_cb()) {
+    if let Err(e) = hm.register_slot(slot, spec, make_cb()) {
         if let Some(old_spec) = old
-            && let Err(e2) = hm.register_open_slot(kind, old_spec, make_cb())
+            && let Err(e2) = hm.register_slot(slot, old_spec, make_cb())
         {
-            warn!("open-{label} revert ALSO failed; slot dead until restart: {e2}");
+            warn!("{label} revert ALSO failed; slot dead until restart: {e2}");
         }
-        return Err(format!("open-{label}: {e}"));
+        return Err(format!("{label}: {e}"));
     }
     Ok(())
 }
@@ -218,16 +281,6 @@ pub fn save_settings(
             &app,
             "hotkey re-registration timed out",
             move |app_clone, hm| {
-                // Unregister ONLY the primary slot (M2 fix — keeps record_only
-                // and cancel_esc live across save_settings re-registration).
-                // Full unregister() here would wipe the cancel_esc slot, which
-                // the Esc-cancel dispatcher reads from to abort an in-flight
-                // transcription. The hook itself is removed by unregister_primary
-                // only when all three slots are clear.
-                if let Err(e) = hm.unregister_primary() {
-                    return Err(format!("unregister failed: {e}"));
-                }
-
                 // M3 fix — pull the managed single PipelineState instance instead
                 // of constructing a new one with PipelineState::from_app. The new
                 // instance would have an independent DeliveryController context,
@@ -236,21 +289,9 @@ pub fn save_settings(
                     .state::<super::pipeline_state::PipelineState>()
                     .inner()
                     .clone();
-                let callback = make_hotkey_callback(ps_managed.clone());
-
-                // Try registering the new key.
-                match hm.register(new_key, callback) {
-                    Ok(()) => Ok(()),
-                    Err(e) => {
-                        // Fallback: re-register the old key.
-                        let fallback_callback = make_hotkey_callback(ps_managed);
-                        let _ = hm.register(old_key, fallback_callback);
-                        Err(format!(
-                            "新热键注册失败({e})，已回退到旧热键: {}",
-                            old_key.display()
-                        ))
-                    }
-                }
+                swap_spec_slot(hm, SpecSlot::Primary, Some(new_key), Some(old_key), || {
+                    make_hotkey_callback(ps_managed.clone())
+                })
             },
         )?;
     }
@@ -269,9 +310,9 @@ pub fn save_settings(
                             crate::commands::WindowKind::Settings,
                         )
                     };
-                    if let Err(msg) = swap_open_slot(
+                    if let Err(msg) = swap_spec_slot(
                         hm,
-                        crate::commands::WindowKind::Settings,
+                        SpecSlot::Open(crate::commands::WindowKind::Settings),
                         new_s,
                         old_s,
                         make_cb,
@@ -288,9 +329,9 @@ pub fn save_settings(
                             crate::commands::WindowKind::Transcribe,
                         )
                     };
-                    if let Err(msg) = swap_open_slot(
+                    if let Err(msg) = swap_spec_slot(
                         hm,
-                        crate::commands::WindowKind::Transcribe,
+                        SpecSlot::Open(crate::commands::WindowKind::Transcribe),
                         new_t,
                         old_t,
                         make_cb,
@@ -333,13 +374,14 @@ mod tests {
         fail_vks: Vec<u32>,
     }
 
-    impl super::OpenSlotRegistrar for MockRegistrar {
-        fn unregister_open_slot(&mut self, _kind: crate::commands::WindowKind) {
+    impl super::SpecSlotSwap for MockRegistrar {
+        fn unregister_slot(&mut self, _slot: super::SpecSlot) -> Result<(), String> {
             self.calls.push(("unregister", 0));
+            Ok(())
         }
-        fn register_open_slot(
+        fn register_slot(
             &mut self,
-            _kind: crate::commands::WindowKind,
+            _slot: super::SpecSlot,
             spec: HotkeySpec,
             _cb: HotkeyCallback,
         ) -> Result<(), String> {
@@ -350,6 +392,30 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    /// The primary slot runs the same transaction as the open-window
+    /// slots (one implementation) — the symmetric revert case.
+    #[test]
+    fn swap_spec_slot_primary_reverts_to_old_spec_on_register_failure() {
+        let mut m = MockRegistrar {
+            fail_vks: vec![1],
+            ..Default::default()
+        };
+        let r = super::swap_spec_slot(
+            &mut m,
+            super::SpecSlot::Primary,
+            Some(spec_with_vk(1)),
+            Some(spec_with_vk(2)),
+            dummy_callback,
+        );
+        let err = r.expect_err("first register must fail");
+        assert!(err.starts_with("primary: "), "got: {err}");
+        assert_eq!(
+            m.calls,
+            vec![("unregister", 0), ("register", 1), ("register", 2)],
+            "the old spec must be re-registered after the failure"
+        );
     }
 
     fn spec_with_vk(vk: u32) -> HotkeySpec {
@@ -366,11 +432,11 @@ mod tests {
     }
 
     #[test]
-    fn swap_open_slot_registers_new_spec_after_unregister() {
+    fn swap_spec_slot_registers_new_spec_after_unregister() {
         let mut m = MockRegistrar::default();
-        let r = super::swap_open_slot(
+        let r = super::swap_spec_slot(
             &mut m,
-            crate::commands::WindowKind::Settings,
+            super::SpecSlot::Open(crate::commands::WindowKind::Settings),
             Some(spec_with_vk(1)),
             Some(spec_with_vk(2)),
             dummy_callback,
@@ -380,14 +446,14 @@ mod tests {
     }
 
     #[test]
-    fn swap_open_slot_reverts_to_old_spec_on_register_failure() {
+    fn swap_spec_slot_reverts_to_old_spec_on_register_failure() {
         let mut m = MockRegistrar {
             fail_vks: vec![1],
             ..Default::default()
         };
-        let r = super::swap_open_slot(
+        let r = super::swap_spec_slot(
             &mut m,
-            crate::commands::WindowKind::Settings,
+            super::SpecSlot::Open(crate::commands::WindowKind::Settings),
             Some(spec_with_vk(1)),
             Some(spec_with_vk(2)),
             dummy_callback,
@@ -410,9 +476,9 @@ mod tests {
             fail_vks: vec![1, 2],
             ..Default::default()
         };
-        let r = super::swap_open_slot(
+        let r = super::swap_spec_slot(
             &mut m,
-            crate::commands::WindowKind::Transcribe,
+            super::SpecSlot::Open(crate::commands::WindowKind::Transcribe),
             Some(spec_with_vk(1)),
             Some(spec_with_vk(2)),
             dummy_callback,
@@ -439,9 +505,9 @@ mod tests {
     #[test]
     fn swap_open_slot_none_only_unregisters() {
         let mut m = MockRegistrar::default();
-        let r = super::swap_open_slot(
+        let r = super::swap_spec_slot(
             &mut m,
-            crate::commands::WindowKind::Settings,
+            super::SpecSlot::Open(crate::commands::WindowKind::Settings),
             None,
             Some(spec_with_vk(9)),
             dummy_callback,
