@@ -26,6 +26,7 @@ import {
     buildStatusBadges,
     formatStemForDisplay,
 } from './lib/data-management.js';
+import { errorMessage } from './lib/errors.js';
 import { EVENTS } from './lib/events.js';
 import { createAudioSlot, createRovingList } from './lib/recording-list.js';
 import { loadRecordings, releaseAudio } from './lib/recordings.js';
@@ -136,7 +137,7 @@ async function loadList() {
         renderList();
     } catch (e) {
         if (errBar) {
-            errBar.textContent = e?.message || '加载失败';
+            errBar.textContent = errorMessage(e, '加载失败');
             errBar.hidden = false;
         }
     }
@@ -248,7 +249,7 @@ async function selectRecording(filename) {
         renderDetail();
     } catch (e) {
         if (state.selected !== filename) return;
-        showToast(e?.message || '加载录音失败', true);
+        showToast(errorMessage(e, '加载录音失败'), true);
     } finally {
         // DR-1.2: phase reset covers every exit (success / stale ×2 / toast)
         // — a leftover LOADING phase would lock list switching forever.
@@ -455,7 +456,7 @@ async function startTranscription() {
         // Stem cleared at the same site as the phase reset (DR-1.2).
         state.transcribingStem = null;
         setPhase(PHASE.IDLE);
-        showToast(e?.message || '转录启动失败', true);
+        showToast(errorMessage(e, '转录启动失败'), true);
     }
 }
 
@@ -463,7 +464,7 @@ async function cancelTranscription() {
     try {
         await call('cancel_transcription');
     } catch (e) {
-        showToast(typeof e === 'string' ? e : e?.message || '取消失败', true);
+        showToast(errorMessage(e, '取消失败'), true);
     }
 }
 
@@ -529,7 +530,7 @@ async function injectText() {
         showToast('粘贴成功');
     } catch (e) {
         // Backend messages include the clipboard-fallback guidance.
-        showToast(e?.message || '粘贴失败', true);
+        showToast(errorMessage(e, '粘贴失败'), true);
     } finally {
         setPhase(PHASE.IDLE);
         refreshInjectTarget();

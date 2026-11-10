@@ -8,6 +8,7 @@ import {
     formatBytes,
     getPageRange,
 } from './lib/data-management.js';
+import { errorMessage } from './lib/errors.js';
 import {
     bindFinalizeListener,
     destroyPendingToast,
@@ -182,7 +183,7 @@ async function loadRecordingsPage(offset) {
         hideDataError();
     } catch (e) {
         if (reqId !== dataState.lastReqId) return;
-        showDataError(e?.message || '加载失败');
+        showDataError(errorMessage(e, '加载失败'));
         // Keep previous list contents intact (constraint F2).
     } finally {
         if (reqId === dataState.lastReqId) {
@@ -513,9 +514,7 @@ async function handleSingleDelete(filename) {
             showDataError(`部分删除失败：\n${failedList}`);
         }
     } catch (e) {
-        showDataError(
-            `删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
-        );
+        showDataError(`删除失败：${errorMessage(e, '未知错误')}`);
     }
 }
 
@@ -568,9 +567,7 @@ async function handleBatchDelete() {
             );
         }
     } catch (e) {
-        showDataError(
-            `批量删除失败：${typeof e === 'string' ? e : e?.message || '未知错误'}`,
-        );
+        showDataError(`批量删除失败：${errorMessage(e, '未知错误')}`);
     }
 }
 
@@ -587,7 +584,7 @@ async function undoDelete(id) {
     try {
         report = await call('restore_pending_delete', { id });
     } catch (e) {
-        const msg = typeof e === 'string' ? e : e?.message || '未知错误';
+        const msg = errorMessage(e, '未知错误');
         failure = `撤销失败：${msg}`;
     }
     // Refresh regardless — failed restore leaves the files in pending,

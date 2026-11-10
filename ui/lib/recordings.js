@@ -7,6 +7,7 @@
 // the command invocation and the element-level resource cleanup.
 
 import { call } from './api.js';
+import { errorMessage } from './errors.js';
 
 /**
  * Fetch a page of saved recordings. Errors are normalized to an Error with
@@ -21,7 +22,7 @@ export async function loadRecordings({ offset, limit, query = null }) {
     try {
         return await call('list_saved_recordings', { offset, limit, query });
     } catch (e) {
-        const msg = typeof e === 'string' ? e : e?.message || '加载失败';
+        const msg = errorMessage(e, '加载失败');
         throw new Error(msg);
     }
 }

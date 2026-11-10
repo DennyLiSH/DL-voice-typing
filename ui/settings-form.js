@@ -1,6 +1,7 @@
 import { call, reportError } from './lib/api.js';
 import { CLEAR_MARKER, MASKED_MARKER } from './lib/api-key-mask.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
+import { errorMessage } from './lib/errors.js';
 import { isFormDirty, onFormChange, setFormDirty } from './lib/form-state.js';
 import {
     DEFAULT_PRIMARY_SPEC,
@@ -444,7 +445,7 @@ testBtn.addEventListener('click', async () => {
         await call('test_llm_connection', { apiUrl, apiKey, model });
         setTestStatus('✓ 连接成功', 'success');
     } catch (e) {
-        setTestStatus(`✗ ${e?.message || '连接失败，请检查配置'}`, 'error');
+        setTestStatus(`✗ ${errorMessage(e, '连接失败，请检查配置')}`, 'error');
     } finally {
         testBtn.disabled = false;
         testBtn.textContent = '测试连接';
@@ -665,7 +666,7 @@ export async function saveSettings() {
         revealSaveStatus(saveMsg, saveMsgType);
     } catch (e) {
         disarmClearStatusOnInteract();
-        const msg = e?.message || '保存失败，请重试';
+        const msg = errorMessage(e, '保存失败，请重试');
         setSaveStatus(`✗ ${msg}`, 'error');
         showError(msg);
     } finally {

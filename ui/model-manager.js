@@ -1,5 +1,6 @@
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
+import { errorMessage } from './lib/errors.js';
 import { EVENTS } from './lib/events.js';
 import { hideIfVisible } from './lib/first-run-banner.js';
 import { notifyFormChange } from './lib/form-state.js';
@@ -139,7 +140,7 @@ btnDownloadModel.addEventListener('click', async () => {
             updateModelAction();
             notifyFormChange();
         } catch (e) {
-            showError(e?.message || '删除失败，请重试');
+            showError(errorMessage(e, '删除失败，请重试'));
         }
     } else {
         startDownload(selectedModel);
@@ -173,7 +174,7 @@ async function startDownload(size) {
             updateModelAction();
         } else {
             reportError(e, 'download_whisper_model');
-            showError(e?.message || '下载失败，请重试');
+            showError(errorMessage(e, '下载失败，请重试'));
             updateModelAction();
         }
     }

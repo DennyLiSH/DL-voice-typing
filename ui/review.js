@@ -144,6 +144,11 @@ async function doConfirm() {
         errorMsg.textContent = '';
         await call('confirm_inject', { text });
     } catch (err) {
+        // Deliberately NOT errorMessage(): this window shows a Chinese
+        // fallback instead of the backend's CommandError message, which is
+        // an English internal sentence ("cannot confirm from current
+        // state"). A bare string is the backend's user-facing summary and
+        // is shown as-is.
         errorMsg.textContent =
             typeof err === 'string' ? err : '粘贴失败，请重试';
         isClosing = false;
@@ -158,6 +163,8 @@ async function doCancel() {
     try {
         await call('cancel_review');
     } catch (e) {
+        // Same reason as doConfirm: a Chinese fallback beats surfacing the
+        // backend's English internal message in this window.
         errorMsg.textContent = typeof e === 'string' ? e : '取消失败，请重试';
         isClosing = false;
         updateButtons();

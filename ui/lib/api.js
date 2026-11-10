@@ -14,6 +14,8 @@
 // and all other existing ui/*.js files; @tauri-apps/api npm package is
 // NOT installed in this repo).
 
+import { errorMessage } from './errors.js';
+
 const { invoke } = window.__TAURI__.core;
 
 /**
@@ -32,7 +34,7 @@ export const rawInvoke = invoke;
  * @returns {Promise<void>}
  */
 export function reportError(e, context) {
-    const message = typeof e === 'object' && e?.message ? e.message : String(e);
+    const message = errorMessage(e, String(e));
     const stack = e instanceof Error ? e.stack : null;
     // rawInvoke (NOT call) — prevents infinite recursion if log_frontend_error itself fails.
     // Return the promise chain so callers CAN await if desired; the .catch() guarantees
