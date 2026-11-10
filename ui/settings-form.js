@@ -1,4 +1,5 @@
 import { call, reportError } from './lib/api.js';
+import { createApiKeyChannel } from './lib/api-key-channel.js';
 import { CLEAR_MARKER, MASKED_MARKER } from './lib/api-key-mask.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
 import { errorMessage } from './lib/errors.js';
@@ -47,8 +48,9 @@ const apiUrlInput = document.getElementById('api-url');
 const apiUrlWarning = document.getElementById('api-url-warning');
 const apiKeyInput = document.getElementById('api-key');
 const resetDefaultsBtn = document.getElementById('reset-defaults-btn');
-let apiKeyResetPending = false;
-let apiKeyHadExistingAtReset = false; // Stage 6 F1: snapshot channel
+// The API-key reset channel owns the wipe intent (pending flag +
+// snapshot channel + sentinel discrimination) — see lib/api-key-channel.js.
+const apiKeyChannel = createApiKeyChannel();
 // M6-a: populate the four main-key <select> elements (hotkey,
 // record-only-hotkey, open-settings-hotkey, open-transcribe-hotkey) as
 // part of module init — production wires this in app-shell.js; the test
@@ -153,34 +155,10 @@ const DOM_DEFS = {
         },
     },
     llm_api_key: {
-        get: () => {
-            const typed = apiKeyInput.value.trim();
-            // Sentinel neutralization (M3-a fix): a sentinel hand-typed
-            // into the input is indistinguishable from the legit
-            // roundtrip form at the validate layer, so the guard lives
-            // HERE at the DOM source — the only place that can tell
-            // "user typed" from "masked roundtrip echo". A typed
-            // sentinel degrades to the empty-input semantics (keep the
-            // stored key); sentinels can never reach the backend by
-            // hand-typing.
-            const v =
-                typed === CLEAR_MARKER || typed === MASKED_MARKER ? '' : typed;
-            // Dual channel (Stage 6 F1): with keepBaseline the LIVE check keeps
-            // reading the pre-reset baseline; the SNAPSHOT channel remains as
-            // defense-in-depth (and covers any future populate caller that
-            // forgets keepBaseline).
-            const hasExistingKey =
-                loadedConfig?.llm_api_key === MASKED_MARKER ||
-                (apiKeyResetPending && apiKeyHadExistingAtReset);
-            if (v) return v;
-            // Restore-defaults intent: wiping a stored key needs the explicit
-            // sentinel (empty input alone KEEPS the stored key — backend
-            // unmask_or_keep semantics).
-            if (apiKeyResetPending && hasExistingKey) return CLEAR_MARKER;
-            return loadedConfig?.llm_api_key === MASKED_MARKER
-                ? MASKED_MARKER
-                : '';
-        },
+        // The sentinel discrimination and the wipe intent live in the
+        // channel — this is the DOM source, the only place that can tell
+        // "user typed" from "masked roundtrip echo".
+        get: () => apiKeyChannel.getForSave(apiKeyInput.value, loadedConfig),
         set: (v) => {
             // Handle masked API key: clear input, show placeholder
             if (v === MASKED_MARKER) {
@@ -268,30 +246,45 @@ const DOM_DEFS = {
 
 const FIELDS = SETTINGS_FIELDS.map(({ key }) => ({ key, ...DOM_DEFS[key] }));
 
-export function populateFields(config, { keepBaseline = false } = {}) {
-    if (!keepBaseline) {
-        loadedConfig = config;
-    }
-    // Optional slot spec passthrough relies on `config[key]` being exactly
-    // what the backend sent (null for disabled, spec for enabled). The
-    // dirty-check side (isConfigDirty) handles the undefined→null
-    // normalisation for the optional slots when the user is on a pre-M6
-    // install and just upgraded — no duplicate guard here.
+export function populateFields(config) {
+    loadedConfig = config;
+    applyFieldsToForm(config);
+    // Re-loading the real config invalidates any in-flight CLEAR intent.
+    apiKeyChannel.disarm();
+}
+
+/**
+ * Fill the form with `config` WITHOUT replacing the dirty baseline.
+ *
+ * The restore-defaults flow uses it: the baseline must stay the REAL
+ * saved config, so the dirty check lights up for ANY divergence between
+ * the defaults and what is saved (including no-key users with
+ * non-default settings).
+ */
+export function populateFieldsKeepingBaseline(config) {
+    applyFieldsToForm(config);
+}
+
+/**
+ * Push every field value into the form and refresh the derived warnings.
+ *
+ * Optional slot spec passthrough relies on `config[key]` being exactly
+ * what the backend sent (null for disabled, spec for enabled). The
+ * dirty-check side (isConfigDirty) handles the undefined→null
+ * normalisation for the optional slots when the user is on a pre-M6
+ * install and just upgraded — no duplicate guard here.
+ */
+function applyFieldsToForm(config) {
     FIELDS.forEach(({ key, set }) => {
         set(config[key]);
     });
     updateApiUrlWarning();
     // Initial conflict-warning refresh on EVERY populate call (including
-    // the restore-defaults keepBaseline path — DR-1.2: hooking only the
-    // page-load entry would leave a stale conflict div up after reset,
-    // and a legacy config that already carries a conflicting pair shows
-    // the warning immediately on load).
+    // the restore-defaults path — DR-1.2: hooking only the page-load
+    // entry would leave a stale conflict div up after reset, and a
+    // legacy config that already carries a conflicting pair shows the
+    // warning immediately on load).
     updateHotkeyWarnings();
-    if (!keepBaseline) {
-        // Re-loading the real config invalidates any in-flight CLEAR intent.
-        apiKeyResetPending = false;
-        apiKeyHadExistingAtReset = false;
-    }
 
     // In dev builds without DL_AUTOSTART=1, gray out the autostart toggle.
     // Probe is in populateFields (not in FIELDS) because it is a one-shot
@@ -645,8 +638,7 @@ export async function saveSettings() {
         // Double-clear runs on the SUCCESS path only — clearing before the
         // call would silently drop the CLEAR intent on a failed save (the
         // retry would send MASKED = keep-key while the user meant to wipe).
-        apiKeyResetPending = false;
-        apiKeyHadExistingAtReset = false;
+        apiKeyChannel.disarm();
 
         // Sync autostart state with OS (skip in dev builds without DL_AUTOSTART=1).
         let saveMsg = '✓ 已保存';
@@ -796,15 +788,11 @@ if (resetDefaultsBtn) {
         try {
             const defaults = await call('get_default_config', {});
             const hadExisting = loadedConfig?.llm_api_key === MASKED_MARKER;
-            // keepBaseline: the dirty baseline (loadedConfig) stays = the REAL
-            // saved config, so dirty = "defaults vs saved" lights for ANY
+            // The dirty baseline (loadedConfig) stays = the REAL saved
+            // config, so dirty = "defaults vs saved" lights for ANY
             // divergence (incl. no-key users with non-default settings).
-            populateFields(
-                { ...defaults, llm_api_key: '' },
-                { keepBaseline: true },
-            );
-            apiKeyHadExistingAtReset = hadExisting;
-            apiKeyResetPending = true;
+            populateFieldsKeepingBaseline({ ...defaults, llm_api_key: '' });
+            apiKeyChannel.armReset(hadExisting);
             updateDirtyState();
             updateHotkeyPreview('hotkey');
             updateHotkeyPreview('record-only-hotkey');
@@ -824,7 +812,9 @@ if (resetDefaultsBtn) {
 // the reset notice still promises a wipe.
 if (apiKeyInput) {
     apiKeyInput.addEventListener('input', () => {
-        apiKeyResetPending = false;
+        // The user took over — the pending intent is cancelled, but the
+        // snapshot channel stays as defense-in-depth.
+        apiKeyChannel.cancelPending();
         if (saveStatus.textContent.includes('已恢复默认值')) {
             saveStatus.textContent = '';
         }
