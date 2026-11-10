@@ -12,6 +12,7 @@
  * - the merged-edit lock (segment edits must not clobber a full-text
  *   edit).
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PHASE } from '../ui/lib/transcribe.js';
 import { createTranscribeController } from '../ui/lib/transcribe-controller.js';
@@ -176,6 +177,28 @@ describe('transcribe controller — unsaved edits', () => {
         expect(controller.hasEdits()).toBe(true);
         controller.clearEdits();
         expect(controller.hasEdits()).toBe(false);
+    });
+});
+
+describe('transcribe controller — wiring surface', () => {
+    it('every controller method used by ui/transcribe.js exists', () => {
+        // `ui/transcribe.js` has no behaviour tests of its own — a typo in
+        // a controller call there would only surface as a runtime
+        // TypeError on click. The wiring surface is pinned here instead.
+        const { controller } = makeController();
+        const api = new Set(Object.keys(controller));
+        const src = readFileSync(
+            new URL('../ui/transcribe.js', import.meta.url),
+            'utf8',
+        );
+        const used = new Set(
+            [...src.matchAll(/(?<![-\w])controller[.]([A-Za-z]+)/g)].map(
+                (m) => m[1],
+            ),
+        );
+        expect(used.size).toBeGreaterThan(0);
+        const missing = [...used].filter((name) => !api.has(name)).sort();
+        expect(missing).toEqual([]);
     });
 });
 
