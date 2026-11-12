@@ -14,11 +14,26 @@
 //! `transcription-error`. Those differences are load-bearing for their
 //! respective frontends, so event emission stays with the callers.
 //!
-//! Lock protocol: callers MUST call [`correct_with_fallback`] from
-//! inside a `PipelineState::with_cached_llm` closure. The closure holds
-//! the slot lock for the duration of the HTTP call, which is the
-//! pre-existing invariant ("HTTP inside the lock") — a corrector must
-//! not be rebuilt while another one is mid-request.
+//! # Call-site protocol — all three points are intentional design
+//!
+//! **Lock window.** Callers MUST invoke [`correct_locked`] from inside
+//! a `PipelineState::with_cached_llm` closure: the slot lock is held
+//! for the duration of the HTTP call (the pre-existing "HTTP inside the
+//! lock" invariant) — no corrector may be rebuilt while another one is
+//! mid-request.
+//!
+//! **Two poison strategies — intentionally NOT unified.** When
+//! `with_cached_llm` returns `None` (poisoned slot lock), the classic
+//! pipeline maps it to `Err(AppError::Llm)` and its caller falls back
+//! to the raw transcription, while the transcribe window continues
+//! with [`poison_outcome_uncached`] — an uncached client, because the
+//! cache is an optimization, not a requirement.
+//!
+//! **Enabled/key-source divergence — intentional (Round 6 P1).** The
+//! classic pipeline decides LLM-ness from its `SessionPolicy` snapshot
+//! and reads the API key live per call (rotation-friendly); the
+//! transcribe window reads enabled + config live from `ConfigCache` at
+//! call time.
 
 use super::{LLMClient, TextCorrector, redact_error_detail};
 use std::sync::Arc;
@@ -103,6 +118,45 @@ pub(crate) fn correct_with_fallback(
             }
         }
     }
+}
+
+/// Correct `text` inside the slot-lock window: resolve the corrector for
+/// the given config (rebuilding into the slot on miss/mismatch, per the
+/// cache policy) and run the correction with raw-text fallback.
+///
+/// This is the closure body both callers used to spell out inline — the
+/// single source of the resolve+correct composition. Callers MUST invoke
+/// it from inside a `PipelineState::with_cached_llm` closure (lock-window
+/// protocol: see the module doc).
+#[allow(dead_code)] // interim: wired by the call-site task (Round 6 P2 Task 2)
+pub(crate) fn correct_locked(
+    slot: &mut Option<Arc<dyn TextCorrector>>,
+    url: &str,
+    api_key: &str,
+    model: &str,
+    text: &str,
+) -> CorrectionOutcome {
+    let corrector = resolve_corrector(slot, url, api_key, model);
+    correct_with_fallback(&corrector, text, api_key)
+}
+
+/// Poison-slot strategy of the transcribe window: the shared slot lock is
+/// poisoned, so resolve the corrector WITHOUT the cache — build a fresh
+/// `LLMClient` and correct anyway. The cache is an optimization, not a
+/// requirement.
+#[allow(dead_code)] // interim: wired by the call-site task (Round 6 P2 Task 2)
+pub(crate) fn poison_outcome_uncached(
+    url: &str,
+    api_key: &str,
+    model: &str,
+    text: &str,
+) -> CorrectionOutcome {
+    let corrector: Arc<dyn TextCorrector> = Arc::new(LLMClient::new(
+        url.to_string(),
+        api_key.to_string(),
+        model.to_string(),
+    ));
+    correct_with_fallback(&corrector, text, api_key)
 }
 
 #[cfg(test)]
@@ -190,6 +244,70 @@ mod tests {
         let outcome = correct_with_fallback(&corrector, "raw", "SECRET123");
         assert!(!outcome.used_llm);
         assert_eq!(outcome.text, "raw");
+    }
+
+    #[test]
+    fn correct_locked_returns_corrected_text_when_slot_holds_matching_mock() {
+        let seeded = mock(Some(("u", "k", "m")));
+        let mut slot = Some(seeded.clone());
+        let outcome = correct_locked(&mut slot, "u", "k", "m", "raw");
+        assert!(outcome.used_llm);
+        assert_eq!(outcome.text, "ok");
+        let cached = slot.as_ref().expect("slot must still hold the corrector");
+        assert!(
+            Arc::ptr_eq(&seeded, cached),
+            "a matching cached corrector must be reused — the slot still holds the mock"
+        );
+    }
+
+    /// The mismatch path rebuilds a real `LLMClient` and immediately runs
+    /// its `correct_sync` (`block_in_place`), so the multi-thread runtime
+    /// is required — same flavor as
+    /// `test_run_llm_correction_writes_corrector_back_to_cache`. The
+    /// unreachable endpoint keeps the failure fast and deterministic.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn correct_locked_rebuilds_and_writes_back_on_mismatch() {
+        let seeded = mock(Some(("u1", "k", "m")));
+        let mut slot = Some(seeded);
+        let outcome = correct_locked(
+            &mut slot,
+            "http://127.0.0.1:1/v1/chat/completions",
+            "k",
+            "m",
+            "raw",
+        );
+        assert!(
+            !outcome.used_llm,
+            "the rebuilt LLMClient must fail against the unreachable endpoint"
+        );
+        assert_eq!(
+            outcome.text, "raw",
+            "the raw text must survive the failed rebuild correction"
+        );
+        let cached = slot.as_ref().expect("slot must hold the rebuilt corrector");
+        assert!(
+            !cached.matches_config("u1", "k", "m"),
+            "the old mock config must be gone from the slot"
+        );
+        assert!(
+            cached.matches_config("http://127.0.0.1:1/v1/chat/completions", "k", "m"),
+            "the rebuilt corrector must be written back with the requested config"
+        );
+    }
+
+    /// Poison-slot strategy: with the cache unavailable the correction
+    /// still runs (uncached client) and falls back to the raw text on
+    /// failure — the cache is an optimization, not a requirement.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn poison_outcome_uncached_falls_back_to_raw() {
+        let outcome = poison_outcome_uncached(
+            "http://127.0.0.1:1/v1/chat/completions",
+            "SECRET123",
+            "m",
+            "raw text",
+        );
+        assert!(!outcome.used_llm);
+        assert_eq!(outcome.text, "raw text");
     }
 
     /// The fallback message must live in exactly one place — this
