@@ -673,7 +673,7 @@ impl PipelineState {
     /// is the independent "cancel the in-flight pipeline" path (token
     /// flip + `pipeline-cancelled` emit) and is deliberately NOT routed
     /// here.
-    #[allow(dead_code)] // production call sites land in the follow-up tasks (watchdog / tray / DC)
+    #[allow(dead_code)] // production call site lands in the tray task (batch P1 Task 3)
     pub(crate) fn recover_to_idle(&self) {
         self.recover_to_idle_resources();
         self.sm_reset();
@@ -689,7 +689,6 @@ impl PipelineState {
     /// lock was contended (the caller's "state machine lock may be
     /// deadlocked" trail applies). The overlay hides below run either way
     /// ("lock dead, still do the UI recovery").
-    #[allow(dead_code)] // production call site lands in the watchdog task
     pub(crate) fn try_recover_to_idle(&self) -> bool {
         self.recover_to_idle_resources();
         let reset_ok = match self.sm.try_lock() {
@@ -757,6 +756,23 @@ impl PipelineState {
             }
         }
         crate::util::lock_mutex(&self.sm, "state_machine").map(|s| s.state())
+    }
+
+    /// Current state-machine tag WITHOUT blocking: `try_lock` → Ok yields
+    /// `Some(tag)`; a contended (`WouldBlock`) or poisoned lock yields
+    /// `None` (warned once here). Query surface for non-blocking contexts
+    /// whose contract is "skip this check rather than wait" — the watchdog
+    /// tick (2026-05-13 decision). Unlike `sm_state`, the cfg(test)
+    /// `forced_sm_state` override does not apply: the watchdog tests drive
+    /// real transitions through the verbs.
+    pub(crate) fn try_sm_state(&self) -> Option<StateTag> {
+        match self.sm.try_lock() {
+            Ok(s) => Some(s.state()),
+            Err(e) => {
+                warn!("try_sm_state: state_machine lock unavailable: {e}");
+                None
+            }
+        }
     }
 
     pub(crate) fn sm_start_recording(&self) -> bool {
@@ -1328,6 +1344,12 @@ mod sm_verb_tests {
         // "everything back to Idle" sweep owned by the state instead of
         // three scattered orchestrations. Real count 48 → 50.
         //
+        // 2026-11-13 (round 6, watchdog task): +1 `try_sm_state` — the
+        // watchdog tick's non-blocking sm read: a contended or poisoned
+        // lock yields None (warned inside) so the tick skips its check
+        // instead of waiting (2026-05-13 decision). Sits beside `sm_state`
+        // in the verb-layer query surface. Real count 50 → 51.
+        //
         // Calibration: the ratchet's two `src.matches(...)` literal strings
         // ALSO appear in the test body itself (one for each pattern), so the
         // measured count is real count + 2.
@@ -1338,7 +1360,7 @@ mod sm_verb_tests {
         let count = pipeline_src.matches("    pub(crate) fn ").count()
             + pipeline_src.matches("    pub fn ").count();
         assert_eq!(
-            count, 52,
+            count, 53,
             "PipelineState pub-fn surface changed; update the ratchet deliberately \
              (real count = measured - 2, to subtract the test body's two self-references)"
         );

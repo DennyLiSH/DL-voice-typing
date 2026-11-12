@@ -104,7 +104,7 @@ pub fn run() {
             app.manage(DownloadState::new());
             app.manage(commands::PendingReview::new());
             app.manage(commands::transcribe_cmd::PendingTranscribe::new());
-            start_watchdog(app.handle(), state_machine.clone());
+            start_watchdog(app.handle());
             maybe_open_settings_on_missing_model(app.handle(), &config);
             Ok(())
         })
@@ -541,13 +541,22 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
     hotkey_manager
 }
 
-/// Start the background watchdog thread that monitors state machine health.
-fn start_watchdog(app: &tauri::AppHandle, state_machine: Arc<Mutex<StateMachine>>) {
-    let watchdog_recovery = Arc::new(crate::watchdog::TauriRecoveryActions::new(app.clone()));
+/// Start the background watchdog thread that monitors pipeline-state health.
+///
+/// The watchdog holds an `Arc<PipelineState>` clone (all fields are shared
+/// Arcs, so the clone observes the same components — same `.inner().clone()`
+/// extraction shape as config_cmd's rebuild path). The managed PipelineState
+/// itself is not re-managed or rewrapped; the three existing
+/// `app.state::<PipelineState>()` extraction sites stay untouched.
+fn start_watchdog(app: &tauri::AppHandle) {
+    let ps = Arc::new(
+        app.state::<commands::pipeline_state::PipelineState>()
+            .inner()
+            .clone(),
+    );
     std::thread::spawn(move || {
         let wd = crate::watchdog::Watchdog::new(
-            state_machine,
-            watchdog_recovery,
+            ps,
             std::time::Duration::from_secs(10),
             std::time::Duration::from_secs(30),
         );

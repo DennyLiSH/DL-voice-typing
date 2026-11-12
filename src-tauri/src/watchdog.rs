@@ -1,88 +1,24 @@
-use crate::state::StateMachine;
+use crate::commands::pipeline_state::PipelineState;
+use crate::state::StateTag;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
 use tracing::{error, info, warn};
-
-/// Abstract recovery actions performed when the watchdog forces a reset.
-/// Decouples the watchdog from Tauri-specific window names and tooltip text.
-pub trait RecoveryActions: Send + Sync {
-    /// Hide the floating recording indicator window.
-    fn hide_floating_window(&self);
-    /// Hide the review-before-paste window.
-    fn hide_review_window(&self);
-    /// Emit a reset event so the frontend can update its state.
-    fn emit_watchdog_reset(&self);
-    /// Update the tray tooltip to indicate automatic recovery.
-    fn set_tray_recovered(&self);
-    /// Reset review session state (e.g., shown_on_press flag).
-    fn reset_review_state(&self);
-    /// Stop any active record-only streaming recorder (bounded wait).
-    fn stop_record_only(&self);
-}
-
-/// Tauri-based implementation of recovery actions.
-pub struct TauriRecoveryActions {
-    app: AppHandle,
-}
-
-impl TauriRecoveryActions {
-    /// Create a new Tauri recovery adapter wrapping the given app handle.
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
-    }
-}
-
-impl RecoveryActions for TauriRecoveryActions {
-    fn hide_floating_window(&self) {
-        if let Some(win) = self.app.get_webview_window("floating") {
-            let _ = win.hide();
-        }
-    }
-
-    fn hide_review_window(&self) {
-        if let Some(win) = self.app.get_webview_window("review") {
-            let _ = win.hide();
-        }
-    }
-
-    fn emit_watchdog_reset(&self) {
-        let _ = self.app.emit("watchdog-reset", ());
-    }
-
-    fn set_tray_recovered(&self) {
-        if let Some(tray) = self.app.tray_by_id("default") {
-            let _ = tray.set_tooltip(Some("语文兔 - 已自动恢复"));
-        }
-    }
-
-    fn reset_review_state(&self) {
-        if let Some(pending) = self
-            .app
-            .try_state::<super::commands::review::PendingReview>()
-            && let Some(mut guard) =
-                crate::util::lock_mutex(&pending.shown_on_press, "shown_on_press")
-        {
-            *guard = false;
-        }
-    }
-
-    fn stop_record_only(&self) {
-        if let Some(ps) = self
-            .app
-            .try_state::<super::commands::pipeline_state::PipelineState>()
-        {
-            super::commands::record_only_session::RecordOnlySession::recover(&ps);
-        }
-    }
-}
 
 /// State machine watchdog: periodically checks if the state machine is stuck
 /// in a non-Idle state and forcibly resets it after a threshold.
+///
+/// Holds `Arc<PipelineState>` — no AppHandle. The stuck-reset routes through
+/// the full-reset recipe verb `PipelineState::try_recover_to_idle()` (resource
+/// drains → non-blocking sm reset → overlay hides), while the caller-facing
+/// signals stay HERE at the call site (the recipe deliberately owns no events
+/// or tooltip): `watchdog-reset` via the PipelineState emitter, tray tooltip
+/// via the PipelineState window controller. `tick`'s state read is
+/// non-blocking (`try_sm_state`) — a contended lock skips the check
+/// (2026-05-13 decision), so the watchdog can never hang on a deadlocked
+/// state machine.
 pub struct Watchdog {
-    sm: Arc<Mutex<StateMachine>>,
-    recovery: Arc<dyn RecoveryActions + Send + Sync>,
+    ps: Arc<PipelineState>,
     check_interval: Duration,
     stuck_threshold: Duration,
     last_non_idle_at: Option<Instant>,
@@ -90,16 +26,14 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
-    /// Create a new watchdog with the given state machine, recovery actions, and timing parameters.
+    /// Create a new watchdog for the given pipeline state, with timing parameters.
     pub fn new(
-        sm: Arc<Mutex<StateMachine>>,
-        recovery: Arc<dyn RecoveryActions + Send + Sync>,
+        ps: Arc<PipelineState>,
         check_interval: Duration,
         stuck_threshold: Duration,
     ) -> Self {
         Self {
-            sm,
-            recovery,
+            ps,
             check_interval,
             stuck_threshold,
             last_non_idle_at: None,
@@ -127,60 +61,50 @@ impl Watchdog {
     /// Single check cycle. Public for testing.
     /// `now`: injectable clock for deterministic testing.
     pub fn tick(&mut self, now: Instant) {
-        // Scope the state machine lock so the borrow ends before force_reset
-        // (which needs &mut self) is called.
-        let needs_force_reset = {
-            let guard = self.sm.try_lock();
-            let Ok(sm) = guard else {
-                warn!("Watchdog: state_machine lock busy/unavailable, skipping check");
-                return;
-            };
+        // Non-blocking state read: a contended or poisoned lock skips this
+        // check entirely (the warn lives in try_sm_state). The lock is
+        // released by the time force_reset runs, so force_reset's own
+        // internal sm access cannot self-deadlock.
+        let Some(tag) = self.ps.try_sm_state() else {
+            return;
+        };
 
-            let state_name = sm.state_name();
-            let is_idle = matches!(sm.state(), crate::state::StateTag::Idle);
+        if matches!(tag, StateTag::Idle) {
+            if self.last_non_idle_at.take().is_some() {
+                info!("Watchdog: state recovered to Idle");
+            }
+            return;
+        }
 
-            if is_idle {
-                if self.last_non_idle_at.take().is_some() {
-                    info!("Watchdog: state recovered to Idle");
-                }
+        // RecordOnly is a legitimate long-lived state (meetings can run for
+        // tens of minutes): exempt it from the stuck threshold. Clear any
+        // stale timer so a following non-Idle state gets a fresh window.
+        if matches!(tag, StateTag::RecordOnly) {
+            self.last_non_idle_at = None;
+            return;
+        }
+
+        // Non-Idle state
+        let elapsed = match self.last_non_idle_at {
+            Some(t) => now.duration_since(t),
+            None => {
+                self.last_non_idle_at = Some(now);
+                info!("Watchdog: detected non-Idle state: {tag:?}");
                 return;
             }
+        };
 
-            // RecordOnly is a legitimate long-lived state (meetings can run for
-            // tens of minutes): exempt it from the stuck threshold. Clear any
-            // stale timer so a following non-Idle state gets a fresh window.
-            if matches!(sm.state(), crate::state::StateTag::RecordOnly) {
-                self.last_non_idle_at = None;
-                return;
-            }
-
-            // Non-Idle state
-            let elapsed = match self.last_non_idle_at {
-                Some(t) => now.duration_since(t),
-                None => {
-                    self.last_non_idle_at = Some(now);
-                    info!("Watchdog: detected non-Idle state: {state_name}");
-                    return;
-                }
-            };
-
-            if elapsed >= self.stuck_threshold {
-                error!(
-                    "Watchdog: state machine stuck in {state_name} for {:?}, forcing reset",
-                    elapsed
-                );
-                true
-            } else {
-                warn!(
-                    "Watchdog: state machine in {state_name} for {:?}, waiting...",
-                    elapsed
-                );
-                false
-            }
-        }; // guard dropped here — borrow of self.sm ends.
-
-        if needs_force_reset {
+        if elapsed >= self.stuck_threshold {
+            error!(
+                "Watchdog: state machine stuck in {tag:?} for {:?}, forcing reset",
+                elapsed
+            );
             self.force_reset();
+        } else {
+            warn!(
+                "Watchdog: state machine in {tag:?} for {:?}, waiting...",
+                elapsed
+            );
         }
     }
 
@@ -190,25 +114,26 @@ impl Watchdog {
     }
 
     fn force_reset(&mut self) {
-        // Use try_lock instead of blocking lock_mutex to avoid the watchdog
-        // itself hanging when the state machine lock is deadlocked by another thread.
-        match self.sm.try_lock() {
-            Ok(mut sm) => {
-                sm.reset();
-                info!("Watchdog: state machine forcibly reset to Idle");
-            }
-            Err(e) => {
-                error!("Watchdog: failed to acquire state_machine lock for reset: {e}");
-                error!("Watchdog: state machine lock may be deadlocked!");
-            }
+        // Full-reset recipe verb: resource drains (realtime-leftover stop,
+        // audio capture stop, record-only session recover, cancel-token
+        // drain, gated clipboard restore) → sm try_lock reset (warn and
+        // continue on contention) → hide floating/review overlays. The sm
+        // access inside is try_lock — never blocking — so the watchdog
+        // cannot hang on a deadlocked state machine.
+        let reset_ok = self.ps.try_recover_to_idle();
+        if reset_ok {
+            info!("Watchdog: state machine forcibly reset to Idle");
+        } else {
+            error!("Watchdog: state machine lock may be deadlocked!");
         }
-        // Always perform UI recovery even if lock acquisition failed.
-        self.recovery.hide_floating_window();
-        self.recovery.hide_review_window();
-        self.recovery.reset_review_state();
-        self.recovery.stop_record_only();
-        self.recovery.emit_watchdog_reset();
-        self.recovery.set_tray_recovered();
+        // Caller-facing signals stay at the call site (the recipe owns only
+        // resource cleanup): reset event for the frontend + tray tooltip.
+        self.ps
+            .emitter()
+            .emit("watchdog-reset", serde_json::Value::Null);
+        self.ps
+            .window_controller()
+            .set_tray_tooltip("语文兔 - 已自动恢复");
         // Clear the stuck timer so a fresh recording doesn't immediately
         // trigger another reset.
         self.last_non_idle_at = None;
@@ -218,140 +143,190 @@ impl Watchdog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::StateTag;
+    use crate::commands::MockEmitter;
+    use crate::commands::pipeline_state::TestComponents;
+    use crate::commands::window_controller::WindowController;
+    use std::sync::Mutex;
 
-    struct MockRecovery {
-        actions: Arc<Mutex<Vec<String>>>,
+    /// Test-only WindowController recording method calls by name. Tooltip
+    /// calls record their payload so the recovered-tooltip text stays pinned
+    /// to the watchdog call site.
+    struct RecordingWindowController {
+        calls: Arc<Mutex<Vec<String>>>,
     }
 
-    impl MockRecovery {
-        fn new(actions: Arc<Mutex<Vec<String>>>) -> Self {
-            Self { actions }
+    impl WindowController for RecordingWindowController {
+        fn show_floating_near_caret(&self) -> bool {
+            false
+        }
+        fn hide_floating(&self) {
+            self.calls.lock().unwrap().push("hide_floating".into());
+        }
+        fn show_review_near_caret(&self) -> bool {
+            false
+        }
+        fn hide_review(&self) {
+            self.calls.lock().unwrap().push("hide_review".into());
+        }
+        fn focus_review(&self) -> bool {
+            false
+        }
+        fn eval_review_js(&self, _js: &str) -> bool {
+            false
+        }
+        fn emit_review_show(&self) {}
+        fn emit_review_final_text(&self, _text: &str) {}
+        fn restore_foreground_hwnd(&self, _hwnd: isize) {}
+        fn show_floating_corner(&self) -> bool {
+            false
+        }
+        fn set_tray_tooltip(&self, tooltip: &str) {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("set_tray_tooltip:{tooltip}"));
         }
     }
 
-    impl RecoveryActions for MockRecovery {
-        fn hide_floating_window(&self) {
-            let _ = self
-                .actions
-                .lock()
-                .map(|mut a| a.push("hide_floating".into()));
-        }
-        fn hide_review_window(&self) {
-            let _ = self
-                .actions
-                .lock()
-                .map(|mut a| a.push("hide_review".into()));
-        }
-        fn emit_watchdog_reset(&self) {
-            let _ = self.actions.lock().map(|mut a| a.push("emit_reset".into()));
-        }
-        fn set_tray_recovered(&self) {
-            let _ = self.actions.lock().map(|mut a| a.push("set_tray".into()));
-        }
-        fn reset_review_state(&self) {
-            let _ = self
-                .actions
-                .lock()
-                .map(|mut a| a.push("reset_review".into()));
-        }
-        fn stop_record_only(&self) {
-            let _ = self
-                .actions
-                .lock()
-                .map(|mut a| a.push("stop_record_only".into()));
-        }
+    /// Fixture bundle: watchdog + the PipelineState it monitors + the
+    /// handles the assertions read (emitter event log, window-controller
+    /// call log).
+    struct Fixture {
+        wd: Watchdog,
+        ps: Arc<PipelineState>,
+        emitter: Arc<MockEmitter>,
+        calls: Arc<Mutex<Vec<String>>>,
     }
 
-    fn make_watchdog() -> (Watchdog, Arc<Mutex<Vec<String>>>) {
-        let sm = Arc::new(Mutex::new(StateMachine::new()));
-        let actions = Arc::new(Mutex::new(Vec::new()));
-        let recovery = Arc::new(MockRecovery::new(actions.clone()));
-        let wd = Watchdog::new(
-            sm,
-            recovery,
-            Duration::from_secs(10),
-            Duration::from_secs(30),
+    fn make_watchdog() -> Fixture {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let wc: Arc<dyn WindowController> = Arc::new(RecordingWindowController {
+            calls: calls.clone(),
+        });
+        let emitter = Arc::new(MockEmitter::new());
+        let ps = Arc::new(
+            TestComponents::default()
+                .with_window_controller(wc)
+                .with_emitter(emitter.clone())
+                .build(),
         );
-        (wd, actions)
+        let wd = Watchdog::new(ps.clone(), Duration::from_secs(10), Duration::from_secs(30));
+        Fixture {
+            wd,
+            ps,
+            emitter,
+            calls,
+        }
     }
 
     #[test]
     fn test_tick_idle_does_nothing() {
-        let (mut wd, actions) = make_watchdog();
+        let Fixture {
+            mut wd,
+            ps: _ps,
+            emitter,
+            calls,
+        } = make_watchdog();
         let t0 = Instant::now();
         wd.tick(t0);
-        assert!(actions.lock().unwrap().is_empty());
+        assert!(emitter.take_events().is_empty());
+        assert!(calls.lock().unwrap().is_empty());
     }
 
     #[test]
     fn test_tick_non_idle_first_detect() {
-        let (mut wd, actions) = make_watchdog();
-        wd.sm.lock().unwrap().start_recording().unwrap();
+        let Fixture {
+            mut wd,
+            ps,
+            emitter,
+            calls,
+        } = make_watchdog();
+        assert!(ps.sm_start_recording());
         let t0 = Instant::now();
         wd.tick(t0);
         // First non-idle detection: sets timestamp but does NOT reset.
         assert!(wd.last_non_idle_at.is_some());
-        assert!(actions.lock().unwrap().is_empty());
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(emitter.take_events().is_empty());
     }
 
     #[test]
     fn test_tick_stuck_forces_reset() {
-        let (mut wd, actions) = make_watchdog();
-        wd.sm.lock().unwrap().start_recording().unwrap();
+        let Fixture {
+            mut wd,
+            ps,
+            emitter,
+            calls,
+        } = make_watchdog();
+        assert!(ps.sm_start_recording());
         let t0 = Instant::now();
         wd.tick(t0); // sets last_non_idle_at
         // Advance past stuck threshold (30s).
         let t1 = t0 + Duration::from_secs(31);
         wd.tick(t1);
-        // Should have forced reset and performed recovery actions.
-        let actions = actions.lock().unwrap();
-        assert!(actions.contains(&"hide_floating".to_string()));
-        assert!(actions.contains(&"emit_reset".to_string()));
-        assert!(actions.contains(&"set_tray".to_string()));
-        assert!(actions.contains(&"reset_review".to_string()));
-        assert!(actions.contains(&"stop_record_only".to_string()));
-        assert_eq!(
-            wd.sm.lock().map_or(StateTag::Idle, |s| s.state()),
-            crate::state::StateTag::Idle
+        // Recovery routed through PipelineState: overlay hides recorded by
+        // the mock WindowController (floating + the unconditional review
+        // hide), tooltip text stays at the watchdog call site, and the
+        // reset event goes out through the PipelineState emitter.
+        let calls = calls.lock().unwrap();
+        assert!(calls.contains(&"hide_floating".to_string()));
+        assert!(calls.contains(&"hide_review".to_string()));
+        assert!(calls.contains(&"set_tray_tooltip:语文兔 - 已自动恢复".to_string()));
+        drop(calls);
+        let events = emitter.take_events();
+        assert!(
+            events.iter().any(|(name, _)| name == "watchdog-reset"),
+            "expected watchdog-reset event, got {events:?}"
         );
-        // last_non_idle_at should be cleared after force reset.
+        // State machine back to Idle; stuck timer cleared after force reset.
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
         assert!(wd.last_non_idle_at.is_none());
     }
 
     #[test]
     fn test_tick_before_threshold_waits() {
-        let (mut wd, actions) = make_watchdog();
-        wd.sm.lock().unwrap().start_recording().unwrap();
+        let Fixture {
+            mut wd,
+            ps,
+            emitter,
+            calls,
+        } = make_watchdog();
+        assert!(ps.sm_start_recording());
         let t0 = Instant::now();
         wd.tick(t0);
         // Not yet stuck (only 10s).
         let t1 = t0 + Duration::from_secs(10);
         wd.tick(t1);
-        assert!(actions.lock().unwrap().is_empty());
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(emitter.take_events().is_empty());
     }
 
     #[test]
     fn test_recovery_to_idle_clears_timestamp() {
-        let (mut wd, _) = make_watchdog();
-        wd.sm.lock().unwrap().start_recording().unwrap();
+        let Fixture {
+            mut wd,
+            ps,
+            emitter: _emitter,
+            calls: _calls,
+        } = make_watchdog();
+        assert!(ps.sm_start_recording());
         let t0 = Instant::now();
         wd.tick(t0);
         assert!(wd.last_non_idle_at.is_some());
         // State recovers to idle.
-        wd.sm.lock().unwrap().reset();
+        ps.sm_reset();
         wd.tick(t0 + Duration::from_secs(1));
         assert!(wd.last_non_idle_at.is_none());
     }
 
     #[test]
     fn test_stop_flag() {
-        let wd = Watchdog::new(
-            Arc::new(Mutex::new(StateMachine::new())),
-            Arc::new(MockRecovery::new(Arc::new(Mutex::new(Vec::new())))),
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        );
+        let Fixture {
+            wd,
+            ps: _ps,
+            emitter: _emitter,
+            calls: _calls,
+        } = make_watchdog();
         assert!(!wd.stopped.load(Ordering::Relaxed));
         wd.stop();
         assert!(wd.stopped.load(Ordering::Relaxed));
@@ -359,34 +334,77 @@ mod tests {
 
     #[test]
     fn test_record_only_is_exempt_from_stuck_reset() {
-        let (mut wd, actions) = make_watchdog();
-        assert!(wd.sm.lock().map(|mut s| s.start_record_only()).is_ok());
+        let Fixture {
+            mut wd,
+            ps,
+            emitter,
+            calls,
+        } = make_watchdog();
+        assert!(ps.sm_start_record_only());
         let t0 = Instant::now();
         wd.tick(t0);
         // Well past the stuck threshold: RecordOnly must NOT trigger reset.
         wd.tick(t0 + Duration::from_secs(300));
-        assert!(actions.lock().map(|a| a.is_empty()).unwrap_or(false));
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(emitter.take_events().is_empty());
         assert!(wd.last_non_idle_at.is_none());
     }
 
     #[test]
     fn test_record_only_clears_stale_timer_from_prior_state() {
-        let (mut wd, actions) = make_watchdog();
+        let Fixture {
+            mut wd,
+            ps,
+            emitter,
+            calls,
+        } = make_watchdog();
         // Simulate a prior non-Idle state that started the stuck timer.
-        assert!(wd.sm.lock().map(|mut s| s.start_recording()).is_ok());
+        assert!(ps.sm_start_recording());
         let t0 = Instant::now();
         wd.tick(t0);
         assert!(wd.last_non_idle_at.is_some());
         // Transition into RecordOnly: timer must be cleared, no reset.
-        {
-            let Ok(mut sm) = wd.sm.lock() else {
-                panic!("state machine lock poisoned");
-            };
-            sm.reset();
-            assert!(sm.start_record_only().is_ok());
-        }
+        ps.sm_reset();
+        assert!(ps.sm_start_record_only());
         wd.tick(t0 + Duration::from_secs(300));
-        assert!(actions.lock().map(|a| a.is_empty()).unwrap_or(false));
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(emitter.take_events().is_empty());
+        assert!(wd.last_non_idle_at.is_none());
+    }
+
+    /// Pins the 2026-05-13 non-blocking decision: a contended state-machine
+    /// lock makes tick() skip the check (no force reset even past the
+    /// threshold, timer preserved) instead of blocking on the lock.
+    #[test]
+    fn test_tick_skips_check_when_sm_lock_busy() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let wc: Arc<dyn WindowController> = Arc::new(RecordingWindowController {
+            calls: calls.clone(),
+        });
+        let emitter = Arc::new(MockEmitter::new());
+        let components = TestComponents::default()
+            .with_window_controller(wc)
+            .with_emitter(emitter.clone());
+        // build() consumes the components; keep a shared handle on the sm
+        // so this test can hold its lock to simulate contention.
+        let sm = components.sm.clone();
+        let ps = Arc::new(components.build());
+        assert!(ps.sm_start_recording());
+        let mut wd = Watchdog::new(ps.clone(), Duration::from_secs(10), Duration::from_secs(30));
+        let t0 = Instant::now();
+        wd.tick(t0);
+        assert!(wd.last_non_idle_at.is_some());
+        // Hold the state-machine lock; tick past the threshold must SKIP
+        // (try_sm_state yields None) rather than block or force a reset.
+        let sm_guard = sm.lock().unwrap();
+        wd.tick(t0 + Duration::from_secs(31));
+        drop(sm_guard);
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(emitter.take_events().is_empty());
+        // The timer survives the skipped check: the next uncontended tick
+        // (32s >= 30s threshold) forces the reset.
+        wd.tick(t0 + Duration::from_secs(32));
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
         assert!(wd.last_non_idle_at.is_none());
     }
 }
