@@ -545,7 +545,9 @@ impl PipelineState {
     // The ordering knowledge — "reset must hide overlays, review cleanup is
     // conditional on shown_on_press" — lives HERE, with the state owner,
     // instead of in every caller's orchestration (architecture review
-    // 2026-09-06 candidate 1).
+    // 2026-09-06 candidate 1). The full-reset recipe (recover_to_idle /
+    // try_recover_to_idle, round 6 batch P1) extends this with the
+    // recovery-path resource drains — see the recipe block below.
     // ========================================================================
 
     /// Hide the floating window and, if the review window was shown on
@@ -615,6 +617,97 @@ impl PipelineState {
         } else {
             false
         }
+    }
+
+    // --------------------------------------------------------------------
+    // Full-reset recipe (architecture review round 6, batch P1). One
+    // "everything back to a clean Idle" sweep for the recovery-path
+    // callers (watchdog / tray reset / delivery failure — wired by the
+    // follow-up tasks of this batch). Subsumes `reset_to_idle`
+    // (sm_reset + hide_overlays) and extends it with the resource drains.
+    //
+    // The shared resource steps are identical in both variants and
+    // best-effort: a poisoned or contended lock skips its step
+    // (lock_mutex already warns) and never interrupts the sequence.
+    //
+    // The recipe deliberately does NOT emit events and does NOT set the
+    // tray tooltip — those are caller-facing signals (tray-reset vs
+    // watchdog-reset event names) and stay at the call site. The recipe
+    // only owns resource cleanup.
+    // --------------------------------------------------------------------
+    fn recover_to_idle_resources(&self) {
+        self.stop_realtime_leftover();
+
+        if let Some(mut ac_guard) = crate::util::lock_mutex(&self.ac, "audio_capture") {
+            ac_guard.stop();
+        }
+
+        // Bounded record-only cleanup (finalize join is timeout-capped).
+        // This recipe holds no lock across the call, so recover's internal
+        // re-entry into the sm verbs cannot deadlock; its internal reset
+        // paths are all best-effort (double reset on Idle is infallible).
+        crate::commands::record_only_session::RecordOnlySession::recover(self);
+
+        // Drain = discard, NOT flip: a full reset has no in-flight pipeline
+        // to signal — flipping here would fake an Esc cancel (that stays
+        // `cancel_active_pipeline`'s job).
+        let _ = self.take_cancel_token();
+
+        // Gated: an unsaved cycle has nothing to restore.
+        self.restore_clipboard_if_saved();
+    }
+
+    /// Full-reset recipe, blocking variant (tray reset / recovery paths).
+    ///
+    /// Resource drains, then `sm_reset` + `hide_overlays` (the
+    /// `reset_to_idle` pairing), plus ONE unconditional extra
+    /// `hide_review`: it covers the ClassicReview-stuck corner where the
+    /// review window is visible but `shown_on_press` is already false —
+    /// `hide_overlays`' conditional branch would skip it (watchdog/tray
+    /// hide review unconditionally today; the extra hide is idempotent).
+    /// Do NOT insert an explicit `set_shown_on_press(false)` before
+    /// `hide_overlays` — that would defeat its conditional branch; the
+    /// flag clearing stays inside it.
+    ///
+    /// "Full reset" semantics — the Esc entry (`cancel_active_pipeline`)
+    /// is the independent "cancel the in-flight pipeline" path (token
+    /// flip + `pipeline-cancelled` emit) and is deliberately NOT routed
+    /// here.
+    #[allow(dead_code)] // production call sites land in the follow-up tasks (watchdog / tray / DC)
+    pub(crate) fn recover_to_idle(&self) {
+        self.recover_to_idle_resources();
+        self.sm_reset();
+        self.hide_overlays();
+        self.window_controller.hide_review();
+    }
+
+    /// Full-reset recipe, non-blocking-sm variant (watchdog callers).
+    ///
+    /// Identical resource steps; only the state reset differs: `try_lock`
+    /// instead of a blocking lock — Ok → reset, Err → warn and continue.
+    /// Returns whether the state reset succeeded; `false` means the sm
+    /// lock was contended (the caller's "state machine lock may be
+    /// deadlocked" trail applies). The overlay hides below run either way
+    /// ("lock dead, still do the UI recovery").
+    #[allow(dead_code)] // production call site lands in the watchdog task
+    pub(crate) fn try_recover_to_idle(&self) -> bool {
+        self.recover_to_idle_resources();
+        let reset_ok = match self.sm.try_lock() {
+            Ok(mut s) => {
+                s.reset();
+                true
+            }
+            Err(e) => {
+                warn!(
+                    "try_recover_to_idle: state_machine lock unavailable, \
+                     continuing with UI recovery: {e}"
+                );
+                false
+            }
+        };
+        self.hide_overlays();
+        self.window_controller.hide_review();
+        reset_ok
     }
 
     // ========================================================================
@@ -1229,6 +1322,12 @@ mod sm_verb_tests {
         // moved, which is why the measured number drops by 3 (the
         // builder's `with_window_controller` / `with_clipboard` / `build`).
         //
+        // 2026-11-13 (architecture review round 6, batch P1): +2 full-reset
+        // recipe verbs (recover_to_idle / try_recover_to_idle) — the
+        // watchdog / tray-reset / delivery-failure paths converge on ONE
+        // "everything back to Idle" sweep owned by the state instead of
+        // three scattered orchestrations. Real count 48 → 50.
+        //
         // Calibration: the ratchet's two `src.matches(...)` literal strings
         // ALSO appear in the test body itself (one for each pattern), so the
         // measured count is real count + 2.
@@ -1239,7 +1338,7 @@ mod sm_verb_tests {
         let count = pipeline_src.matches("    pub(crate) fn ").count()
             + pipeline_src.matches("    pub fn ").count();
         assert_eq!(
-            count, 50,
+            count, 52,
             "PipelineState pub-fn surface changed; update the ratchet deliberately \
              (real count = measured - 2, to subtract the test body's two self-references)"
         );
@@ -1397,5 +1496,154 @@ mod sm_verb_tests {
         // 间接覆盖——MockClipboard 的 saved 态由注入文本周期驱动，本单元
         // 测试只锁 gate 语义（unsaved 不触发）。
         assert!(!ps.restore_clipboard_if_saved());
+    }
+
+    // ========================================================================
+    // Full-reset recipe (recover_to_idle / try_recover_to_idle)
+    //
+    // Step-completeness is asserted through observable surfaces: the
+    // WindowController call record (overlays), MockAudioCapture state
+    // (capture stop), MockClipboard flags (gated restore), and the
+    // cancel-token slot (drain). stop_realtime_leftover and
+    // RecordOnlySession::recover have no handle back out — their deep
+    // behaviour is covered by their own unit tests; here they run for
+    // real as part of the sequence.
+    // ========================================================================
+
+    #[test]
+    fn recover_to_idle_runs_full_reset_recipe() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let review = Arc::new(MockReviewProvider::new());
+        let clipboard = Arc::new(crate::clipboard::MockClipboard::new());
+        let ac = Arc::new(Mutex::new(crate::audio::MockAudioCapture::new()));
+        let ps = TestComponents::default()
+            .with_window_controller(Arc::new(LogWindowController {
+                calls: calls.clone(),
+            }))
+            .with_review(review.clone())
+            .with_clipboard(clipboard.clone())
+            .with_ac(ac.clone())
+            .build();
+
+        // Drive every resource the recipe must drain.
+        assert!(ps.sm_start_recording());
+        review.set_shown_on_press(true);
+        ac.lock().unwrap().start(Box::new(|_| {})).unwrap();
+        clipboard.save().unwrap();
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        ps.set_cancel_token(token.clone());
+
+        ps.recover_to_idle();
+
+        // sm back to Idle; overlays hidden — hide_overlays' conditional
+        // review hide (shown_on_press was true) PLUS the ruled
+        // unconditional extra hide_review.
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["hide_floating", "hide_review", "hide_review"]
+        );
+        assert!(!review.was_shown_on_press());
+        assert!(!ac.lock().unwrap().is_capturing());
+        // was_saved=true → the gated restore ran.
+        assert!(clipboard.restored());
+        // Token drained AND not flipped (drain = discard, not Esc cancel).
+        assert!(!token.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(ps.take_cancel_token().is_none(), "slot drained");
+    }
+
+    #[test]
+    fn recover_to_idle_gated_clipboard_skips_unsaved() {
+        // Gate semantics on the full recipe: was_saved=false → restore must
+        // NOT run (an unsaved cycle has nothing to restore). The hide record
+        // also pins the ruled unconditional hide_review on the flag-false
+        // path — the ClassicReview-stuck corner (review visible,
+        // shown_on_press already false) is still covered.
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let clipboard = Arc::new(crate::clipboard::MockClipboard::new());
+        let ps = TestComponents::default()
+            .with_window_controller(Arc::new(LogWindowController {
+                calls: calls.clone(),
+            }))
+            .with_clipboard(clipboard.clone())
+            .build();
+
+        assert!(ps.sm_start_recording());
+        ps.recover_to_idle();
+
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert_eq!(*calls.lock().unwrap(), vec!["hide_floating", "hide_review"]);
+        assert!(!clipboard.saved(), "unsaved cycle stays unsaved");
+        assert!(!clipboard.restored(), "gate must skip the restore");
+    }
+
+    #[test]
+    fn try_recover_to_idle_returns_true_and_runs_the_same_recipe() {
+        // Variant contract: uncontended sm → returns true; resource steps
+        // identical to the blocking variant. Clipboard gate and audio stop
+        // deep assertions live on the blocking-variant tests; this locks
+        // the variant's own surface (return value + hides + drain).
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let review = Arc::new(MockReviewProvider::new());
+        let ac = Arc::new(Mutex::new(crate::audio::MockAudioCapture::new()));
+        let ps = TestComponents::default()
+            .with_window_controller(Arc::new(LogWindowController {
+                calls: calls.clone(),
+            }))
+            .with_review(review.clone())
+            .with_ac(ac.clone())
+            .build();
+
+        assert!(ps.sm_start_recording());
+        review.set_shown_on_press(true);
+        ac.lock().unwrap().start(Box::new(|_| {})).unwrap();
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        ps.set_cancel_token(token.clone());
+
+        assert!(ps.try_recover_to_idle());
+
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["hide_floating", "hide_review", "hide_review"]
+        );
+        assert!(!review.was_shown_on_press());
+        assert!(!ac.lock().unwrap().is_capturing());
+        assert!(!token.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(ps.take_cancel_token().is_none(), "slot drained");
+    }
+
+    #[test]
+    fn try_recover_to_idle_contended_sm_still_recovers_ui() {
+        // Watchdog semantics: sm try_lock failure (contended) → returns
+        // false + warn, but the UI recovery and resource drains still run
+        // ("lock dead, still hide the overlays").
+        //
+        // A same-thread try_lock on a held std Mutex fails immediately
+        // with WouldBlock — deterministic, no timing. RecordOnlySession::
+        // recover's internal sm reads are deflected via force_sm_state
+        // (test-only early return before the real sm lock), keeping the
+        // held lock safe from its blocking lock_mutex calls.
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let ps = TestComponents::default()
+            .with_window_controller(Arc::new(LogWindowController {
+                calls: calls.clone(),
+            }))
+            .build();
+
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        ps.set_cancel_token(token.clone());
+
+        ps.force_sm_state(StateTag::Idle);
+        let sm = ps.test_components().sm;
+        let _held = sm.lock().unwrap(); // hold the sm lock for the whole call
+
+        let reset_ok = ps.try_recover_to_idle();
+
+        assert!(!reset_ok, "sm try_lock must report failure while held");
+        // UI recovery still ran + token drained despite the contention.
+        assert_eq!(*calls.lock().unwrap(), vec!["hide_floating", "hide_review"]);
+        assert!(!token.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(ps.take_cancel_token().is_none(), "slot drained");
     }
 }
