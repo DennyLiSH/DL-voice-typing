@@ -15,8 +15,10 @@ use tracing::{error, info, warn};
 /// or tooltip): `watchdog-reset` via the PipelineState emitter, tray tooltip
 /// via the PipelineState window controller. `tick`'s state read is
 /// non-blocking (`try_sm_state`) — a contended lock skips the check
-/// (2026-05-13 decision), so the watchdog can never hang on a deadlocked
-/// state machine.
+/// (2026-05-13 decision), so the periodic check never blocks. The
+/// forced-reset path retains an accepted blocking exposure: the recipe's
+/// record-only recover reads the sm with blocking locks (see
+/// `force_reset`).
 pub struct Watchdog {
     ps: Arc<PipelineState>,
     check_interval: Duration,
@@ -117,9 +119,12 @@ impl Watchdog {
         // Full-reset recipe verb: resource drains (realtime-leftover stop,
         // audio capture stop, record-only session recover, cancel-token
         // drain, gated clipboard restore) → sm try_lock reset (warn and
-        // continue on contention) → hide floating/review overlays. The sm
-        // access inside is try_lock — never blocking — so the watchdog
-        // cannot hang on a deadlocked state machine.
+        // continue on contention) → hide floating/review overlays. The
+        // tick READ above is try_lock — never blocking. The reset path's
+        // sm reset is likewise try_lock (lock failure degrades to UI-only
+        // recovery), but RecordOnlySession::recover's internal sm reads
+        // remain a blocking exposure — accepted, same as before this
+        // refactor: a deadlocked sm can still hang this reset.
         let reset_ok = self.ps.try_recover_to_idle();
         if reset_ok {
             info!("Watchdog: state machine forcibly reset to Idle");

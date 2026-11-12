@@ -627,8 +627,12 @@ impl PipelineState {
     // (sm_reset + hide_overlays) and extends it with the resource drains.
     //
     // The shared resource steps are identical in both variants and
-    // best-effort: a poisoned or contended lock skips its step
-    // (lock_mutex already warns) and never interrupts the sequence.
+    // best-effort: a poisoned lock skips its step (lock_mutex → None +
+    // warn); a contended lock BLOCKS until available (acceptable for a
+    // recovery path). The only try_lock step is the try variant's sm
+    // reset (skips on contention — "lock dead, still do the UI
+    // recovery"); RecordOnlySession::recover's internal sm reads remain
+    // a blocking exposure — accepted, see the watchdog comment.
     //
     // The recipe deliberately does NOT emit events and does NOT set the
     // tray tooltip — those are caller-facing signals (tray-reset vs

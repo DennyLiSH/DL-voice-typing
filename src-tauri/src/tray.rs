@@ -116,6 +116,7 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
                     // It deliberately emits nothing and sets no tooltip —
                     // both are caller-facing signals, shared below.
                     ps.recover_to_idle();
+                    info!("Tray: state machine reset to Idle");
                 } else {
                     // pre-manage bootstrap fallback: menu events can only
                     // fire after setup completes, when PipelineState is
