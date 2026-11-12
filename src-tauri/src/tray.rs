@@ -108,38 +108,57 @@ pub fn setup_tray<R: Runtime>(app: &App<R>) -> Result<(), Box<dyn std::error::Er
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "reset" => {
                 info!("Tray: user triggered manual reset");
-                // Reset state machine
-                if let Some(sm) = app.try_state::<Arc<Mutex<crate::state::StateMachine>>>()
-                    && let Some(mut guard) =
-                        crate::util::lock_mutex(&sm, "state_machine_tray_reset")
-                {
-                    guard.reset();
-                    info!("Tray: state machine reset to Idle");
-                }
-                // Stop audio capture if recording
-                if let Some(ac) =
-                    app.try_state::<Arc<Mutex<dyn crate::audio::AudioCaptureProvider>>>()
-                    && let Some(mut guard) =
-                        crate::util::lock_mutex(&ac, "audio_capture_tray_reset")
-                {
-                    guard.stop();
-                }
-                // Hide all windows
-                if let Some(win) = app.get_webview_window("floating") {
-                    let _ = win.hide();
-                }
-                if let Some(win) = app.get_webview_window("review") {
-                    let _ = win.hide();
-                }
-                // Restore clipboard if needed
-                if let Some(cb) = app.try_state::<Arc<dyn crate::clipboard::ClipboardProvider>>() {
-                    let _ = cb.restore();
-                }
-                // Stop any active record-only recording (bounded wait; the
-                // WAV stays playable via finalize or next-startup salvage).
                 if let Some(ps) = app.try_state::<crate::commands::pipeline_state::PipelineState>()
                 {
-                    crate::commands::record_only_session::RecordOnlySession::recover(&ps);
+                    // Managed path: the full-reset recipe owns the resource
+                    // cleanup (stops → token drain → was_saved-gated
+                    // clipboard restore → sm reset → overlay/review hides).
+                    // It deliberately emits nothing and sets no tooltip —
+                    // both are caller-facing signals, shared below.
+                    ps.recover_to_idle();
+                } else {
+                    // pre-manage bootstrap fallback: menu events can only
+                    // fire after setup completes, when PipelineState is
+                    // already managed — this raw orchestration is a
+                    // defensive bootstrap path, kept verbatim. Its own
+                    // ROS-recover step reads try_state::<PipelineState>,
+                    // necessarily None in this branch (no-op).
+                    // Reset state machine
+                    if let Some(sm) = app.try_state::<Arc<Mutex<crate::state::StateMachine>>>()
+                        && let Some(mut guard) =
+                            crate::util::lock_mutex(&sm, "state_machine_tray_reset")
+                    {
+                        guard.reset();
+                        info!("Tray: state machine reset to Idle");
+                    }
+                    // Stop audio capture if recording
+                    if let Some(ac) =
+                        app.try_state::<Arc<Mutex<dyn crate::audio::AudioCaptureProvider>>>()
+                        && let Some(mut guard) =
+                            crate::util::lock_mutex(&ac, "audio_capture_tray_reset")
+                    {
+                        guard.stop();
+                    }
+                    // Hide all windows
+                    if let Some(win) = app.get_webview_window("floating") {
+                        let _ = win.hide();
+                    }
+                    if let Some(win) = app.get_webview_window("review") {
+                        let _ = win.hide();
+                    }
+                    // Restore clipboard if needed
+                    if let Some(cb) =
+                        app.try_state::<Arc<dyn crate::clipboard::ClipboardProvider>>()
+                    {
+                        let _ = cb.restore();
+                    }
+                    // Stop any active record-only recording (bounded wait; the
+                    // WAV stays playable via finalize or next-startup salvage).
+                    if let Some(ps) =
+                        app.try_state::<crate::commands::pipeline_state::PipelineState>()
+                    {
+                        crate::commands::record_only_session::RecordOnlySession::recover(&ps);
+                    }
                 }
                 // Emit event
                 let _ = app.emit("tray-reset", ());

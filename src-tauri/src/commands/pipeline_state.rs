@@ -673,7 +673,6 @@ impl PipelineState {
     /// is the independent "cancel the in-flight pipeline" path (token
     /// flip + `pipeline-cancelled` emit) and is deliberately NOT routed
     /// here.
-    #[allow(dead_code)] // production call site lands in the tray task (batch P1 Task 3)
     pub(crate) fn recover_to_idle(&self) {
         self.recover_to_idle_resources();
         self.sm_reset();
@@ -1667,5 +1666,66 @@ mod sm_verb_tests {
         assert_eq!(*calls.lock().unwrap(), vec!["hide_floating", "hide_review"]);
         assert!(!token.load(std::sync::atomic::Ordering::SeqCst));
         assert!(ps.take_cancel_token().is_none(), "slot drained");
+    }
+
+    // tray reset arm routes here (tray.rs "reset" arm) — BehaviorChange 2026-11-13: clipboard restore now was_saved-gated; shown_on_press/cancel_token now cleared (raw arm lacked both)
+    //
+    // The tray menu closure is a Tauri handler and not unit-testable; its
+    // managed path is exactly `ps.recover_to_idle()`, so the tray-reset
+    // contract is pinned at PS level. The raw-arm fallback in tray.rs is
+    // the pre-manage bootstrap path (menu events only fire after setup,
+    // when PipelineState is already managed). Emit("tray-reset") + tooltip
+    // stay at the tray call site — the recipe is emit-free by design.
+    #[test]
+    fn tray_reset_contract_recover_to_idle_gated_restore_and_drains() {
+        // Positive polarity: was_saved=true → restore ran, token drained
+        // (discarded, not flipped), shown_on_press cleared, floating +
+        // review hidden, sm back to Idle.
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let review = Arc::new(MockReviewProvider::new());
+        let clipboard = Arc::new(crate::clipboard::MockClipboard::new());
+        let ps = TestComponents::default()
+            .with_window_controller(Arc::new(LogWindowController {
+                calls: calls.clone(),
+            }))
+            .with_review(review.clone())
+            .with_clipboard(clipboard.clone())
+            .build();
+
+        assert!(ps.sm_start_recording());
+        review.set_shown_on_press(true);
+        clipboard.save().unwrap();
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        ps.set_cancel_token(token.clone());
+
+        ps.recover_to_idle();
+
+        assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+        assert!(clipboard.restored(), "was_saved=true → restore ran");
+        assert!(
+            !token.load(std::sync::atomic::Ordering::SeqCst),
+            "drain = discard, not flip"
+        );
+        assert!(ps.take_cancel_token().is_none(), "token slot drained");
+        assert!(!review.was_shown_on_press(), "shown_on_press cleared");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["hide_floating", "hide_review", "hide_review"],
+            "floating + review hidden (conditional hide + ruled unconditional extra)"
+        );
+
+        // Negative polarity: was_saved=false → restore must NOT run (an
+        // unsaved cycle has nothing to restore — the raw arm restored
+        // unconditionally).
+        let clipboard_unsaved = Arc::new(crate::clipboard::MockClipboard::new());
+        let ps_unsaved = TestComponents::default()
+            .with_clipboard(clipboard_unsaved.clone())
+            .build();
+        ps_unsaved.recover_to_idle();
+        assert!(!clipboard_unsaved.saved(), "unsaved cycle stays unsaved");
+        assert!(
+            !clipboard_unsaved.restored(),
+            "gate must skip the restore when was_saved=false"
+        );
     }
 }
