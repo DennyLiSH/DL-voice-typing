@@ -124,8 +124,8 @@ pub(crate) enum InjectError {
 
 /// Encodes the post-delivery cleanup recipe. Each variant carries only the
 /// data finish() actually needs; site-specific pre-side-effects (entry guards,
-/// clipboard save, window show, save_and_inject itself, foreground restore)
-/// stay in the caller.
+/// clipboard save, window show, save_and_inject itself, pre-inject foreground
+/// restore) stay in the caller.
 enum FinishOutcome {
     /// Successful paste delivery. Caller has already done save_and_inject;
     /// review paths have already restored foreground pre-inject. finish handles
@@ -150,6 +150,25 @@ enum FinishOutcome {
     /// sm_reset, and cleanup_review_ui. Caller returns Err(CommandError) AFTER
     /// finish runs.
     EarlyStateMismatch,
+    /// Inject failed (save_and_inject returned Err): paste did not complete, so
+    /// this is best-effort cleanup only — emit injection-error, restore_clipboard
+    /// (unconditional; ClipboardManager.restore no-ops when nothing was saved),
+    /// conditional foreground restore, conditional hide_review, hide_floating,
+    /// sm_reset. No JSON update, no perf record, no set_shown_on_press — the
+    /// recipe is line-for-line identical to the two former inline failure blocks
+    /// (confirm_from_reviewing / inject_via_finish). The warn! carrying the
+    /// error detail stays at the call site (caller knowledge; finish never
+    /// sees `e`).
+    Failure {
+        /// Foreground hwnd to restore after the failed paste. Some only on the
+        /// confirm_from_reviewing site (focus captured before showing the
+        /// review window); the direct-injection sites pass None — no restore
+        /// there today.
+        foreground_hwnd: Option<isize>,
+        /// Whether the review window is visible and must be hidden (confirm
+        /// path: always true; inject_direct: false; show_review fallback: true).
+        review_ui_active: bool,
+    },
 }
 
 /// Arguments for `inject_via_finish` (the shared tail of the two
@@ -528,25 +547,15 @@ impl DeliveryController {
 
         if let Err(ref e) = inject_result {
             warn!("confirm_from_reviewing: inject failed: {e}");
-            // Deliberately not routed through finish(): failure timing/side-effects don't match
-            // any FinishOutcome variant — paste did not complete, so best-effort cleanup + reset
-            // happens inline.
-            self.emitter.emit(
-                "injection-error",
-                serde_json::to_value(INJECTION_ERROR_USER_MSG).unwrap_or_default(),
-            );
-            // Best-effort cleanup: restore clipboard, restore focus, hide windows, reset state.
-            let _ = self.restore_clipboard();
-            if let Some(hwnd_val) = ctx.0 {
-                debug!(
-                    target: "delivery",
-                    "confirm_from_reviewing: restoring foreground on inject failure, hwnd={hwnd_val}"
-                );
-                self.window_controller.restore_foreground_hwnd(hwnd_val);
-            }
-            self.window_controller.hide_review();
-            self.window_controller.hide_floating();
-            ps.sm_reset();
+            // Outcome built before ctx is moved: ctx.0 is a Copy read that must
+            // happen while ctx is still alive (argument evaluation is
+            // left-to-right).
+            let outcome = FinishOutcome::Failure {
+                foreground_hwnd: ctx.0,
+                review_ui_active: true,
+            };
+            self.finish(ps, ctx, outcome, "confirm_from_reviewing")
+                .await;
             return;
         }
 
@@ -596,19 +605,16 @@ impl DeliveryController {
 
         if let Err(ref e) = inject_result {
             warn!("{site_label}: injection failed: {e}");
-            // Deliberately not routed through finish(): failure timing/side-effects
-            // don't match any FinishOutcome variant — paste did not complete, so
-            // best-effort cleanup + reset happens inline.
-            self.emitter.emit(
-                "injection-error",
-                serde_json::to_value(INJECTION_ERROR_USER_MSG).unwrap_or_default(),
-            );
-            let _ = self.restore_clipboard();
-            if review_ui_active {
-                self.window_controller.hide_review();
-            }
-            self.window_controller.hide_floating();
-            ps.sm_reset();
+            self.finish(
+                ps,
+                (None, None, perf.clone(), Some(press_timer)),
+                FinishOutcome::Failure {
+                    foreground_hwnd: None,
+                    review_ui_active,
+                },
+                site_label,
+            )
+            .await;
             return;
         }
 
@@ -633,6 +639,10 @@ impl DeliveryController {
     /// default timing is immediately before finish() to minimize the panic
     /// window; the ONE exception is confirm_from_reviewing which takes at
     /// method top because its pre-inject foreground restore needs ctx.0).
+    ///
+    /// The inject-failure sites pass a synthesized tuple — the Failure arm
+    /// reads only the variant's own fields (foreground_hwnd / review_ui_active
+    /// ride on the variant, not on ctx).
     ///
     /// `site_label` is emitted via `debug!(target: "delivery", ...)` so production
     /// traces can distinguish the call sites.
@@ -706,6 +716,33 @@ impl DeliveryController {
                 ps.stop_recording_resources_graceful();
                 ps.sm_reset();
                 self.cleanup_review_ui(ps).await;
+            }
+            FinishOutcome::Failure {
+                foreground_hwnd,
+                review_ui_active,
+            } => {
+                // Inject failed: paste did not complete — best-effort cleanup,
+                // line-for-line the two former inline failure blocks. No JSON
+                // update, no perf record, no set_shown_on_press.
+                self.emitter.emit(
+                    "injection-error",
+                    serde_json::to_value(INJECTION_ERROR_USER_MSG).unwrap_or_default(),
+                );
+                // Unconditional: ClipboardManager.restore no-ops when nothing
+                // was saved this cycle (the "gating" lives in restore itself).
+                let _ = self.restore_clipboard();
+                if let Some(hwnd) = foreground_hwnd {
+                    debug!(
+                        target: "delivery",
+                        "finish({site_label}): restoring foreground on inject failure, hwnd={hwnd}"
+                    );
+                    self.window_controller.restore_foreground_hwnd(hwnd);
+                }
+                if review_ui_active {
+                    self.window_controller.hide_review();
+                }
+                self.window_controller.hide_floating();
+                ps.sm_reset();
             }
         }
         debug!(target: "delivery", "finish({site_label}): done");

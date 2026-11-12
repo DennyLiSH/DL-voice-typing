@@ -563,6 +563,135 @@ async fn confirm_review_error_branch_restores_focus() {
 }
 
 // -----------------------------------------------------------------------------
+// Task 4 (arch-deepening round 6): inject-failure cleanup routes through
+// FinishOutcome::Failure. The two tests above each cover a subset of the
+// failure recipe (restore + injection-error payload; focus-restore count).
+// This test asserts the FULL recipe end-to-end on the confirm path: emit,
+// clipboard restore, second foreground restore, hide_review → hide_floating
+// ORDER, sm reset to Idle, and the two negatives — no perf finalize (no
+// perf-metrics event) and no data-saving JSON rewrite (byte-identical file).
+// -----------------------------------------------------------------------------
+
+#[tokio::test]
+async fn confirm_inject_failure_asserts_full_failure_recipe() {
+    // Clipboard that succeeds at save() but fails at inject_text().
+    let mock = Arc::new(MockClipboard::new().with_inject_error("inject failed"));
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+
+    // A real recording JSON so "no JSON update" is observable: if the Failure
+    // arm wrongly ran update_json_deliver/update_json_cancel, the file would
+    // be rewritten (set_transcription_result is load → mutate → atomic write).
+    let dir = std::env::temp_dir().join("dl-voice-typing-test-dc-failure-no-json");
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let json_path = dir.join("failure-recipe.json");
+    std::fs::write(&json_path, "{\"dropped_blocks\":0}").expect("write metadata fixture");
+
+    let (base_ps, emitter) = build_ps();
+    let ps = base_ps
+        .test_components()
+        .with_clipboard(mock.clone())
+        .with_window_controller(Arc::new(CallRecordingWindowController {
+            calls: calls.clone(),
+        }))
+        .build();
+
+    to_transcribing(&ps);
+    let perf = crate::perf::PerfMetrics::new(0);
+    let policy = build_policy();
+    let save_result = Some(SaveResult {
+        wav_path: dir.join("failure-recipe.wav"),
+        json_path: json_path.clone(),
+    });
+
+    ps.delivery()
+        .show_review(
+            &ps,
+            "review me".to_string(),
+            "raw transcription".to_string(),
+            save_result,
+            &policy,
+            perf,
+            PerfTimer::start(),
+            false,
+        )
+        .await;
+    assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
+
+    let json_before = std::fs::read(&json_path).expect("read metadata before confirm");
+
+    let result = ps
+        .delivery()
+        .confirm_review(&ps, "confirmed text".to_string())
+        .await;
+    assert!(
+        result.is_ok(),
+        "confirm_review returns Ok even on inject failure"
+    );
+
+    // Failure recipe end-state: state machine reset to Idle.
+    assert_eq!(ps.sm_state(), Some(StateTag::Idle));
+
+    // Clipboard restored on the failure path (unconditional restore_clipboard).
+    assert!(
+        mock.restored(),
+        "clipboard must be restored on inject failure"
+    );
+
+    // injection-error emitted with the fixed user-facing summary.
+    let events = emitter.take_events();
+    let injection_error = events
+        .iter()
+        .find(|(n, _)| n == "injection-error")
+        .map(|(_, v)| v.clone())
+        .expect("injection-error must be emitted on confirm inject failure");
+    assert_eq!(
+        injection_error,
+        serde_json::Value::String(
+            crate::commands::delivery_controller::INJECTION_ERROR_USER_MSG.to_string()
+        )
+    );
+    // No injection-complete: the paste did not happen.
+    assert!(
+        !events.iter().any(|(n, _)| n == "injection-complete"),
+        "failure path must not emit injection-complete"
+    );
+    // No perf-metrics event: the Failure arm must not finalize perf.
+    assert!(
+        !events.iter().any(|(n, _)| n == "perf-metrics"),
+        "failure path must not record perf"
+    );
+
+    // Window-controller call order: classic show_review, pre-inject focus
+    // restore, failure-path focus restore again, then hide_review →
+    // hide_floating (Failure-arm order; the Cancel arm hides in the opposite
+    // order, so this pins the recipe's distinct sequence).
+    let recorded = crate::util::lock_mutex(&calls, "rw_controller")
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        recorded,
+        vec![
+            "show_review",
+            "restore_foreground",
+            "restore_foreground",
+            "hide_review",
+            "hide_floating",
+        ],
+        "failure recipe: foreground restored again on failure, review hidden before floating"
+    );
+
+    // No JSON update side effect: the recording file is byte-identical.
+    let json_after = std::fs::read(&json_path).expect("read metadata after confirm");
+    assert_eq!(
+        json_before, json_after,
+        "inject failure must not rewrite the recording JSON"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// -----------------------------------------------------------------------------
 // M2 regression: confirm_review / cancel_review early-exception paths must
 // clear DeliveryContext so residual foreground_hwnd cannot hijack the next
 // cycle's restore_foreground_hwnd (same root cause as M1 commit 72cb57e).
