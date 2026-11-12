@@ -734,24 +734,16 @@ async fn resolve_llm_text(
     // Live-read API key per call (rotation-friendly; not in snapshot).
     let live_api_key = ps.config_cache().read_cached().llm_api_key.clone();
 
-    // Resolve the corrector and run the correction inside ONE slot-lock
-    // window: the lock is held for the duration of the HTTP call (the
-    // pre-existing "HTTP inside the lock" invariant), so no corrector can
-    // be rebuilt while this one is mid-request.
-    //
-    // `with_cached_llm` returns None when the slot lock is poisoned — the
-    // same condition that made the previous `refresh_cached_llm` return
-    // Err, and the caller (`refine_and_deliver`) falls back to the raw
-    // transcription in both cases.
+    // Lock-window + poison + key-source protocol: see `llm::correction` module doc.
     let outcome = ps
         .with_cached_llm(|slot| {
-            let corrector = crate::llm::correction::resolve_corrector(
+            crate::llm::correction::correct_locked(
                 slot,
                 &policy.llm_api_url,
                 &live_api_key,
                 &policy.llm_api_model,
-            );
-            crate::llm::correction::correct_with_fallback(&corrector, transcription, &live_api_key)
+                transcription,
+            )
         })
         .ok_or_else(|| AppError::Llm("cached_llm lock poisoned".to_string()))?;
 

@@ -128,7 +128,6 @@ pub(crate) fn correct_with_fallback(
 /// single source of the resolve+correct composition. Callers MUST invoke
 /// it from inside a `PipelineState::with_cached_llm` closure (lock-window
 /// protocol: see the module doc).
-#[allow(dead_code)] // interim: wired by the call-site task (Round 6 P2 Task 2)
 pub(crate) fn correct_locked(
     slot: &mut Option<Arc<dyn TextCorrector>>,
     url: &str,
@@ -144,7 +143,6 @@ pub(crate) fn correct_locked(
 /// poisoned, so resolve the corrector WITHOUT the cache — build a fresh
 /// `LLMClient` and correct anyway. The cache is an optimization, not a
 /// requirement.
-#[allow(dead_code)] // interim: wired by the call-site task (Round 6 P2 Task 2)
 pub(crate) fn poison_outcome_uncached(
     url: &str,
     api_key: &str,

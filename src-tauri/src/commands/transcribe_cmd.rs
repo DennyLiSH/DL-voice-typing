@@ -546,32 +546,24 @@ fn run_llm_correction(ps: &PipelineState, text: &str) -> Option<CorrectionOutcom
     // The LLM API key stays in-process — never logged, never sent to the
     // frontend.
     //
-    // Lock protocol: the verb holds the slot lock for the duration of
-    // `correct_sync` (HTTP via block_in_place). `correct_sync` must stay
-    // INSIDE the closure so the cache invariant (no concurrent rebuild
-    // while a corrector is mid-HTTP) holds.
-    //
-    // A poisoned slot lock used to be survivable here: the old code fell
-    // back to an uncached client. Keep that — the cache is an
-    // optimization, not a requirement.
+    // Lock-window + poison + config-source protocol: see `llm::correction` module doc.
     let outcome = ps
         .with_cached_llm(|slot| {
-            let corrector = crate::llm::correction::resolve_corrector(
+            crate::llm::correction::correct_locked(
                 slot,
                 &cfg.llm_api_url,
                 &cfg.llm_api_key,
                 &cfg.llm_model,
-            );
-            crate::llm::correction::correct_with_fallback(&corrector, text, &cfg.llm_api_key)
+                text,
+            )
         })
         .unwrap_or_else(|| {
-            let corrector: std::sync::Arc<dyn crate::llm::TextCorrector> =
-                std::sync::Arc::new(crate::llm::LLMClient::new(
-                    cfg.llm_api_url.clone(),
-                    cfg.llm_api_key.clone(),
-                    cfg.llm_model.clone(),
-                ));
-            crate::llm::correction::correct_with_fallback(&corrector, text, &cfg.llm_api_key)
+            crate::llm::correction::poison_outcome_uncached(
+                &cfg.llm_api_url,
+                &cfg.llm_api_key,
+                &cfg.llm_model,
+                text,
+            )
         });
     Some(outcome)
 }
@@ -1127,6 +1119,51 @@ mod tests {
             ps.with_cached_llm(|c| c.is_some()).unwrap_or(false),
             "the rebuilt corrector must be written back into the shared slot"
         );
+    }
+
+    /// Poisoned slot must NOT mean "LLM not attempted": the transcribe
+    /// window's poison strategy continues with an uncached client (the
+    /// cache is an optimization, not a requirement) — correction still
+    /// runs and falls back to the raw text. This pins the
+    /// `poison_outcome_uncached` continuation against a future unification
+    /// with the classic pipeline's poison→Err strategy.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_llm_correction_poisoned_slot_continues_uncached() {
+        let cfg = AppConfig {
+            llm_enabled: true,
+            // Unreachable endpoint — the uncached client's correction
+            // fails fast and falls back to the raw text.
+            llm_api_url: "http://127.0.0.1:1/v1/chat/completions".to_string(),
+            llm_api_key: "k".to_string(),
+            llm_model: "m".to_string(),
+            ..Default::default()
+        };
+        let (ps, _emitter, _clipboard) = build_ps(cfg, None);
+        // Poison the slot lock (panic while holding the guard), the same
+        // idiom as the classic pipeline's poison test: PipelineState holds
+        // trait-object Arcs (ReviewProvider, EventEmitter) which are not
+        // RefUnwindSafe — wrap in AssertUnwindSafe.
+        let ps_ptr: *const PipelineState = &ps;
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let ps_ref: &PipelineState = unsafe { &*ps_ptr };
+            let slot = ps_ref.test_components().cached_llm.clone();
+            let _g = slot
+                .lock()
+                .unwrap_or_else(|_| panic!("initial lock should succeed"));
+            panic!("intentional poison");
+        }));
+
+        let outcome = run_llm_correction(&ps, "文本");
+        assert!(
+            outcome.is_some(),
+            "a poisoned slot must still attempt the correction (uncached continuation), not report LLM-not-attempted"
+        );
+        let outcome = outcome.expect("checked above");
+        assert!(
+            !outcome.used_llm,
+            "the uncached client hits an unreachable endpoint and must fall back to raw"
+        );
+        assert_eq!(outcome.text, "文本");
     }
 
     /// LLM regression: a 5xx from the LLM endpoint must keep the raw
