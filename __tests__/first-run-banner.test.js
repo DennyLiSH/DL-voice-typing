@@ -7,17 +7,17 @@ import {
     hideIfVisible,
     showIfRequested,
 } from '../ui/lib/first-run-banner.js';
+import { loadSettingsDom } from './helpers.js';
 
 // 环境声明沿用 settings.error_forwarding.test.js 先例（vitest.config.js
 // 无全局 environment，默认 node——缺此行则 document 未定义，4 例 DOM 用例全挂）
 
 describe('first-run-banner', () => {
     beforeEach(() => {
-        document.body.innerHTML = `
-            <div class="first-run-banner" id="first-run-banner" role="status" hidden>
-                <span id="first-run-banner-text"></span>
-                <button id="first-run-banner-dismiss">知道了</button>
-            </div>`;
+        // Real-entry fixture (Round 6 P4 Task 3): the banner markup lives in
+        // the real ui/settings.html — loadSettingsDom() replaces the old
+        // hand-copied fragment (same ids, no drift risk).
+        loadSettingsDom();
         window.history.replaceState({}, '', '/');
     });
 

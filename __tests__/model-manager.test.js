@@ -4,7 +4,13 @@
 // select population, action-state matrix, download lifecycle incl. the
 // F6 'download cancelled' dual-shape guard, custom-model deletion,
 // progress events, compute-mode badge.
+//
+// Real-entry fixture (Round 6 P4 Task 3): the REAL ui/settings.html via
+// loadSettingsDom() — the model-page ids the old hand-copied DOM faked
+// all exist in the real markup (same window).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { loadSettingsDom } from './helpers.js';
 
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
     confirmDialog: vi.fn(),
@@ -13,16 +19,6 @@ vi.mock('../ui/lib/confirm-dialog.js', () => ({
 let listeners;
 let invokeMock;
 let formChangeEventCount;
-
-const DOM = `
-  <select id="whisper-model"></select>
-  <span id="model-status-text"></span>
-  <button id="btn-download-model"></button>
-  <div id="download-progress"><div id="progress-fill"></div><span id="progress-percent">0%</span></div>
-  <button id="btn-cancel-download"></button>
-  <span id="compute-mode-badge"></span>
-  <div id="error-banner"></div>
-`;
 
 async function loadFresh() {
     listeners = {};
@@ -41,7 +37,7 @@ async function loadFresh() {
         },
         core: { invoke: invokeMock },
     });
-    document.body.innerHTML = DOM;
+    loadSettingsDom();
     vi.resetModules();
     const formState = await import('../ui/lib/form-state.js');
     formState.onFormChange(() => {

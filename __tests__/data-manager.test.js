@@ -1,35 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { loadSettingsDom } from './helpers.js';
+
 // jsdom orchestration tests for ui/data-manager.js audio lifecycle (C6):
 // blob-URL release on list rebuild, onDataPageLeave cleanup, and the
 // in-flight fetch identity guard.
 //
-// The fixture must contain every element wireDataListEvents() touches
-// (btn-refresh-data / data-search-input / data-list / data-select-all-cb /
-// btn-batch-delete / btn-prev-page / btn-next-page) and must be injected
-// BEFORE the import, because wiring runs once at module top level.
-
-const FIXTURE = `
-    <button id="btn-refresh-data"></button>
-    <input id="data-search-input">
-    <div id="data-error-bar" hidden></div>
-    <div id="data-list"></div>
-    <div id="data-empty-state" hidden></div>
-    <span id="data-total-count"></span>
-    <span id="data-total-size"></span>
-    <div id="data-pagination" hidden>
-        <span id="data-page-info"></span>
-        <button id="btn-prev-page"></button>
-        <button id="btn-next-page"></button>
-    </div>
-    <div id="data-batch-bar" hidden>
-        <span id="data-selected-count"></span>
-        <span id="data-visible-count"></span>
-        <button id="btn-batch-delete"></button>
-    </div>
-    <input type="checkbox" id="data-select-all-cb">
-`;
+// Real-entry fixture (Round 6 P4 Task 3): the REAL ui/settings.html via
+// loadSettingsDom() — it contains every element wireDataListEvents()
+// touches (btn-refresh-data / data-search-input / data-list /
+// data-select-all-cb / btn-batch-delete / btn-prev-page / btn-next-page)
+// and must be injected BEFORE the import, because wiring runs once at
+// module top level. The old hand-copied FIXTURE mirrored a subset of the
+// data-page markup; the real HTML removes the fixture-drift risk.
 
 const ITEM = {
     filename: '2026-08-18_10-00-00',
@@ -54,7 +38,7 @@ async function loadFresh(invokeImpl) {
     vi.stubGlobal('__TAURI__', { core: { invoke: invokeMock } });
     URL.createObjectURL = vi.fn(() => 'blob:mock-url');
     URL.revokeObjectURL = vi.fn();
-    document.body.innerHTML = FIXTURE;
+    loadSettingsDom();
     vi.resetModules();
     mod = await import('../ui/data-manager.js');
 }

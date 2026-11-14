@@ -4,19 +4,14 @@
 // keepBaseline → CLEAR sentinel on the key get() → saveSettings normalizes
 // the sentinel before submit. Covers both stored-key and no-key baselines
 // plus failure paths and the input-event intent-withdraw edge case.
+//
+// Real-entry fixture (Round 6 P4 Task 3): loads the REAL ui/settings.html
+// via loadSettingsDom() — this file previously inlined the exact same
+// read+strip logic the helper encapsulates.
 
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SETTINGS_HTML = readFileSync(
-    resolve(__dirname, '../ui/settings.html'),
-    'utf-8',
-)
-    .replace(/<script[\s\S]*?<\/script>/g, '')
-    .replace(/<link[^>]*>/g, '');
+import { loadSettingsDom } from './helpers.js';
 
 vi.mock('../ui/model-manager.js', () => ({
     getModelStatus: () => ({
@@ -119,7 +114,7 @@ async function stubInvoke(extraFn, baseline = {}) {
 }
 
 async function loadFresh(loadedConfig) {
-    document.body.innerHTML = SETTINGS_HTML;
+    loadSettingsDom();
     const mod = await import('../ui/settings-form.js');
     await new Promise((r) => setTimeout(r, 0));
     // settings-form.js disables the save button until setDirtyCheckEnabled(true).
