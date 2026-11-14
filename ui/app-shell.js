@@ -1,7 +1,7 @@
 import { onDataPageEnter, onDataPageLeave } from './data-manager.js';
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog, isDialogOpen } from './lib/confirm-dialog.js';
-import { EVENTS } from './lib/events.js';
+import { EVENTS, listen } from './lib/events.js';
 import { bindFirstRunBanner, showIfRequested } from './lib/first-run-banner.js';
 import { isFormDirty } from './lib/form-state.js';
 import { populateMainKeySelects } from './lib/hotkeys.js';
@@ -13,8 +13,6 @@ import {
     setDirtyCheckEnabled,
     updateDirtyState,
 } from './settings-form.js';
-
-const { listen } = window.__TAURI__.event;
 
 const FEEDBACK_URL = 'https://github.com/DennyLiSH/DL-voice-typing/issues';
 

@@ -1,14 +1,12 @@
 import { call, rawInvoke, reportError } from './lib/api.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
 import { errorMessage } from './lib/errors.js';
-import { EVENTS } from './lib/events.js';
+import { EVENTS, listen } from './lib/events.js';
 import { hideIfVisible } from './lib/first-run-banner.js';
 import { notifyFormChange } from './lib/form-state.js';
 import { modelActionView } from './lib/model-view.js';
 import { MODELS } from './lib/transcribe-models.js';
 import { showError } from './lib/ui-utils.js';
-
-const { listen } = window.__TAURI__.event;
 
 // DOM elements
 const whisperModelSelect = document.getElementById('whisper-model');

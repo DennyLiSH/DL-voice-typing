@@ -7,9 +7,7 @@ import {
     remapRms,
 } from './floating-utils.js';
 import { INJECTION_ERROR_MSG } from './lib/errors.js';
-import { EVENTS } from './lib/events.js';
-
-const { listen } = window.__TAURI__.event;
+import { EVENTS, listen } from './lib/events.js';
 
 const indicator = document.getElementById('indicator');
 const transcriptText = document.getElementById('transcript-text');

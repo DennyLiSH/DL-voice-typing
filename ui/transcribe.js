@@ -27,7 +27,7 @@ import {
     formatStemForDisplay,
 } from './lib/data-management.js';
 import { errorMessage } from './lib/errors.js';
-import { decodeObjectPayload, EVENTS } from './lib/events.js';
+import { decodeObjectPayload, EVENTS, listen } from './lib/events.js';
 import { createAudioSlot, createRovingList } from './lib/recording-list.js';
 import { loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
@@ -42,8 +42,6 @@ import {
     uiFlags,
 } from './lib/transcribe.js';
 import { createTranscribeController } from './lib/transcribe-controller.js';
-
-const { listen } = window.__TAURI__.event;
 
 const state = {
     items: [],

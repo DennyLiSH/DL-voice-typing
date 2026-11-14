@@ -1,8 +1,6 @@
 import { call } from './lib/api.js';
-import { EVENTS } from './lib/events.js';
+import { EVENTS, listen } from './lib/events.js';
 import { formatInjectionError } from './review-utils.js';
-
-const { listen } = window.__TAURI__.event;
 
 const textarea = document.getElementById('review-text');
 const btnConfirm = document.getElementById('btn-confirm');

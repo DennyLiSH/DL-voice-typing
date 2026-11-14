@@ -20,6 +20,13 @@
  * - the LISTENER LIFECYCLE: Tauri 2's `event.listen` returns a
  *   `Promise<UnlistenFn>` that must be awaited before unlistening.
  *   Only one module knew that; `subscribe` makes it the default path.
+ *
+ * The exported `listen` is the guarded form the window entry modules
+ * use: it resolves `window.__TAURI__?.event?.listen` at call time and
+ * degrades to a warning plus a no-op when the global is missing,
+ * instead of throwing at module load. Raw `window.__TAURI__.event`
+ * access belongs to this module alone — enforced by the registry
+ * contract pin.
  */
 
 /**
@@ -98,6 +105,18 @@ export function decodeBareString(payload) {
 }
 
 /**
+ * The single raw `window.__TAURI__.event` access in ui/, shared by
+ * `subscribe` and `listen`.
+ *
+ * Read at CALL time — never at import time — so a missing or
+ * half-injected global can only degrade the call, not crash the
+ * module that imports this one.
+ */
+function resolveListenFn() {
+    return window.__TAURI__?.event?.listen;
+}
+
+/**
  * Subscribe to an event and get a handle with an idempotent `unlisten`.
  *
  * Tauri 2's `event.listen` returns a `Promise<UnlistenFn>`; the
@@ -111,7 +130,7 @@ export function decodeBareString(payload) {
  * table directly.
  */
 export function subscribe(name, callback) {
-    const listenFn = window.__TAURI__?.event?.listen;
+    const listenFn = resolveListenFn();
     if (!listenFn) {
         return { unlisten: async () => {} };
     }
@@ -130,4 +149,22 @@ export function subscribe(name, callback) {
             }
         },
     };
+}
+
+/**
+ * The guarded fire-and-forget `listen` the window entry modules use.
+ *
+ * Resolves to Tauri's unlisten function, or — when the Tauri global is
+ * missing (tests, a half-initialized webview) — warns and resolves to
+ * a no-op instead of throwing: a module loading this file must not
+ * depend on the injection order of `window.__TAURI__`. Module-level
+ * listeners that live as long as the window simply ignore the promise.
+ */
+export async function listen(name, callback) {
+    const listenFn = resolveListenFn();
+    if (!listenFn) {
+        console.warn('[events] listen before __TAURI__: no-op', name);
+        return () => {};
+    }
+    return listenFn(name, callback);
 }
