@@ -4,8 +4,12 @@
 // in ui/settings.js (save_settings, test_llm_connection, download_whisper_model,
 // delete_custom_model) plus the F6 fix (cancel-shape compatibility).
 //
-// Follows the loadFresh pattern from review.listeners.test.js: stub
-// window.__TAURI__, inject a minimal DOM subtree, dynamically import settings.js.
+// Real-entry mode (Round 6 P4 Task 3): stub window.__TAURI__, load the
+// REAL ui/settings.html via loadSettingsDom() (helpers.js), dynamically
+// import settings.js. The old hand-copied fixture carried a comment
+// warning that missing data-manager DOM made wireDataListEvents() skip
+// binding — with the real HTML every element exists, so that risk class
+// is gone at the source.
 //
 // Coverage note (per plan §前端测试改动 降级策略):
 // - test_llm_connection + delete_custom_model: jsdom-integration triggered
@@ -26,6 +30,8 @@ import {
     vi,
 } from 'vitest';
 
+import { loadSettingsDom } from './helpers.js';
+
 // Deletion confirmations go through the shared in-app dialog.
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
     confirmDialog: vi.fn(async () => false),
@@ -34,75 +40,6 @@ vi.mock('../ui/lib/confirm-dialog.js', () => ({
 
 let invokeMock;
 let listeners;
-
-const MINIMAL_DOM = `
-  <div id="container"></div>
-  <div class="sidebar"></div>
-  <div class="sidebar-item" data-page="general"></div>
-  <div class="page-content" id="page-general"></div>
-  <select id="language"></select>
-  <div id="hotkey-combo">
-    <input type="checkbox" id="hotkey-ctrl" />
-    <input type="checkbox" id="hotkey-shift" />
-    <input type="checkbox" id="hotkey-alt" />
-    <select id="hotkey">
-      <option value="RightCtrl">RightCtrl</option>
-    </select>
-  </div>
-  <select id="whisper-model"></select>
-  <div id="model-status-text"></div>
-  <button id="btn-download-model"></button>
-  <div id="download-progress"></div>
-  <div id="progress-fill"></div>
-  <div id="progress-percent"></div>
-  <button id="btn-cancel-download"></button>
-  <div id="llm-toggle"></div>
-  <div id="llm-fields"></div>
-  <input id="api-url" />
-  <input id="api-key" />
-  <input id="model" />
-  <button id="toggle-key"></button>
-  <button id="test-btn"></button>
-  <div id="test-status"></div>
-  <button id="save-btn"></button>
-  <div id="save-status"></div>
-  <div id="error-banner"></div>
-  <select id="download-mirror"></select>
-  <div id="data-saving-toggle"></div>
-  <div id="data-saving-fields"></div>
-  <input id="data-saving-path" />
-  <button id="btn-browse-path"></button>
-  <div id="review-toggle"></div>
-  <div id="autostart-toggle"></div>
-  <div id="realtime-transcription-toggle"></div>
-  <div id="record-only-toggle"></div>
-  <div id="record-only-hotkey-group">
-    <input type="checkbox" id="record-only-hotkey-ctrl" />
-    <input type="checkbox" id="record-only-hotkey-shift" />
-    <input type="checkbox" id="record-only-hotkey-alt" />
-    <select id="record-only-hotkey">
-      <option value="RightAlt">RightAlt</option>
-    </select>
-  </div>
-  <div id="version-display"></div>
-  <div id="compute-mode-badge"></div>
-  <div id="data-error-bar"></div>
-  <!-- Data manager DOM — required so wireDataListEvents() in data-manager.js
-       does not silently skip event binding when settings.js transitively
-       imports it. Missing these elements caused real bugs to slip through
-       (data-manager orchestration layer had zero integration coverage). -->
-  <button id="btn-refresh-data"></button>
-  <input id="data-search-input" />
-  <div id="data-list"></div>
-  <button id="btn-batch-delete"></button>
-  <input type="checkbox" id="data-select-all-cb" />
-  <button id="btn-prev-page"></button>
-  <button id="btn-next-page"></button>
-  <span id="data-total-count"></span>
-  <span id="data-total-size"></span>
-  <span id="data-range-start"></span>
-  <span id="data-range-end"></span>
-`;
 
 async function loadFresh() {
     listeners = {};
@@ -125,7 +62,10 @@ async function loadFresh() {
                 llm_api_url: '',
                 llm_api_key: '',
                 llm_model: '',
-                download_mirror: 'Official',
+                // Backend default (schema.rs DownloadMirror::HfMirror) — must
+                // match a real <option> in settings.html or the dirty baseline
+                // would light on first paint.
+                download_mirror: 'hf-mirror',
                 data_saving_enabled: false,
                 data_saving_path: '',
                 review_before_paste: false,
@@ -159,7 +99,7 @@ async function loadFresh() {
         app: { getVersion: vi.fn(async () => '0.0.0-test') },
     });
 
-    document.body.innerHTML = MINIMAL_DOM;
+    loadSettingsDom();
 
     vi.resetModules();
     await import('../ui/settings.js');
