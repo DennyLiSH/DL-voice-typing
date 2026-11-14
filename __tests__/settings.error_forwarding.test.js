@@ -30,7 +30,7 @@ import {
     vi,
 } from 'vitest';
 
-import { loadSettingsDom } from './helpers.js';
+import { loadSettingsDom, stubTauri } from './helpers.js';
 
 // Deletion confirmations go through the shared in-app dialog.
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
@@ -87,8 +87,10 @@ async function loadFresh() {
         return null;
     });
 
-    // vi.stubGlobal is vitest 4's recommended API under jsdom 25/29.
-    vi.stubGlobal('__TAURI__', {
+    // stubTauri (helpers.js) is the suite's default __TAURI__ stub path;
+    // direct `global.window.__TAURI__` assignment stays fragile under
+    // jsdom 25/29 (global.window may not exist when entry modules load).
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;

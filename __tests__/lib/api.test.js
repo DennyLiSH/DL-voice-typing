@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 //
 // Unit tests for ui/lib/api.js wrapper.
-// Mock pattern: vi.stubGlobal('__TAURI__', ...) — matches the project's
-// existing pattern in __tests__/settings.error_forwarding.test.js:118.
+// Mock pattern: stubTauri() from ../helpers.js — the suite's default
+// __TAURI__ stub path (Round 6 P4 Task 4 adoption sweep).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { stubTauri } from '../helpers.js';
 
 let invokeMock;
 
 function setupTauriMock() {
     invokeMock = vi.fn();
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         core: { invoke: invokeMock },
     });
 }

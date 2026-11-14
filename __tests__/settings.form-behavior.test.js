@@ -17,7 +17,7 @@
 // only here) and could not catch selector renames.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { loadSettingsDom } from './helpers.js';
+import { loadSettingsDom, stubTauri } from './helpers.js';
 
 // switchPage's dirty guard goes through the shared in-app dialog.
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
@@ -73,7 +73,7 @@ async function loadFresh() {
         return null;
     });
 
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;
@@ -359,7 +359,7 @@ describe('help page recent-errors section', () => {
             }
             return null;
         });
-        vi.stubGlobal('__TAURI__', {
+        stubTauri({
             event: { listen: vi.fn(() => () => {}) },
             core: { invoke: invokeMock },
             app: { getVersion: vi.fn(async () => '0.0.0-test') },
@@ -508,7 +508,7 @@ describe('save status clearing semantics', () => {
         makeDirty();
         // wantAutostart=false (config autostart off) + available + disable
         // throwing drives the ⚠ branch.
-        vi.stubGlobal('__TAURI__', {
+        stubTauri({
             ...window.__TAURI__,
             autostart: {
                 enable: vi.fn(),
@@ -761,7 +761,7 @@ describe('failure audit forwarding (plugin direct calls bypassing call())', () =
         setInputValue('api-url', 'https://api.example.com/v1');
         // wantAutostart=false (config autostart off) + available=true +
         // disable() throwing drives the plugin-failure branch.
-        vi.stubGlobal('__TAURI__', {
+        stubTauri({
             ...window.__TAURI__,
             autostart: {
                 enable: vi.fn(),
@@ -786,7 +786,7 @@ describe('failure audit forwarding (plugin direct calls bypassing call())', () =
         document
             .getElementById('autostart-toggle')
             .dispatchEvent(new Event('click'));
-        vi.stubGlobal('__TAURI__', {
+        stubTauri({
             ...window.__TAURI__,
             autostart: {
                 enable: vi.fn(async () => {
@@ -825,7 +825,7 @@ describe('failure audit forwarding (plugin direct calls bypassing call())', () =
     it('data-path dialog open failure forwards with context browse-data-path', async () => {
         // Same defect class as autostart: dialog.open is a plugin direct
         // call bypassing the wrapper; its catch used to swallow silently.
-        vi.stubGlobal('__TAURI__', {
+        stubTauri({
             ...window.__TAURI__,
             dialog: {
                 open: vi.fn(async () => {

@@ -3,10 +3,12 @@
  *
  * One module for the cross-test plumbing that used to be inlined per
  * contract test (readSource/blockOf) or per orchestration test
- * (stubTauri/loadFresh). Later tasks in this batch consolidate the 4
- * contract tests' inline `read` and 2 inline `blockOf` variants into
- * this module and migrate the settings fixtures to real HTML via
- * loadSettingsDom().
+ * (stubTauri/loadFresh). Round 6 P4 Tasks 2-4 landed the consolidation:
+ * the 4 contract tests' inline `read` and 2 inline `blockOf` variants
+ * now import from here, the settings fixtures load the real HTML via
+ * loadSettingsDom(), and stubTauri is the suite's default __TAURI__
+ * stub path (helpers.js holds the only vi.stubGlobal('__TAURI__') call
+ * site in __tests__/).
  *
  * Conventions pinned here:
  * - readSource paths are REPO-ROOT-relative ('ui/settings.html' reads
@@ -19,9 +21,12 @@
  *   consolidate mechanically.
  * - stubTauri is a thin wrapper, not a framework: defaults cover the
  *   dominant shape observed in __tests__/ (core.invoke + event.listen —
- *   every ui entry module destructures window.__TAURI__.event at load
- *   time, so a missing event key makes the import throw); settings-
- *   specific keys (app/autostart/dialog) are overrides, not defaults.
+ *   the default listen resolves to an unlisten function, the
+ *   Promise<UnlistenFn> shape ui/lib/events.js::subscribe awaits). Raw
+ *   window.__TAURI__ access is contract-pinned to ui/lib/events.js,
+ *   whose guarded listen survives a missing event key instead of
+ *   throwing at import time; settings-specific keys (app/autostart/
+ *   dialog) are overrides, not defaults.
  * - loadSettingsDom reads the REAL ui/settings.html and strips
  *   <script>/<link> tags — jsdom must not re-run the entry scripts or
  *   fetch the stylesheets.
@@ -41,8 +46,11 @@ import { vi } from 'vitest';
  * vite's asset-URL plugin rewrites new URL(..., import.meta.url) call
  * sites, and a dynamic template's first argument becomes undefined for
  * non-asset paths (observed 2026-11-14, vitest 5.0.2 — node-env contract
- * tests are unaffected). The resolve-based shape below mirrors
- * settings.reset-defaults.test.js, which is jsdom-proven in this suite.
+ * tests are unaffected). helpers.js is the single owner of this
+ * resolve-based shape: it was jsdom-proven here first, and the read+strip
+ * logic settings.reset-defaults.test.js used to inline was consolidated
+ * into loadSettingsDom() in Round 6 P4 (Tasks 1/3) — that file now
+ * delegates to the helper.
  */
 const HELPERS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -80,6 +88,13 @@ export function blockOf(src, startMarker, endMarker = '}') {
 
 /**
  * Stub the global `__TAURI__` object and return the stubbed handle.
+ *
+ * The suite's default __TAURI__ stub path (Round 6 P4 Task 4 sweep):
+ * this helper holds the ONLY vi.stubGlobal('__TAURI__') call site in
+ * __tests__/ — plain literal sites convert mechanically (overrides
+ * shallow-merge, so a full top-level key like `event` replaces the
+ * default); raw stubGlobal survives only for non-__TAURI__ globals
+ * (requestAnimationFrame & co, out of scope).
  *
  * Defaults cover the dominant stub shape in __tests__/ (surveyed
  * 2026-11-14, 13 files): `core.invoke` and `event.listen`. The default

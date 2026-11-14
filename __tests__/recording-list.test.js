@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubTauri } from './helpers.js';
+
 // recordings.js transitively imports api.js, which evaluates
 // `window.__TAURI__.core` at module load. Stub it before the import so
 // the controller's import graph doesn't blow up under jsdom.
-vi.stubGlobal('__TAURI__', { core: { invoke: vi.fn() } });
+stubTauri({ core: { invoke: vi.fn() } });
 URL.createObjectURL = vi.fn(() => 'blob:mock-url');
 URL.revokeObjectURL = vi.fn();
 

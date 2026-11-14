@@ -7,6 +7,8 @@
 // vi.spyOn for the ripple-throttle tests (the only dependency).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubTauri } from './helpers.js';
+
 let listeners;
 let rafCallbacks;
 
@@ -17,7 +19,7 @@ const DOM = `
 
 async function loadFresh() {
     listeners = {};
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;

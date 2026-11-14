@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubTauri } from './helpers.js';
+
 let listeners;
 let invokeMock;
 
@@ -11,10 +13,11 @@ async function loadFresh() {
     // gets a chance to call invoke, which would otherwise make tests flaky.
     invokeMock = vi.fn(async (cmd) => (cmd === 'get_review_text' ? '' : null));
 
-    // vi.stubGlobal is vitest 4's recommended API. Direct `global.window.__TAURI__`
-    // assignment is fragile under jsdom 25/29 because `global.window` may not be
-    // initialized by the time review.js evaluates its top-level destructures.
-    vi.stubGlobal('__TAURI__', {
+    // stubTauri (helpers.js) stubs the global the same way. Direct
+    // `global.window.__TAURI__` assignment is fragile under jsdom 25/29
+    // because `global.window` may not be initialized by the time review.js
+    // evaluates its top-level destructures.
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;

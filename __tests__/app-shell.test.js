@@ -17,7 +17,7 @@
 // per case (the form-behavior file hardcodes `false`, too coarse here).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { loadSettingsDom } from './helpers.js';
+import { loadSettingsDom, stubTauri } from './helpers.js';
 
 const confirmCtl = { result: false, open: false };
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
@@ -72,7 +72,7 @@ async function loadFresh() {
         return null;
     });
 
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;

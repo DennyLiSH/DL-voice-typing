@@ -1,15 +1,14 @@
 // Static text-scrape contract for the 2026-09-13 copy batch: pins the
 // audited strings so they cannot silently regress (same pattern as
 // undo-window-contract.test.js).
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const read = (rel) =>
-    readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf8');
+// readSource is repo-root-relative (shared from helpers.js — the former
+// inline `read` variant consolidated in Round 6 P4 Task 4).
+import { readSource } from './helpers.js';
 
 describe('review.html copy contract', () => {
-    const html = read('ui/review.html');
+    const html = readSource('ui/review.html');
     it('title unified to 粘贴前确认', () => {
         expect(html).toContain('<title>粘贴前确认</title>');
     });
@@ -23,13 +22,13 @@ describe('review.html copy contract', () => {
 });
 
 describe('settings.html copy contract', () => {
-    const html = read('ui/settings.html');
+    const html = readSource('ui/settings.html');
     it('first paint: SVG eye, no emoji', () => {
         expect(html).not.toContain('👁');
         expect(html).toContain('toggle-key');
     });
     it('inline eye SVG is byte-identical to EYE_SVG in settings-form.js', () => {
-        const js = read('ui/settings-form.js');
+        const js = readSource('ui/settings-form.js');
         const m = js.match(/const EYE_SVG =\s+'([^']+)';/);
         expect(m).not.toBeNull();
         expect(html).toContain(m[1]);
@@ -39,7 +38,7 @@ describe('settings.html copy contract', () => {
         expect(html).toContain('开启「录音模式」');
     });
     it('settings-utils.js error copy matches the toggle name', () => {
-        const js = read('ui/lib/settings-utils.js');
+        const js = readSource('ui/lib/settings-utils.js');
         expect(js).not.toContain('启用录音模式');
         expect(js).toContain('开启「录音模式」');
     });
@@ -63,14 +62,18 @@ describe('settings.html copy contract', () => {
 describe('feedback link security contract', () => {
     it('URL single-sourced across HTML href and JS constant (+ rel)', () => {
         const url = 'https://github.com/DennyLiSH/DL-voice-typing/issues';
-        expect(read('ui/settings.html')).toContain(`href="${url}"`);
-        expect(read('ui/app-shell.js')).toContain(
+        expect(readSource('ui/settings.html')).toContain(`href="${url}"`);
+        expect(readSource('ui/app-shell.js')).toContain(
             `const FEEDBACK_URL = '${url}'`,
         );
-        expect(read('ui/settings.html')).toContain('rel="noopener noreferrer"');
+        expect(readSource('ui/settings.html')).toContain(
+            'rel="noopener noreferrer"',
+        );
     });
     it('opener permission is the SCOPED object form locked to the GitHub repo', () => {
-        const caps = JSON.parse(read('src-tauri/capabilities/settings.json'));
+        const caps = JSON.parse(
+            readSource('src-tauri/capabilities/settings.json'),
+        );
         const entries = caps.permissions.filter(
             (p) =>
                 p === 'opener:allow-open-url' ||
@@ -83,14 +86,14 @@ describe('feedback link security contract', () => {
         const allowUrl = entries[0]?.allow?.[0]?.url;
         expect(allowUrl).toBe('https://github.com/DennyLiSH/*');
         // The link URL must actually fall inside the scope glob prefix.
-        const js = read('ui/app-shell.js');
+        const js = readSource('ui/app-shell.js');
         const m = js.match(/const FEEDBACK_URL = '([^']+)';/);
         expect(m?.[1].startsWith(allowUrl.replace(/\*$/, ''))).toBe(true);
     });
 });
 
 describe('settings-form.js copy contract', () => {
-    const js = read('ui/settings-form.js');
+    const js = readSource('ui/settings-form.js');
     it('ASCII ellipses replaced, initial-paint EYE_SVG assignment removed', () => {
         expect(js).not.toContain('测试中...');
         expect(js).not.toContain('保存中...');
@@ -109,7 +112,7 @@ describe('settings-form.js copy contract', () => {
 });
 
 describe('floating.html copy contract', () => {
-    const html = read('ui/floating.html');
+    const html = readSource('ui/floating.html');
     it('transcript defaults to polite live region without timer role', () => {
         expect(html).toContain('aria-live="polite"');
         expect(html).not.toContain('role="timer"');

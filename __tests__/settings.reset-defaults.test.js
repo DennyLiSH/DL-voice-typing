@@ -11,7 +11,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { loadSettingsDom } from './helpers.js';
+import { loadSettingsDom, stubTauri } from './helpers.js';
 
 vi.mock('../ui/model-manager.js', () => ({
     getModelStatus: () => ({
@@ -79,7 +79,7 @@ const defaults = {
 async function stubInvoke(extraFn, baseline = {}) {
     invocations = [];
     const cfg = { ...baseConfig, ...baseline };
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: vi.fn(() => Promise.resolve(() => {})),
         },

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { loadSettingsDom } from './helpers.js';
+import { loadSettingsDom, stubTauri } from './helpers.js';
 
 // jsdom orchestration tests for ui/data-manager.js audio lifecycle (C6):
 // blob-URL release on list rebuild, onDataPageLeave cleanup, and the
@@ -35,7 +35,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function loadFresh(invokeImpl) {
     invokeMock = vi.fn(invokeImpl);
-    vi.stubGlobal('__TAURI__', { core: { invoke: invokeMock } });
+    stubTauri({ core: { invoke: invokeMock } });
     URL.createObjectURL = vi.fn(() => 'blob:mock-url');
     URL.revokeObjectURL = vi.fn();
     loadSettingsDom();

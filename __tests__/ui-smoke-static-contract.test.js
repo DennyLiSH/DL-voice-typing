@@ -2,15 +2,14 @@
 // six static criteria carved out of the manual UI smoke checklist (TODO.md)
 // so they cannot silently regress. Dynamic-behavior items stay manual — see
 // _Project/superpowers/specs/20261006_0833_ui-smoke-static-contract-design.md.
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const read = (rel) =>
-    readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf8');
+// readSource is repo-root-relative (shared from helpers.js — the former
+// inline `read` variant consolidated in Round 6 P4 Task 4).
+import { readSource } from './helpers.js';
 
 describe('common.css static state contract', () => {
-    const css = read('ui/common.css');
+    const css = readSource('ui/common.css');
 
     it('reduced-motion disables dialog animations', () => {
         expect(css).toMatch(
@@ -26,7 +25,7 @@ describe('common.css static state contract', () => {
 });
 
 describe('settings.css static state contract', () => {
-    const css = read('ui/settings.css');
+    const css = readSource('ui/settings.css');
 
     it('disabled hotkey group dims label and hint (opacity 0.5)', () => {
         const block = css.match(
@@ -45,7 +44,7 @@ describe('settings.css static state contract', () => {
 
 describe('settings-form hotkey disabled wiring', () => {
     it('record-only hotkey group toggles the disabled class', () => {
-        const js = read('ui/settings-form.js');
+        const js = readSource('ui/settings-form.js');
         expect(js).toContain(
             "recordOnlyHotkeyGroup.classList.toggle('disabled', !enabled)",
         );
@@ -54,14 +53,14 @@ describe('settings-form hotkey disabled wiring', () => {
 
 describe('static copy contract', () => {
     it('transcribe empty state copy with hidden initial value', () => {
-        const html = read('ui/transcribe.html');
+        const html = readSource('ui/transcribe.html');
         expect(html).toMatch(
             /id="rec-empty"[^>]*hidden[^>]*>暂无录音，按住录音快捷键开始第一条</,
         );
     });
 
     it('model delete confirmation warns the action is irreversible', () => {
-        const js = read('ui/model-manager.js');
+        const js = readSource('ui/model-manager.js');
         expect(js).toContain('此操作不可恢复。');
     });
 });

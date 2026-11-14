@@ -10,7 +10,7 @@
 // all exist in the real markup (same window).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { loadSettingsDom } from './helpers.js';
+import { loadSettingsDom, stubTauri } from './helpers.js';
 
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
     confirmDialog: vi.fn(),
@@ -28,7 +28,7 @@ async function loadFresh() {
     // shadow showError in the failure paths).
     invokeMock = vi.fn(async () => undefined);
     formChangeEventCount = 0;
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;

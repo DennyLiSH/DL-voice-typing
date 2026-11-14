@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubTauri } from './helpers.js';
+
 // The re-transcription confirmation goes through the shared in-app dialog.
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
     confirmDialog: vi.fn(async () => false),
@@ -321,7 +323,7 @@ async function loadFresh(invokeImpl) {
     listeners = {};
     invokeMock = vi.fn(invokeImpl);
 
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;

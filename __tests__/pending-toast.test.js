@@ -6,6 +6,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { loadFresh, stubTauri } from './helpers.js';
+
 beforeEach(() => {
     document.body.innerHTML = '';
     vi.useFakeTimers();
@@ -20,8 +22,7 @@ afterEach(async () => {
 });
 
 async function loadModule() {
-    vi.resetModules();
-    return import('../ui/lib/pending-toast.js');
+    return loadFresh('../ui/lib/pending-toast.js');
 }
 
 /**
@@ -32,7 +33,7 @@ async function loadModule() {
 function stubTauriListen() {
     let emit;
     let unlistenCalled = false;
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: (_name, cb) => {
                 emit = cb;

@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { stubTauri } from './helpers.js';
+
 // Contract tests for the shared recording-list module (C6).
 // jsdom lacks URL.createObjectURL/revokeObjectURL — stub before import,
 // following the loadFresh pattern in transcribe.test.js.
@@ -10,7 +12,7 @@ let mod;
 
 async function loadFresh(invokeImpl) {
     invokeMock = vi.fn(invokeImpl ?? (() => Promise.resolve(null)));
-    vi.stubGlobal('__TAURI__', { core: { invoke: invokeMock } });
+    stubTauri({ core: { invoke: invokeMock } });
     URL.createObjectURL = vi.fn(() => 'blob:mock-url');
     URL.revokeObjectURL = vi.fn();
     vi.resetModules();

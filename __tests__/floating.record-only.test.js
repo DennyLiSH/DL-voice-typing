@@ -7,6 +7,8 @@
 // listeners map, inject the floating DOM, dynamically import floating.js.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { stubTauri } from './helpers.js';
+
 let listeners;
 
 const DOM = `
@@ -16,7 +18,7 @@ const DOM = `
 
 async function loadFresh() {
     listeners = {};
-    vi.stubGlobal('__TAURI__', {
+    stubTauri({
         event: {
             listen: vi.fn((evt, cb) => {
                 listeners[evt] = cb;
