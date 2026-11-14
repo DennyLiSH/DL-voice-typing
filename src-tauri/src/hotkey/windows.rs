@@ -401,23 +401,8 @@ impl HotkeyManager for WindowsHotkeyManager {
         Ok(())
     }
 
-    fn unregister(&mut self) -> Result<(), AppError> {
-        self.remove_hook()?;
-        // Clear global state (all three slots). Used at shutdown / Drop —
-        // the comment on `unregister_primary` explains why we keep these
-        // paths separate.
-        if let Ok(mut state) = HOOK_STATE.lock() {
-            *state = None;
-        }
-        Ok(())
-    }
-
     fn unregister_primary(&mut self) -> Result<(), AppError> {
         self.clear_spec_slot(SlotKind::Primary)
-    }
-
-    fn unregister_record_only(&mut self) -> Result<(), AppError> {
-        self.clear_spec_slot(SlotKind::RecordOnly)
     }
 
     fn unregister_open_settings(&mut self) -> Result<(), AppError> {
@@ -426,10 +411,6 @@ impl HotkeyManager for WindowsHotkeyManager {
 
     fn unregister_open_transcribe(&mut self) -> Result<(), AppError> {
         self.clear_spec_slot(SlotKind::OpenTranscribe)
-    }
-
-    fn is_registered(&self) -> bool {
-        self.hook.is_some()
     }
 }
 
@@ -530,7 +511,7 @@ impl Default for WindowsHotkeyManager {
 // WindowsHotkeyManager is only accessed through `Mutex<WindowsHotkeyManager>`
 // (see lib.rs). The Mutex guarantees exclusive access. The hook handle
 // is created in register(), used in the static hook proc (via separate HOOK_STATE
-// Mutex), and destroyed in unregister()/Drop — all under Mutex protection.
+// Mutex), and unhooked in Drop — all under Mutex protection.
 unsafe impl Send for WindowsHotkeyManager {}
 unsafe impl Sync for WindowsHotkeyManager {}
 
@@ -717,8 +698,20 @@ mod tests {
 
     #[test]
     fn test_new_manager() {
-        let manager = WindowsHotkeyManager::new();
-        assert!(!manager.is_registered());
+        let mut manager = WindowsHotkeyManager::new();
+        // is_registered() was removed (zero production consumers). The initial
+        // empty state is observed through register's return value: a conflict
+        // error would mean a slot was already registered on this manager.
+        // (register takes HotkeyCallback = Box, not the Arc-based SlotCallback
+        // helper `dummy_callback()` used for HookState entries.)
+        let r = manager.register(default_primary(), Box::new(|_event: HotkeyEvent| {}));
+        assert!(
+            r.is_ok(),
+            "fresh manager must accept the first registration: {r:?}"
+        );
+        // Clean up: register writes to the process-global HOOK_STATE; restore
+        // the empty state so this test cannot leak into sibling tests.
+        let _ = manager.unregister_primary();
     }
 
     #[test]

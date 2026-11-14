@@ -242,21 +242,13 @@ pub trait HotkeyManager: Send {
     /// Must be called after `register()` (so the hook is installed).
     fn register_cancel_esc(&mut self, callback: CancelEscCallback) -> Result<(), AppError>;
 
-    /// Unregister all hotkeys (primary + record-only + cancel_esc) and
-    /// remove the hook. Used at shutdown / Drop.
-    fn unregister(&mut self) -> Result<(), AppError>;
-
     /// Unregister ONLY the primary hotkey slot, leaving record-only and
     /// cancel_esc intact. Used by save_settings when only the primary key
-    /// changes — full `unregister()` would wipe cancel_esc (Esc cancel
+    /// changes — a full teardown would wipe cancel_esc (Esc cancel
     /// silently stops working until restart) and record_only (a known
     /// pre-existing bug where changing the primary key also nukes the
     /// record-only slot until restart).
     fn unregister_primary(&mut self) -> Result<(), AppError>;
-
-    /// Unregister only the record-only hotkey slot, leaving the primary
-    /// hotkey active. Used when settings change just the record-only key.
-    fn unregister_record_only(&mut self) -> Result<(), AppError>;
 
     /// Register the open-settings global hotkey (M6-a optional slot).
     fn register_open_settings(
@@ -277,9 +269,6 @@ pub trait HotkeyManager: Send {
 
     /// Unregister only the open-transcribe hotkey slot.
     fn unregister_open_transcribe(&mut self) -> Result<(), AppError>;
-
-    /// Check if hotkey is currently registered.
-    fn is_registered(&self) -> bool;
 }
 
 #[cfg(test)]
