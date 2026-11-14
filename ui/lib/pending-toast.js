@@ -71,7 +71,7 @@ export function showPendingToast({ moved, id = null, undoSecs = 5, onUndo }) {
 
     const root = document.createElement('div');
     root.id = 'pending-toast';
-    root.className = 'pending-toast';
+    root.className = 'pending-toast toast';
     root.setAttribute('role', 'status');
     root.setAttribute('aria-live', 'polite');
 

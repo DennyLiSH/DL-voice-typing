@@ -235,14 +235,18 @@ describe('spinner/toast uniformity', () => {
         expect(readSource('ui/transcribe.css')).not.toMatch(/\.spinner \{/);
     });
 
-    it('toasts share the duration-short entrance', () => {
-        expect(
-            blockOf(readSource('ui/settings.css'), '.pending-toast {'),
-        ).toContain(
+    it('common.css owns the .toast base recipe (composition class)', () => {
+        // Ownership pin, not a per-window mirror (same shape as the .banner
+        // pin): the base recipe lives once in common.css; window blocks keep
+        // only their positioning/layout. Per-window animation mirrors were
+        // retired here — they re-tested a fact already owned by this pin.
+        const base = blockOf(readSource('ui/common.css'), '.toast {');
+        expect(base).toContain(
             'animation: status-pop var(--duration-short) var(--ease-spring)',
         );
-        expect(blockOf(readSource('ui/transcribe.css'), '.toast {')).toContain(
-            'animation: status-pop var(--duration-short) var(--ease-spring)',
-        );
+        expect(base).toContain('background: var(--surface)');
+        // No-display contract, same as .banner: transcribe #toast relies on
+        // the UA [hidden] rule; settings' pending-toast owns flex layout.
+        expect(base).not.toContain('display');
     });
 });

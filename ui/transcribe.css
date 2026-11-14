@@ -402,19 +402,14 @@ body {
 }
 
 /* --- Toast --- */
+/* Visual recipe composed from the shared .toast base (common.css); this
+ * class owns only the centered fixed placement. */
 .toast {
   position: fixed;
   left: 50%;
   bottom: var(--space-5);
   transform: translateX(-50%);
   max-width: 80%;
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-lg);
-  font-size: var(--font-label);
-  animation: status-pop var(--duration-short) var(--ease-spring);
 }
 
 .toast.error {

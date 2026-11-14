@@ -452,6 +452,25 @@ button:disabled {
 }
 
 /* --------------------------------------------------------------------------
+   Shared toast base (settings .pending-toast / transcribe .toast).
+   Composition class: window stylesheets keep ONLY their positioning/layout
+   differences (transcribe: centered fixed placement; settings: corner slot +
+   flex layout for text + undo button). NOTE: no `display` on .toast by
+   contract (same convention as .banner) — transcribe #toast relies on the UA
+   [hidden] rule while hidden, and settings' pending-toast owns its flex
+   layout in its own class.
+   -------------------------------------------------------------------------- */
+.toast {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--font-label);
+  animation: status-pop var(--duration-short) var(--ease-spring);
+}
+
+/* --------------------------------------------------------------------------
    Destructive-action button (confirm-dialog danger variant; formerly the
    legacy .btn-delete-model)
    -------------------------------------------------------------------------- */
