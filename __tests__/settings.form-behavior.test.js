@@ -8,10 +8,16 @@
 // would then let those edits be lost. The fix recomputes via
 // updateDirtyState() (current DOM vs the just-saved snapshot).
 //
-// Follows the loadFresh pattern from settings.error_forwarding.test.js:
-// stub window.__TAURI__, inject a minimal DOM subtree, dynamically import
-// settings.js, then drive the real save click handler.
+// Real-entry mode (Round 6 P4 Task 3): stub window.__TAURI__, load the
+// REAL ui/settings.html via loadSettingsDom() (helpers.js — strips
+// <script>/<link>), dynamically import settings.js (the real entry),
+// then drive the real save click handler. The real HTML is the fixture:
+// hand-copied MINIMAL_DOM templates drifted from production markup (e.g.
+// the ghost ids #container / data-range-start / data-range-end existed
+// only here) and could not catch selector renames.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { loadSettingsDom } from './helpers.js';
 
 // switchPage's dirty guard goes through the shared in-app dialog.
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
@@ -21,82 +27,6 @@ vi.mock('../ui/lib/confirm-dialog.js', () => ({
 
 let invokeMock;
 let listeners;
-
-const MINIMAL_DOM = `
-  <div id="container" class="content-area"></div>
-  <div class="sidebar"></div>
-  <div class="sidebar-item" data-page="general"></div>
-  <div class="sidebar-item" data-page="help"></div>
-  <div class="page-content" id="page-general"></div>
-  <div class="page-content" id="page-help"></div>
-  <details class="help-section" id="help-errors-section"><summary>最近错误</summary><div class="help-section-body"><div id="error-history-list" aria-live="polite"></div></div></details>
-  <select id="language"><option value="zh"></option></select>
-  <div id="hotkey-combo">
-    <input type="checkbox" id="hotkey-ctrl" />
-    <input type="checkbox" id="hotkey-shift" />
-    <input type="checkbox" id="hotkey-alt" />
-    <select id="hotkey">
-      <option value="RightCtrl">RightCtrl</option>
-      <option value="RightAlt">RightAlt</option>
-      <option value="F9">F9</option>
-    </select>
-  </div>
-  <div id="hotkey-preview" aria-live="polite"></div>
-  <div id="hotkey-warning" hidden></div>
-  <select id="whisper-model"><option value="base"></option></select>
-  <div id="model-status-text"></div>
-  <button id="btn-download-model"></button>
-  <div id="download-progress"></div>
-  <div id="progress-fill"></div>
-  <div id="progress-percent"></div>
-  <button id="btn-cancel-download"></button>
-  <div id="llm-toggle"></div>
-  <div id="llm-fields"></div>
-  <input id="api-url" />
-  <div id="api-url-warning" hidden></div>
-  <input id="api-key" />
-  <input id="model" />
-  <button id="toggle-key"></button>
-  <button id="test-btn"></button>
-  <div id="test-status"></div>
-  <button id="save-btn"></button>
-  <div id="save-status"></div>
-  <div id="error-banner"></div>
-  <select id="download-mirror"><option value="Official"></option></select>
-  <div id="data-saving-toggle"></div>
-  <div id="data-saving-fields"></div>
-  <input id="data-saving-path" />
-  <button id="btn-browse-path"></button>
-  <div id="review-toggle"></div>
-  <div id="autostart-toggle"></div>
-  <div id="realtime-transcription-toggle"></div>
-  <div id="record-only-toggle"></div>
-  <div id="record-only-hotkey-group">
-    <input type="checkbox" id="record-only-hotkey-ctrl" />
-    <input type="checkbox" id="record-only-hotkey-shift" />
-    <input type="checkbox" id="record-only-hotkey-alt" />
-    <select id="record-only-hotkey">
-      <option value="RightAlt">RightAlt</option>
-      <option value="F9">F9</option>
-    </select>
-  </div>
-  <div id="record-only-hotkey-preview" aria-live="polite"></div>
-  <div id="record-only-hotkey-warning" hidden></div>
-  <div id="version-display"></div>
-  <div id="compute-mode-badge"></div>
-  <div id="data-error-bar"></div>
-  <button id="btn-refresh-data"></button>
-  <input id="data-search-input" />
-  <div id="data-list"></div>
-  <button id="btn-batch-delete"></button>
-  <input type="checkbox" id="data-select-all-cb" />
-  <button id="btn-prev-page"></button>
-  <button id="btn-next-page"></button>
-  <span id="data-total-count"></span>
-  <span id="data-total-size"></span>
-  <span id="data-range-start"></span>
-  <span id="data-range-end"></span>
-`;
 
 async function loadFresh() {
     listeners = {};
@@ -118,7 +48,10 @@ async function loadFresh() {
                 llm_api_url: '',
                 llm_api_key: '',
                 llm_model: '',
-                download_mirror: 'Official',
+                // Backend default (schema.rs DownloadMirror::HfMirror) — must
+                // match a real <option> in settings.html or the dirty baseline
+                // would light on first paint (select value falls back to '').
+                download_mirror: 'hf-mirror',
                 data_saving_enabled: false,
                 data_saving_path: '',
                 review_before_paste: false,
@@ -152,7 +85,7 @@ async function loadFresh() {
         autostart: { enable: vi.fn(), disable: vi.fn() },
     });
 
-    document.body.innerHTML = MINIMAL_DOM;
+    loadSettingsDom();
 
     vi.resetModules();
     await import('../ui/settings.js');
@@ -402,7 +335,7 @@ describe('help page recent-errors section', () => {
                     llm_api_url: '',
                     llm_api_key: '',
                     llm_model: '',
-                    download_mirror: 'Official',
+                    download_mirror: 'hf-mirror',
                     data_saving_enabled: false,
                     data_saving_path: '',
                     review_before_paste: false,
@@ -432,7 +365,7 @@ describe('help page recent-errors section', () => {
             app: { getVersion: vi.fn(async () => '0.0.0-test') },
             autostart: { enable: vi.fn(), disable: vi.fn() },
         });
-        document.body.innerHTML = MINIMAL_DOM;
+        loadSettingsDom();
         vi.resetModules();
         await import('../ui/settings.js');
         await new Promise((r) => setTimeout(r, 10));
@@ -656,8 +589,8 @@ describe('hotkey combo (Task 8: arbitrary combinations)', () => {
         // before populateFields(); verify the select has 54 options
         // (6 modifier + 12 F-keys + 26 letters + 10 digits).
         const sel = document.getElementById('hotkey');
-        // The MINIMAL_DOM seed has 3 options; settings.js init() should
-        // have populated them with all MAIN_KEYS (54 entries).
+        // The real HTML's <select> starts empty; settings.js init() should
+        // have populated it with all MAIN_KEYS (54 entries).
         expect(sel.options.length).toBeGreaterThanOrEqual(54);
         // RightCtrl is in MAIN_KEYS and must be present.
         const hasRightCtrl = Array.from(sel.options).some(
@@ -773,10 +706,12 @@ describe('hotkey combo (Task 8: arbitrary combinations)', () => {
         // schema's slot?.optional normalisation handles undefined→null on
         // both sides of isConfigDirty so the dirty baseline stays false on
         // first paint (no spurious "save" prompt for users who have not
-        // touched the new slots). The DOM elements for the open_* slots
-        // are not seeded by MINIMAL_DOM — the form's optional-chaining
-        // guards skip them, so the test only asserts the dirty-baseline
-        // outcome, which is the actual regression contract.
+        // touched the new slots). The real HTML renders the open_* slot
+        // controls; the loaded pre-M6 config simply lacks the fields, and
+        // writeOptionalSpecToUI blanks them while the schema's
+        // slot?.optional normalisation treats undefined (loaded) and null
+        // (freshly blanked UI) as equal — the test asserts the
+        // dirty-baseline outcome, which is the actual regression contract.
         const originalImpl = invokeMock.getMockImplementation();
         invokeMock.mockImplementation(async (cmd, args) => {
             if (cmd === 'get_config') {
