@@ -21,6 +21,7 @@
 //      segments without re-transcribing.
 
 import { call, reportError } from './lib/api.js';
+import { hideBanner, showBanner } from './lib/banner.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
 import {
     buildStatusBadges,
@@ -121,7 +122,7 @@ async function loadList() {
             clearDetail();
             controller.clearSelection();
         }
-        if (errBar) errBar.hidden = true;
+        hideBanner(errBar);
         // Cap hint is based on the PRE-filter length: the 200 limit is applied
         // server-side across all recordings (classic + record_only), so a full
         // page means record-only items may have been cut even if the filtered
@@ -130,10 +131,7 @@ async function loadList() {
         if (cap) cap.hidden = resp.items.length < 200;
         renderList();
     } catch (e) {
-        if (errBar) {
-            errBar.textContent = errorMessage(e, '加载失败');
-            errBar.hidden = false;
-        }
+        showBanner(errBar, errorMessage(e, '加载失败'));
     }
 }
 

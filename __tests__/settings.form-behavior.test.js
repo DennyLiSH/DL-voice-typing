@@ -912,7 +912,7 @@ describe('save failure surfaces and save-message fork', () => {
         expect(status.className).toContain('error');
         const banner = document.getElementById('error-banner');
         expect(banner.textContent).toContain('无效配置');
-        expect(banner.classList.contains('visible')).toBe(true);
+        expect(banner.hidden).toBe(false);
     });
 
     it('error status is NOT armed with the interaction-clear listener', async () => {

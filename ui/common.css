@@ -430,10 +430,12 @@ button:disabled {
    class (visibility toggles, margins, animations) and add
    `banner banner-error` for the visual recipe. .data-error-bar.notice is the
    single success-tinted variant (defined next to its consumer).
-   NOTE: no `display` on .banner by contract (locked by test) — settings'
-   banners own display in their behavioral classes (.visible toggle / flex);
-   an author display here would defeat the UA [hidden] rule on transcribe
-   #list-error, whose class chain has no other author display.
+   NOTE: no `display` on .banner by contract (locked by test) — visibility is
+   the `hidden` attribute everywhere (lib/banner.js is the JS single source):
+   settings' error-banner and transcribe #list-error have no other author
+   display in their class chains, while .data-error-bar's flex layout carries
+   its own [hidden] guard; an author display without such a guard would
+   defeat the UA [hidden] rule.
    -------------------------------------------------------------------------- */
 .banner {
   padding: var(--space-2) var(--space-3);

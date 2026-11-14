@@ -166,15 +166,11 @@ describe('error banner uniformity', () => {
         );
     });
 
-    it('notice variant fully overrides banner-error (green state, not green bg with red border)', () => {
-        const block = blockOf(
-            readSource('ui/settings.css'),
-            '.data-error-bar.notice',
-        );
-        expect(block).toContain('rgba(var(--success-rgb), 0.08)');
-        expect(block).toContain('border-color');
-        expect(block).toContain('color: var(--success-text)');
-    });
+    // Retired (Round 6 P5 Task 3): 'notice variant fully overrides
+    // banner-error' was a mirror of the settings.css .data-error-bar.notice
+    // recipe (the .banner pin above already owns the composition decision).
+    // The notice variant's class mechanics are now pinned behaviorally on
+    // lib/banner.js (banner.test.js swap contract) instead.
 });
 
 describe('input treatment uniformity', () => {

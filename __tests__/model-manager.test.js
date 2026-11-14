@@ -164,7 +164,7 @@ describe('model-manager', () => {
         await vi.waitFor(() => {
             expect(btnDownload().disabled).toBe(false);
         });
-        expect(errorBanner().classList.contains('visible')).toBe(false);
+        expect(errorBanner().hidden).toBe(true);
         expect(
             invokeMock.mock.calls.some((c) => c[0] === 'log_frontend_error'),
         ).toBe(false);
@@ -184,7 +184,7 @@ describe('model-manager', () => {
         await vi.waitFor(() => {
             expect(btnDownload().disabled).toBe(false);
         });
-        expect(errorBanner().classList.contains('visible')).toBe(false);
+        expect(errorBanner().hidden).toBe(true);
         expect(
             invokeMock.mock.calls.some((c) => c[0] === 'log_frontend_error'),
         ).toBe(false);
@@ -197,7 +197,7 @@ describe('model-manager', () => {
         mm.setSelectedModel('tiny');
         btnDownload().click();
         await vi.waitFor(() => {
-            expect(errorBanner().classList.contains('visible')).toBe(true);
+            expect(errorBanner().hidden).toBe(false);
         });
         expect(
             invokeMock.mock.calls.some((c) => c[0] === 'log_frontend_error'),

@@ -427,15 +427,14 @@ select:disabled, input:disabled {
 }
 
 /* --------------------------------------------------------------------------
-   Error banner (visual recipe composed from the shared .banner base)
+   Error banner (visual recipe composed from the shared .banner base).
+   Visibility is the `hidden` attribute (set from markup; JS clears it via
+   lib/banner.js). No display declaration here: the UA [hidden] rule owns
+   display:none, and each none→block transition restarts the entrance
+   animation exactly as the old `.visible` class flip did.
    -------------------------------------------------------------------------- */
 .error-banner {
   margin-bottom: var(--space-4);
-  display: none;
-}
-
-.error-banner.visible {
-  display: block;
   animation: banner-slide var(--duration-short) var(--ease-spring);
 }
 

@@ -1,4 +1,5 @@
 import { call } from './lib/api.js';
+import { hideBanner, showBanner } from './lib/banner.js';
 import { confirmDialog } from './lib/confirm-dialog.js';
 import {
     buildExpandedMetadata,
@@ -149,8 +150,7 @@ function resetDataListState() {
 
     const searchInput = $data('data-search-input');
     if (searchInput) searchInput.value = '';
-    const errBar = $data('data-error-bar');
-    if (errBar) errBar.hidden = true;
+    hideBanner($data('data-error-bar'));
 }
 
 async function loadRecordingsPage(offset) {
@@ -304,31 +304,18 @@ function updateBatchBar() {
 }
 
 function showDataError(msg) {
-    const bar = $data('data-error-bar');
-    if (bar) {
-        bar.textContent = msg;
-        bar.classList.remove('notice');
-        bar.hidden = false;
-    }
+    showBanner($data('data-error-bar'), msg);
 }
 
 /** Neutral (non-error) feedback in the same bar slot — success/partial
- *  outcomes that still deserve an in-page message. */
+ *  outcomes that still deserve an in-page message. The notice variant class
+ *  swap is owned by lib/banner.js (single source for error ↔ notice). */
 function showDataNotice(msg) {
-    const bar = $data('data-error-bar');
-    if (bar) {
-        bar.textContent = msg;
-        bar.classList.add('notice');
-        bar.hidden = false;
-    }
+    showBanner($data('data-error-bar'), msg, { variant: 'notice' });
 }
 
 function hideDataError() {
-    const bar = $data('data-error-bar');
-    if (bar) {
-        bar.classList.remove('notice');
-        bar.hidden = true;
-    }
+    hideBanner($data('data-error-bar'));
 }
 
 // --- Event wiring ---
