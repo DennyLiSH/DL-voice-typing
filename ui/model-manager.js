@@ -5,6 +5,7 @@ import { EVENTS, listen } from './lib/events.js';
 import { hideIfVisible } from './lib/first-run-banner.js';
 import { notifyFormChange } from './lib/form-state.js';
 import { modelActionView } from './lib/model-view.js';
+import { setProgressBar } from './lib/progress.js';
 import { MODELS } from './lib/transcribe-models.js';
 import { showError } from './lib/ui-utils.js';
 
@@ -77,7 +78,9 @@ export function updateModelAction() {
     const view = modelActionView(selectedModel, activeDownload, modelStatus);
 
     modelStatusText.style.display = view.statusVisible ? 'inline' : 'none';
-    downloadProgress.style.display = view.progressVisible ? 'block' : 'none';
+    // hidden-attribute idiom (unified with transcribe's progress-wrap); the
+    // shared .progress[hidden] guard keeps the UA rule authoritative.
+    downloadProgress.hidden = !view.progressVisible;
 
     btnDownloadModel.textContent = view.action === 'delete' ? '删除' : '下载';
     btnDownloadModel.className = view.actionDanger
@@ -159,9 +162,13 @@ btnCancelDownload.addEventListener('click', () => {
 
 async function startDownload(size) {
     activeDownload = size;
-    progressFill.style.transform = 'scaleX(0)';
-    progressPercent.textContent = '0%';
-    downloadProgress.setAttribute('aria-valuenow', '0');
+    setProgressBar({
+        fill: progressFill,
+        wrap: downloadProgress,
+        percent: 0,
+        label: progressPercent,
+        labelText: '0%',
+    });
     updateModelAction();
 
     try {
@@ -199,9 +206,13 @@ listen(EVENTS.downloadProgress, (event) => {
     const { size, percent } = event.payload;
     if (size !== activeDownload) return;
 
-    progressFill.style.transform = `scaleX(${percent / 100})`;
-    progressPercent.textContent = `${percent}%`;
-    downloadProgress.setAttribute('aria-valuenow', String(percent));
+    setProgressBar({
+        fill: progressFill,
+        wrap: downloadProgress,
+        percent,
+        label: progressPercent,
+        labelText: `${percent}%`,
+    });
 });
 
 // Listen for background model loading completion

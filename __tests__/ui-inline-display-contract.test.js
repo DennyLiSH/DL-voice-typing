@@ -15,14 +15,13 @@ import { describe, expect, it } from 'vitest';
 // goes red on a legitimate new case, do NOT loosen the rule: either drop the
 // inline style (preferred) or add a reasoned exemption entry.
 
-// model-manager.js toggles these three via direct `el.style.display = ...`
+// model-manager.js toggles these two via direct `el.style.display = ...`
 // assignments on both sides (show AND hide) — no CSS class visibility rule
 // exists for them, so the inline style is not fighting a class toggle.
-const EXEMPT_IDS = new Set([
-    'model-status-text',
-    'btn-download-model',
-    'download-progress',
-]);
+// ('download-progress' used to be the third exemption; Round 6 P5 Task 2
+// switched it to the `hidden` attribute idiom, so it must NOT carry an
+// inline display anymore.)
+const EXEMPT_IDS = new Set(['model-status-text', 'btn-download-model']);
 
 const UI_DIR = fileURLToPath(new URL('../ui/', import.meta.url));
 
@@ -85,11 +84,12 @@ describe('ui inline display contract', () => {
         expect(violations).toEqual([]);
     });
 
-    it('scan is not vacuously green: finds ≥3 inline display styles (the exemptions)', () => {
-        // Baseline: exactly the 3 exempted model-manager elements carry inline
-        // display. If this drops to 0 the regex rotted and the test above went
-        // green for the wrong reason.
+    it('scan is not vacuously green: finds ≥2 inline display styles (the exemptions)', () => {
+        // Baseline: exactly the 2 exempted model-manager elements carry
+        // inline display (download-progress left the list in Round 6 P5
+        // Task 2 — it uses the hidden attribute now). If this drops to 0 the
+        // regex rotted and the test above went green for the wrong reason.
         const { styleCount } = scanFiles();
-        expect(styleCount).toBeGreaterThanOrEqual(3);
+        expect(styleCount).toBeGreaterThanOrEqual(2);
     });
 });

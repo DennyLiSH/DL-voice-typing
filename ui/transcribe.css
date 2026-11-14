@@ -150,6 +150,12 @@ body {
   cursor: pointer;
 }
 
+/* Composition class: the container adds `.progress` (shared [hidden] guard —
+   the author display:flex here would otherwise beat the UA hidden rule, the
+   same latent always-visible-empty-track hazard .segments-loading carries;
+   fix now lives in common.css `.progress[hidden]`). The track composes the
+   shared `.progress-track` capsule recipe (window adds flex: 1 stretch) and
+   the fill composes the shared `.progress-fill` recipe (common.css). */
 .progress-wrap {
   display: flex;
   align-items: center;
@@ -157,28 +163,8 @@ body {
   margin-bottom: var(--space-3);
 }
 
-/* Same hidden-override hazard as .segments-loading below; fixes a latent
-   always-visible empty track (masked by the near-transparent --progress-bg). */
-.progress-wrap[hidden] {
-  display: none;
-}
-
 .progress-track {
   flex: 1;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--progress-bg);
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  width: 100%;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  transform-origin: left;
-  transform: scaleX(0);
-  transition: transform var(--duration-short) ease;
 }
 
 .progress-label {

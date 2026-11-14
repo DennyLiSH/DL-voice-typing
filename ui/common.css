@@ -471,6 +471,39 @@ button:disabled {
 }
 
 /* --------------------------------------------------------------------------
+   Shared progress recipe (settings model-download bar / transcribe
+   transcription bar). Composition classes: the container composes `.progress`
+   for the [hidden] guard, the track element composes `.progress-track`
+   (6px capsule) and the fill element composes `.progress-fill` (accent
+   scaleX). Window stylesheets keep ONLY their own layout additions
+   (transcribe: flex row + stretch; settings: margins + info row).
+
+   The [hidden] guard: an author display on a consumer class (transcribe
+   `.progress-wrap` is flex) beats the UA [hidden] rule — same pattern as
+   .badge[hidden] / .segments-loading[hidden] / .data-error-bar[hidden].
+   -------------------------------------------------------------------------- */
+.progress[hidden] {
+  display: none;
+}
+
+.progress-track {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--progress-bg);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transform-origin: left;
+  transform: scaleX(0);
+  transition: transform var(--duration-short) ease;
+}
+
+/* --------------------------------------------------------------------------
    Destructive-action button (confirm-dialog danger variant; formerly the
    legacy .btn-delete-model)
    -------------------------------------------------------------------------- */

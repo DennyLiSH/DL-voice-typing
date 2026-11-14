@@ -136,7 +136,7 @@ describe('model-manager', () => {
             });
         });
         // In-flight: progress bar visible, select + button disabled.
-        expect(progress().style.display).toBe('block');
+        expect(progress().hidden).toBe(false);
         expect(select().disabled).toBe(true);
         expect(btnDownload().disabled).toBe(true);
 
@@ -146,7 +146,7 @@ describe('model-manager', () => {
             expect(mm.getModelStatus().tiny).toBe(true);
         });
         expect(formChangeEventCount).toBeGreaterThan(before);
-        expect(progress().style.display).toBe('none');
+        expect(progress().hidden).toBe(true);
     });
 
     it('F6 guard: raw-string "download cancelled" stays silent', async () => {

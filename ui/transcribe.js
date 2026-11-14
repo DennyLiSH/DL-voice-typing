@@ -28,6 +28,7 @@ import {
 } from './lib/data-management.js';
 import { errorMessage } from './lib/errors.js';
 import { decodeObjectPayload, EVENTS, listen } from './lib/events.js';
+import { setProgressBar } from './lib/progress.js';
 import { createAudioSlot, createRovingList } from './lib/recording-list.js';
 import { loadRecordings, releaseAudio } from './lib/recordings.js';
 import {
@@ -461,21 +462,18 @@ async function cancelTranscription() {
     }
 }
 
+// Percent mechanics (clamp + aria-valuenow + scaleX transform) live in
+// lib/progress.js; the stage-label TEXT stays here on purpose — settings'
+// progress label is a bare percent, this window's carries stage text
+// (see lib/progress.js module header).
 function setProgress(percent, stage) {
-    const fill = $('progress-fill');
-    if (fill)
-        fill.style.transform = `scaleX(${Math.min(100, Math.max(0, percent)) / 100})`;
-    const wrap = $('progress-wrap');
-    if (wrap)
-        wrap.setAttribute(
-            'aria-valuenow',
-            String(Math.min(100, Math.max(0, percent))),
-        );
-    const label = $('progress-label');
-    if (label) {
-        label.textContent =
-            stage === 'llm' ? 'LLM 纠错中…' : `转录中 ${percent}%`;
-    }
+    setProgressBar({
+        fill: $('progress-fill'),
+        wrap: $('progress-wrap'),
+        percent,
+        label: $('progress-label'),
+        labelText: stage === 'llm' ? 'LLM 纠错中…' : `转录中 ${percent}%`,
+    });
 }
 
 function finishTranscriptionUI() {

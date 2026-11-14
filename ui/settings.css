@@ -254,26 +254,12 @@ select:disabled, input:disabled {
 
 /* --------------------------------------------------------------------------
    Download progress
+   Composition class: the container adds `.progress` (shared [hidden] guard)
+   and the track/fill elements compose the shared `.progress-track` /
+   `.progress-fill` recipe (common.css). Only window-side layout remains here.
    -------------------------------------------------------------------------- */
 .download-progress {
   margin-top: var(--space-2);
-}
-
-.progress-bar-track {
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--progress-bg);
-  overflow: hidden;
-}
-
-.progress-bar-fill {
-  height: 100%;
-  width: 100%;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  transform-origin: left;
-  transform: scaleX(0);
-  transition: transform var(--duration-short) ease;
 }
 
 .progress-info {
