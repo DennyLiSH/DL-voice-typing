@@ -1,5 +1,5 @@
 // Single source of truth for built-in whisper model metadata on the
-// frontend. Mirrored with src-tauri/src/config/schema.rs BUILT_IN_MODELS
+// frontend. Mirrored with src-tauri/src/config/catalog.rs BUILT_IN_MODELS
 // — drift is pinned by __tests__/model-table-contract.test.js (id set
 // must equal Rust serde_key set). Adding a model = one entry here; the
 // Rust side mirror must follow.

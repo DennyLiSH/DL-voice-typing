@@ -27,7 +27,7 @@ let activeDownload = null;
 // --- Model Select ---
 
 // Single source of truth: MODELS in ui/lib/transcribe-models.js,
-// mirrored with src-tauri/src/config/schema.rs BUILT_IN_MODELS — drift
+// mirrored with src-tauri/src/config/catalog.rs BUILT_IN_MODELS — drift
 // is pinned by __tests__/model-table-contract.test.js.
 
 /**

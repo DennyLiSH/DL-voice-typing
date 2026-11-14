@@ -128,11 +128,6 @@ impl WhisperModel {
             .unwrap_or("")
     }
 
-    /// Returns true if this is a custom user-added model.
-    pub fn is_custom(&self) -> bool {
-        matches!(self, Self::Custom(_))
-    }
-
     /// Returns true if this is a Q8_0 quantized model.
     pub fn is_q8(&self) -> bool {
         matches!(
@@ -222,11 +217,6 @@ pub enum DownloadMirror {
 }
 
 impl DownloadMirror {
-    /// All variants in order.
-    pub fn all() -> &'static [DownloadMirror] {
-        &[Self::HfMirror, Self::HuggingFace]
-    }
-
     /// Base URL for downloading Whisper models.
     pub fn base_url(self) -> &'static str {
         match self {
@@ -295,7 +285,6 @@ mod tests {
 
     #[test]
     fn test_download_mirror_helpers() {
-        assert_eq!(DownloadMirror::all().len(), 2);
         assert!(
             DownloadMirror::HfMirror
                 .base_url()
@@ -328,12 +317,6 @@ mod tests {
     fn test_whisper_model_custom_deserialize_empty_custom() {
         let result = serde_json::from_str::<WhisperModel>(r#""custom:""#);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_whisper_model_is_custom() {
-        assert!(!WhisperModel::Base.is_custom());
-        assert!(WhisperModel::Custom("x.bin".to_string()).is_custom());
     }
 
     #[test]
