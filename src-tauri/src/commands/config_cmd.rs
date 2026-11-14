@@ -2,7 +2,9 @@ use super::hotkey_pipeline::make_hotkey_callback;
 use crate::config::{ApiKeyMask, AppConfig};
 use crate::error::CommandError;
 use crate::hotkey::HotkeyManager;
+use crate::hotkey::windows::HotkeySpec;
 use crate::hotkey::windows::WindowsHotkeyManager;
+use crate::hotkey::{SPEC_SLOTS, SlotKind};
 use crate::speech::SpeechEngine;
 use std::sync::Arc;
 use std::sync::{Mutex, mpsc};
@@ -201,6 +203,38 @@ fn run_hotkey_task_on_main(
     }
 }
 
+/// The spec slots whose spec changed and that live-swap on save —
+/// derived from SPEC_SLOTS (swaps_on_save); record_only is excluded by
+/// its descriptor (restart-to-apply by design).
+fn live_swap_slots(new: &AppConfig, old: &AppConfig) -> Vec<SlotKind> {
+    SPEC_SLOTS
+        .iter()
+        .filter(|slot| slot.swaps_on_save)
+        .filter(|slot| {
+            let (new_spec, old_spec) = spec_pair(new, old, slot.kind);
+            new_spec != old_spec
+        })
+        .map(|slot| slot.kind)
+        .collect()
+}
+
+/// The (new, old) spec pair a slot reads from the config. Compiler-
+/// exhaustive on SlotKind: a new slot without a field mapping here fails
+/// to compile. The required slots wrap in `Some` so every slot compares
+/// the same way.
+fn spec_pair(
+    new: &AppConfig,
+    old: &AppConfig,
+    kind: SlotKind,
+) -> (Option<HotkeySpec>, Option<HotkeySpec>) {
+    match kind {
+        SlotKind::Primary => (Some(new.hotkey), Some(old.hotkey)),
+        SlotKind::RecordOnly => (Some(new.record_only_hotkey), Some(old.record_only_hotkey)),
+        SlotKind::OpenSettings => (new.open_settings_hotkey, old.open_settings_hotkey),
+        SlotKind::OpenTranscribe => (new.open_transcribe_hotkey, old.open_transcribe_hotkey),
+    }
+}
+
 /// Whether autostart is available in the current build.
 /// - Release: always true.
 /// - Debug: only when DL_AUTOSTART=1 env var is set.
@@ -259,10 +293,14 @@ pub fn save_settings(
 
     // Load old config to detect hotkey change and preserve API key if masked.
     let old_config = config_cache.read_cached();
-    let hotkey_changed = config.hotkey != old_config.hotkey;
-    let open_settings_changed = config.open_settings_hotkey != old_config.open_settings_hotkey;
-    let open_transcribe_changed =
-        config.open_transcribe_hotkey != old_config.open_transcribe_hotkey;
+    // The live-swap set derives from SPEC_SLOTS (the slot manifest): a
+    // slot swaps at save time iff its spec changed AND its descriptor
+    // marks it swaps_on_save. record_only never appears here —
+    // restart-to-apply by design.
+    let changed = live_swap_slots(&config, &old_config);
+    let hotkey_changed = changed.contains(&SlotKind::Primary);
+    let open_settings_changed = changed.contains(&SlotKind::OpenSettings);
+    let open_transcribe_changed = changed.contains(&SlotKind::OpenTranscribe);
 
     // If the frontend sent the masked marker, preserve the existing decrypted key.
     let mut config = config;
@@ -355,7 +393,7 @@ mod tests {
     use crate::config::AppConfig;
     use crate::config::WhisperModel;
     use crate::hotkey::windows::HotkeySpec;
-    use crate::hotkey::{HotkeyCallback, HotkeyEvent};
+    use crate::hotkey::{HotkeyCallback, HotkeyEvent, SlotKind};
 
     // ---- swap_open_slot revert semantics (was: only reachable in a real Tauri app) ----
 
@@ -514,6 +552,68 @@ mod tests {
         );
         assert!(r.is_ok());
         assert_eq!(m.calls, vec![("unregister", 0)]);
+    }
+
+    // ---- live_swap_slots: the save-time swap set derives from SPEC_SLOTS ----
+
+    /// THE behavior pin: changing the record-only hotkey never live-swaps —
+    /// it applies on restart by design (the settings page's directive save
+    /// message「录音快捷键重启应用后生效」). The exclusion lives in the
+    /// descriptor (`swaps_on_save == false`, pinned by the hotkey module's
+    /// ratchet test), not in this function.
+    #[test]
+    fn live_swap_slots_ignores_record_only_change() {
+        let old = AppConfig::default();
+        let new = AppConfig {
+            record_only_hotkey: spec_with_vk(0x2C),
+            ..Default::default()
+        };
+        assert!(super::live_swap_slots(&new, &old).is_empty());
+    }
+
+    #[test]
+    fn live_swap_slots_primary_change() {
+        let old = AppConfig::default();
+        let new = AppConfig {
+            hotkey: spec_with_vk(0x21),
+            ..Default::default()
+        };
+        assert_eq!(super::live_swap_slots(&new, &old), vec![SlotKind::Primary]);
+    }
+
+    #[test]
+    fn live_swap_slots_open_settings_change() {
+        let old = AppConfig::default();
+        let new = AppConfig {
+            open_settings_hotkey: Some(spec_with_vk(0x7B)),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::live_swap_slots(&new, &old),
+            vec![SlotKind::OpenSettings]
+        );
+    }
+
+    #[test]
+    fn live_swap_slots_multiple_changes_follow_spec_slots_order() {
+        let old = AppConfig::default();
+        // Mutate out of SPEC_SLOTS order (transcribe → settings → primary);
+        // the result must follow the manifest's canonical order, not the
+        // mutation order.
+        let new = AppConfig {
+            open_transcribe_hotkey: Some(spec_with_vk(0x7C)),
+            open_settings_hotkey: Some(spec_with_vk(0x7B)),
+            hotkey: spec_with_vk(0x22),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::live_swap_slots(&new, &old),
+            vec![
+                SlotKind::Primary,
+                SlotKind::OpenSettings,
+                SlotKind::OpenTranscribe
+            ]
+        );
     }
 
     #[test]

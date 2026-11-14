@@ -170,9 +170,6 @@ pub(crate) struct SlotDescriptor {
     pub hook_label: &'static str,
     /// Whether `save_settings` live-swaps this slot's registration when
     /// its spec changes at save time (false = applies on restart).
-    /// Interim allow: the save-time consumer (`live_swap_slots`) lands in
-    /// the follow-up task — remove this attribute there.
-    #[allow(dead_code)]
     pub swaps_on_save: bool,
 }
 
