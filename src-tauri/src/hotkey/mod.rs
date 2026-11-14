@@ -168,6 +168,12 @@ pub(crate) struct SlotDescriptor {
     pub config_field: &'static str,
     /// The label the hook layer uses in its conflict message.
     pub hook_label: &'static str,
+    /// Whether `save_settings` live-swaps this slot's registration when
+    /// its spec changes at save time (false = applies on restart).
+    /// Interim allow: the save-time consumer (`live_swap_slots`) lands in
+    /// the follow-up task — remove this attribute there.
+    #[allow(dead_code)]
+    pub swaps_on_save: bool,
 }
 
 /// Every user-facing hotkey slot, in canonical order.
@@ -177,27 +183,36 @@ pub(crate) struct SlotDescriptor {
 /// therefore exist in exactly one place. The two matrices stay separate
 /// — they check different things (config fields vs registered slots) and
 /// their messages differ — but they no longer each carry their own copy
-/// of the slot list.
+/// of the slot list. `swaps_on_save` extends the single-sourcing to the
+/// save-time swap set: `save_settings` live-swaps exactly the slots
+/// whose descriptor marks them so.
 pub(crate) const SPEC_SLOTS: [SlotDescriptor; 4] = [
     SlotDescriptor {
         kind: SlotKind::Primary,
         config_field: "hotkey",
         hook_label: "primary",
+        swaps_on_save: true,
     },
     SlotDescriptor {
         kind: SlotKind::RecordOnly,
         config_field: "record_only_hotkey",
         hook_label: "record-only",
+        // Product decision, not a technical limit: the record-only key
+        // applies on restart (settings save message「录音快捷键重启应用
+        // 后生效」). Enabling live-swap here means re-reviewing that copy.
+        swaps_on_save: false,
     },
     SlotDescriptor {
         kind: SlotKind::OpenSettings,
         config_field: "open_settings_hotkey",
         hook_label: "open-settings",
+        swaps_on_save: true,
     },
     SlotDescriptor {
         kind: SlotKind::OpenTranscribe,
         config_field: "open_transcribe_hotkey",
         hook_label: "open-transcribe",
+        swaps_on_save: true,
     },
 ];
 
@@ -309,6 +324,25 @@ mod tests {
                 config_fields.contains(&slot.config_field),
                 "SPEC_SLOTS names a config field that does not exist: {}",
                 slot.config_field
+            );
+        }
+    }
+
+    /// The save-time swap set derives from these descriptors —
+    /// `save_settings` swaps exactly the slots marked `swaps_on_save`
+    /// (see `commands::config_cmd::live_swap_slots`). The per-slot values
+    /// are pinned here: record_only = false is a product decision pinned
+    /// by the frontend copy「录音快捷键重启应用后生效」(the settings
+    /// page's directive save message) — changing this assertion requires
+    /// re-reviewing that frontend copy.
+    #[test]
+    fn spec_slots_swaps_on_save_excludes_record_only() {
+        for slot in SPEC_SLOTS.iter() {
+            assert_eq!(
+                slot.swaps_on_save,
+                slot.kind != SlotKind::RecordOnly,
+                "unexpected swaps_on_save for the {} slot",
+                slot.hook_label
             );
         }
     }
