@@ -1,6 +1,6 @@
 /**
  * Contract: frontend MODELS (ui/lib/transcribe-models.js) ↔ backend
- * BUILT_IN_MODELS serde_keys (src-tauri/src/config/schema.rs). The
+ * BUILT_IN_MODELS serde_keys (src-tauri/src/config/catalog.rs). The
  * frontend table is the display/source authority; the Rust table is the
  * runtime authority. The two must hold the same id set or the settings
  * model dropdown advertises models the backend cannot resolve.
@@ -9,16 +9,16 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MODELS } from '../ui/lib/transcribe-models.js';
 
-const SCHEMA_RS = readFileSync(
-    new URL('../src-tauri/src/config/schema.rs', import.meta.url),
+const CATALOG_RS = readFileSync(
+    new URL('../src-tauri/src/config/catalog.rs', import.meta.url),
     'utf8',
 );
 
 function backendKeys() {
-    const block = SCHEMA_RS.match(
+    const block = CATALOG_RS.match(
         /const BUILT_IN_MODELS:\s*&\[ModelMeta\]\s*=\s*&\[([\s\S]*?)\];/,
     );
-    if (!block) throw new Error('BUILT_IN_MODELS not found in schema.rs');
+    if (!block) throw new Error('BUILT_IN_MODELS not found in catalog.rs');
     const keys = [...block[1].matchAll(/serde_key:\s*"([^"]+)"/g)].map(
         (m) => m[1],
     );

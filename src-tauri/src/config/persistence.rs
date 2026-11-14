@@ -1,4 +1,5 @@
-use crate::config::schema::{AppConfig, WhisperModel};
+use crate::config::catalog::WhisperModel;
+use crate::config::schema::AppConfig;
 use crate::crypto;
 use crate::error::AppError;
 use std::collections::HashMap;
