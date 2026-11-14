@@ -56,6 +56,21 @@ describe('showBanner', () => {
             showBanner(null, 'msg', { variant: 'notice' }),
         ).not.toThrow();
     });
+
+    it('unknown variant throws BEFORE any mutation (element untouched)', () => {
+        // classList.add coerces undefined to the valid DOM token "undefined"
+        // (it only throws on empty/whitespace tokens), so without the guard
+        // a typo'd variant would silently render an unstyled banner.
+        const el = buildBanner();
+        el.textContent = 'keep me';
+        expect(() => showBanner(el, 'boom', { variant: 'eror' })).toThrow(
+            'banner: unknown variant "eror"',
+        );
+        expect(el.textContent).toBe('keep me');
+        expect(el.classList.contains('banner-error')).toBe(true);
+        expect(el.classList.contains('notice')).toBe(false);
+        expect(el.hidden).toBe(true);
+    });
 });
 
 describe('hideBanner', () => {

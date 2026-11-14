@@ -20,10 +20,10 @@
 // compose `banner banner-error` from common.css plus their own behavioral
 // class; the helper only manages text, the variant class, and `hidden`.
 
-const VARIANT_CLASSES = {
-    error: 'banner-error',
-    notice: 'notice',
-};
+const VARIANT_CLASSES = new Map([
+    ['error', 'banner-error'],
+    ['notice', 'notice'],
+]);
 
 /**
  * Show a banner element with a message (variant-correct class swap).
@@ -33,14 +33,22 @@ const VARIANT_CLASSES = {
  * @param {string} msg - text written to textContent.
  * @param {object} [opts]
  * @param {'error'|'notice'} [opts.variant='error'] - variant class the
- *   element must carry after the swap; an unknown variant throws (a
- *   programming error, not a runtime condition).
+ *   element must carry after the swap; an unknown variant throws before any
+ *   mutation (a programming error, not a runtime condition).
  */
 export function showBanner(el, msg, { variant = 'error' } = {}) {
     if (!el) return;
-    const target = VARIANT_CLASSES[variant];
+    const target = VARIANT_CLASSES.get(variant);
+    // Fail loud BEFORE any mutation. classList.add cannot be trusted to
+    // throw here: it coerces undefined to the valid DOM token "undefined"
+    // (DOMTokenList only rejects empty/whitespace tokens), so a typo'd
+    // variant would silently render an unstyled banner. Map.get keeps
+    // prototype keys ('constructor', 'toString') out of the lookup too.
+    if (!target) throw new Error(`banner: unknown variant "${variant}"`);
     const other =
-        variant === 'notice' ? VARIANT_CLASSES.error : VARIANT_CLASSES.notice;
+        variant === 'notice'
+            ? VARIANT_CLASSES.get('error')
+            : VARIANT_CLASSES.get('notice');
     el.classList.remove(other);
     el.classList.add(target);
     el.textContent = msg;
