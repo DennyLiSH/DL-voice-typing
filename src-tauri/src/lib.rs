@@ -43,6 +43,42 @@ use tracing_subscriber::fmt::time::OffsetTime;
 
 /// Application entry point: initializes logging, state, engine, windows, hotkey, and watchdog,
 /// then runs the Tauri event loop.
+///
+/// # 启动拓扑序 / startup topological order
+///
+/// setup 闭包内的初始化步骤存在严格先后依赖：部分是硬约束（乱序会 panic
+/// 或破坏首建语义），部分是刻意的惯例位置。规范顺序与各步位置的理由如下；
+/// `startup_order_ratchet` 测试以源码刮取钉住其中的关键先后——改动顺序须
+/// 同步改契约块、本测试，以及下列各点的一行指引：
+///
+/// 1. **config load** — ConfigCache 是后续每步的输入源（salvage/sweep 读
+///    data_saving_path，engine init 读模型/语言，hotkey 读键位）。
+/// 2. **salvage/sweep**（data_saving_path 为空则跳过）— 崩溃恢复必须先于
+///    engine init：截断的 record-only WAV 要在引擎开始使用录音目录前修复归位。
+/// 3. **engine init** — 依赖 1；后台模型加载线程此刻拿不到 PipelineState
+///    （尚未 manage，见 spawn_model_loading 一行注），失败经裸 AppHandle
+///    落托盘 tooltip。
+/// 4. **overlay windows** — floating/review/transcribe 创建（默认隐藏）。
+///    与 manage 步骤无硬依赖，刻意先行：之后 watchdog 复位 / 错误收尾的
+///    hide 不会碰到窗体缺失。
+/// 5. **ErrorHistory manage** — 硬约束：必须先于 manage_pipeline_state，
+///    from_app 首建 RecordingEmitter 装饰器时 try_state 必须能找到它。
+/// 6. **PendingDeletes manage** — 软删除 5s 撤销窗口的注册表；先于任何
+///    可能软删除/撤销的组件（mistouch 调度器闭包运行时取它）。
+/// 7. **mistouch scheduler** — 依赖 6；先于 hotkey register：热键注册后
+///    record-only 会话才可能派发 mistouch。
+/// 8. **manage_pipeline_state** — 命令面唯一聚合根。硬约束：5 先行；
+///    hotkey register / watchdog 的 state 提取依赖它，乱序即 panic。
+/// 9. **hotkey register** — 回调提取 PipelineState，必须在 8 之后。
+/// 10. **cancel-esc register** — dispatcher 必须抵达已安装的 hook proc，
+///     故必须在 9 之后。
+/// 11. **watchdog** — 提取 PipelineState（8 之后）；最后启动监控，只面对
+///     初始化完成后的状态机。
+/// 12. **first-run guard** — 模型缺失时开设置窗直达模型页；兜底性质，
+///     放最后：要求其余步骤全部完成。
+///
+/// 其余 manage（hotkey manager / DownloadState / PendingReview /
+/// PendingTranscribe）穿插于 9–11 之间，彼此无先后约束。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _log_guard = init_logging();
@@ -62,9 +98,7 @@ pub fn run() {
         .setup(move |app| {
             setup_tray_and_plugins(app)?;
             let config = load_and_manage_config(app.handle());
-            // Salvage crash-truncated record-only WAVs (rewrite headers from
-            // actual file lengths). Runs before engine init; skipped when the
-            // recording directory is unset or missing.
+            // Crash salvage + pending sweep, before engine init — ordering contract: run() doc「启动拓扑序」.
             if !config.data_saving_path.trim().is_empty() {
                 streaming_recorder::salvage_incomplete_recordings(std::path::Path::new(
                     &config.data_saving_path,
@@ -76,8 +110,7 @@ pub fn run() {
             }
             let _engine = init_and_manage_engine(app.handle(), &config);
             create_overlay_windows(app)?;
-            // Managed BEFORE manage_pipeline_state — from_app's try_state must
-            // find it for the RecordingEmitter decorator on the first build.
+            // Managed BEFORE manage_pipeline_state (RecordingEmitter decorator, first build) — ordering contract: run() doc「启动拓扑序」.
             app.manage(Arc::new(commands::error_history::ErrorHistory::new()));
             // PendingDeletes registry for the soft-delete 5s undo window
             // (P2 用户控制权专项). Process-lifetime; the timer threads hold
@@ -286,10 +319,7 @@ fn spawn_model_loading(
             warn!(
                 "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
             );
-            // Surface the failure on the tray. Deliberately via the raw
-            // app handle (not PipelineState): manage_pipeline_state runs
-            // later in setup, so state access here could panic — and
-            // panic=abort would kill the whole process.
+            // Surface the failure on the tray via the raw app handle (not PipelineState — managed later per run() doc「启动拓扑序」): state access here could panic, and panic=abort kills the whole process.
             if let Some(tray) = app_handle.tray_by_id("default") {
                 let _ = tray.set_tooltip(Some("语文兔 - 模型加载失败"));
             }
@@ -476,7 +506,7 @@ fn manage_pipeline_state(
 /// `PipelineState::from_app` here would construct a second instance with an
 /// independent `DeliveryController.context`, breaking the show_review →
 /// confirm/cancel context flow (stored on one instance, taken on the other).
-/// Must be called after `manage_pipeline_state` (which manages PipelineState).
+/// Must be called after manage_pipeline_state — ordering contract: run() doc「启动拓扑序」.
 fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyManager {
     let mut hotkey_manager = WindowsHotkeyManager::new();
     let ps = app
@@ -499,8 +529,7 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
             config.hotkey.display()
         );
     }
-    // P1 Esc-cancel: register the cancel-slot dispatcher. The hook must
-    // already be installed (above) so the dispatcher reaches the hook proc.
+    // P1 Esc-cancel: the hook must already be installed (above) so the dispatcher reaches the hook proc — ordering contract: run() doc「启动拓扑序」.
     {
         let ps_cancel = ps.clone();
         if let Err(e) =
@@ -574,4 +603,91 @@ mod tests {
     mod pipeline_lifecycle_test;
     mod pipeline_test;
     mod recording_session_test;
+
+    /// 启动拓扑序棘轮（Round 6 P8 Task 2）：include_str! 刮取 lib.rs 自身
+    /// 源码，断言 setup 启动调用锚点的字节偏移满足规范先后。锚点 = 唯一
+    /// 语句标记（调用点，非行号；`fn` 定义与测试模块自身不参与匹配），
+    /// rustfmt 重排语句内部布局不敏感，真正的步骤重排会在此变红。
+    /// 各步位置的理由见 run() doc「启动拓扑序」契约块——改顺序须同步改
+    /// 契约块与本测试的锚点/配对。
+    #[test]
+    fn startup_order_ratchet() {
+        const RUN_SRC: &str = include_str!("lib.rs");
+
+        // Unique statement markers (call sites, not `fn` definitions). If a
+        // marker ever goes stale (rustfmt reflow / refactor), update it
+        // together with the contract block on run().
+        const ERR_HISTORY: &str = "commands::error_history::ErrorHistory::new";
+        const MPS_CALL: &str = "manage_pipeline_state(\n                app.handle(),";
+        const HOTKEY_CALL: &str = "register_hotkey(app.handle()";
+        const CANCEL_ESC: &str = "register_cancel_esc(";
+        const SALVAGE: &str = "salvage_incomplete_recordings(";
+        const SWEEP: &str = "sweep_pending_dir(";
+        const ENGINE_INIT: &str = "init_and_manage_engine(app.handle()";
+
+        let locate = |marker: &str| RUN_SRC.find(marker).map_or(-1, |o| o as i64);
+
+        let err_history = locate(ERR_HISTORY);
+        let mps_call = locate(MPS_CALL);
+        let hotkey_call = locate(HOTKEY_CALL);
+        let cancel_esc = locate(CANCEL_ESC);
+        let salvage = locate(SALVAGE);
+        let sweep = locate(SWEEP);
+        let engine_init = locate(ENGINE_INIT);
+
+        // Ordered pairs (a must appear before b). Failure messages name both
+        // anchors and their found offsets (-1 = anchor missing) so a future
+        // reordering is diagnosable from the output alone.
+        let pairs: [(&str, i64, &str, &str, i64, &str); 6] = [
+            ("salvage", salvage, SALVAGE, "sweep", sweep, SWEEP),
+            (
+                "salvage",
+                salvage,
+                SALVAGE,
+                "engine init",
+                engine_init,
+                ENGINE_INIT,
+            ),
+            (
+                "sweep",
+                sweep,
+                SWEEP,
+                "engine init",
+                engine_init,
+                ENGINE_INIT,
+            ),
+            (
+                "error_history manage",
+                err_history,
+                ERR_HISTORY,
+                "manage_pipeline_state call",
+                mps_call,
+                MPS_CALL,
+            ),
+            (
+                "manage_pipeline_state call",
+                mps_call,
+                MPS_CALL,
+                "register_hotkey call",
+                hotkey_call,
+                HOTKEY_CALL,
+            ),
+            (
+                "register_hotkey call",
+                hotkey_call,
+                HOTKEY_CALL,
+                "register_cancel_esc call",
+                cancel_esc,
+                CANCEL_ESC,
+            ),
+        ];
+        for (a_name, a_off, a_marker, b_name, b_off, b_marker) in pairs {
+            assert!(
+                a_off >= 0 && b_off >= 0 && a_off < b_off,
+                "startup order violated: {a_name} (marker {a_marker:?}, offset {a_off}) must come before \
+                 {b_name} (marker {b_marker:?}, offset {b_off}) — see the startup topological order \
+                 contract block on run() in lib.rs"
+            );
+        }
+    }
 }
