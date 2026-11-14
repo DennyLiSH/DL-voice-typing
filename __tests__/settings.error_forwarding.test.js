@@ -292,10 +292,11 @@ describe('settings.js error forwarding to log_frontend_error', () => {
     });
 
     describe('data-manager event binding smoke test', () => {
-        // Regression for the MINIMAL_DOM extension above: pre-extension,
-        // wireDataListEvents() silently skipped binding because the data
-        // elements were missing. With the elements present, a click on
-        // btn-refresh-data must trigger an invoke('list_saved_recordings').
+        // Historical regression guard: an early hand-copied fixture lacked
+        // the data-page elements, so wireDataListEvents() silently skipped
+        // binding (real bugs slipped through). The real settings.html always
+        // carries them — a click on btn-refresh-data must trigger an
+        // invoke('list_saved_recordings').
         it('clicking #btn-refresh-data triggers list_saved_recordings invoke', async () => {
             // Reset mock to clear init() noise.
             invokeMock.mockClear();
