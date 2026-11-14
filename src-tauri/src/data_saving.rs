@@ -2,6 +2,7 @@ use crate::audio::{TARGET_SAMPLE_RATE, resample};
 use crate::config::{AppConfig, Language, WhisperModel};
 use crate::error::AppError;
 use crate::recording_name::{JSON_EXT, WAV_EXT, generate_timestamp_filename};
+use crate::wav::write_full_header;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -197,32 +198,18 @@ fn write_wav(path: &std::path::Path, pcm_data: &[i16], sample_rate: u32) -> Resu
 
     let num_channels: u16 = 1;
     let bits_per_sample: u16 = 16;
-    let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample / 8) as u32;
-    let block_align = num_channels * (bits_per_sample / 8);
-    let data_size = pcm_data.len() as u32 * (bits_per_sample / 8) as u32;
-    let file_size = 36 + data_size;
 
     let file = std::fs::File::create(path)?;
     let mut w = std::io::BufWriter::new(file);
 
-    // RIFF header
-    w.write_all(b"RIFF")?;
-    w.write_all(&file_size.to_le_bytes())?;
-    w.write_all(b"WAVE")?;
-
-    // fmt sub-chunk
-    w.write_all(b"fmt ")?;
-    w.write_all(&16u32.to_le_bytes())?;
-    w.write_all(&1u16.to_le_bytes())?;
-    w.write_all(&num_channels.to_le_bytes())?;
-    w.write_all(&sample_rate.to_le_bytes())?;
-    w.write_all(&byte_rate.to_le_bytes())?;
-    w.write_all(&block_align.to_le_bytes())?;
-    w.write_all(&bits_per_sample.to_le_bytes())?;
-
-    // data sub-chunk header
-    w.write_all(b"data")?;
-    w.write_all(&data_size.to_le_bytes())?;
+    // RIFF header (byte format single-sourced in wav.rs).
+    write_full_header(
+        &mut w,
+        pcm_data.len() as u32,
+        sample_rate,
+        num_channels,
+        bits_per_sample,
+    )?;
 
     // Stream PCM samples in 8KB chunks.
     const CHUNK_SAMPLES: usize = 4096;

@@ -16,6 +16,7 @@ pub mod streaming_recorder;
 pub mod tray;
 pub mod util;
 pub mod watchdog;
+pub mod wav;
 pub mod win32;
 
 use audio::{AudioCapture, AudioCaptureProvider};
