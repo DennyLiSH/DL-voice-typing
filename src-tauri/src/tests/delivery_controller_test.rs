@@ -346,63 +346,54 @@ async fn test_clipboard_restore_on_inject_failure() {
 }
 
 /// Window controller that records every call name (cleanup-ordering asserts).
+/// `set_review_text` entries carry the delivered text as a payload suffix
+/// (same convention as the watchdog mock's `set_tray_tooltip:{tooltip}`).
 struct CallRecordingWindowController {
-    calls: Arc<Mutex<Vec<&'static str>>>,
+    calls: Arc<Mutex<Vec<String>>>,
 }
 
 impl WindowController for CallRecordingWindowController {
     fn show_floating_near_caret(&self) -> bool {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("show_floating");
+            c.push("show_floating".into());
         }
         true
     }
     fn hide_floating(&self) {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("hide_floating");
+            c.push("hide_floating".into());
         }
     }
     fn show_review_near_caret(&self) -> bool {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("show_review");
+            c.push("show_review".into());
         }
         true
     }
     fn hide_review(&self) {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("hide_review");
+            c.push("hide_review".into());
         }
     }
-    fn focus_review(&self) -> bool {
+    fn set_review_text(&self, text: &str) -> bool {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("focus_review");
+            c.push(format!("set_review_text:{text}"));
         }
         true
-    }
-    fn eval_review_js(&self, _js: &str) -> bool {
-        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("eval_review_js");
-        }
-        true
-    }
-    fn emit_review_show(&self) {
-        if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("emit_review_show");
-        }
     }
     fn emit_review_final_text(&self, _text: &str) {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("emit_review_final_text");
+            c.push("emit_review_final_text".into());
         }
     }
     fn restore_foreground_hwnd(&self, _hwnd: isize) {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("restore_foreground");
+            c.push("restore_foreground".into());
         }
     }
     fn show_floating_corner(&self) -> bool {
         if let Some(mut c) = crate::util::lock_mutex(&self.calls, "rw_controller") {
-            c.push("show_floating_corner");
+            c.push("show_floating_corner".into());
         }
         true
     }
@@ -422,13 +413,9 @@ impl WindowController for HiddenReviewWindowController {
         false
     }
     fn hide_review(&self) {}
-    fn focus_review(&self) -> bool {
+    fn set_review_text(&self, _text: &str) -> bool {
         true
     }
-    fn eval_review_js(&self, _js: &str) -> bool {
-        true
-    }
-    fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
     fn restore_foreground_hwnd(&self, _hwnd: isize) {}
     fn show_floating_corner(&self) -> bool {
@@ -478,13 +465,9 @@ impl WindowController for RecordingWindowController {
     fn hide_review(&self) {
         self.record("hide_review", None);
     }
-    fn focus_review(&self) -> bool {
+    fn set_review_text(&self, _text: &str) -> bool {
         true
     }
-    fn eval_review_js(&self, _js: &str) -> bool {
-        true
-    }
-    fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
     fn restore_foreground_hwnd(&self, hwnd: isize) {
         self.record("restore_foreground_hwnd", Some(hwnd));
@@ -677,11 +660,11 @@ async fn confirm_inject_failure_asserts_full_failure_recipe() {
     assert_eq!(
         recorded,
         vec![
-            "show_review",
-            "restore_foreground",
-            "restore_foreground",
-            "hide_review",
-            "hide_floating",
+            "show_review".to_string(),
+            "restore_foreground".to_string(),
+            "restore_foreground".to_string(),
+            "hide_review".to_string(),
+            "hide_floating".to_string(),
         ],
         "failure recipe: foreground restored again on failure, review hidden before floating"
     );
@@ -1246,8 +1229,8 @@ async fn catchall_cancel_from_injecting_hides_windows_and_clears_context() {
     let recorded = crate::util::lock_mutex(&calls, "rw_controller")
         .map(|c| c.clone())
         .unwrap_or_default();
-    assert!(recorded.contains(&"hide_review"));
-    assert!(recorded.contains(&"hide_floating"));
+    assert!(recorded.contains(&"hide_review".to_string()));
+    assert!(recorded.contains(&"hide_floating".to_string()));
 }
 
 #[tokio::test]
@@ -1275,8 +1258,8 @@ async fn catchall_cancel_from_llm_refining_hides_windows_and_clears_context() {
     let recorded = crate::util::lock_mutex(&calls, "rw_controller")
         .map(|c| c.clone())
         .unwrap_or_default();
-    assert!(recorded.contains(&"hide_review"));
-    assert!(recorded.contains(&"hide_floating"));
+    assert!(recorded.contains(&"hide_review".to_string()));
+    assert!(recorded.contains(&"hide_floating".to_string()));
 }
 
 /// was_shown_on_press=true path: show_review stores context with the

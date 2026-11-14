@@ -14,14 +14,11 @@ pub trait WindowController: Send + Sync {
     fn show_review_near_caret(&self) -> bool;
     /// Hide the review window.
     fn hide_review(&self);
-    /// Focus the review window.
+    /// Set the final transcription text into the visible review window's
+    /// textarea (caret to end, scroll to bottom, enable the confirm button).
+    /// DOM knowledge lives inside this seam, not at callers.
     /// Returns `true` if the window was found.
-    fn focus_review(&self) -> bool;
-    /// Execute JavaScript inside the review window.
-    /// Returns `true` if the window was found.
-    fn eval_review_js(&self, js: &str) -> bool;
-    /// Emit a review-show event.
-    fn emit_review_show(&self);
+    fn set_review_text(&self, text: &str) -> bool;
     /// Emit a review-final-text event.
     fn emit_review_final_text(&self, text: &str);
     /// Restore focus to the saved foreground window handle.
@@ -98,26 +95,28 @@ impl WindowController for TauriWindowController {
         }
     }
 
-    fn focus_review(&self) -> bool {
+    fn set_review_text(&self, text: &str) -> bool {
         if let Some(win) = self.app.get_webview_window("review") {
-            let _ = win.set_focus();
+            let json_text = match serde_json::to_string(text) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("set_review_text: failed to serialize final text: {e}");
+                    String::new()
+                }
+            };
+            let js = format!(
+                "(function(){{\
+                 var t=document.getElementById('review-text');\
+                 if(t){{t.value={json_text};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
+                 var b=document.getElementById('btn-confirm');\
+                 if(b){{b.disabled=false;}}\
+                 }})()"
+            );
+            let _ = win.eval(&js);
             true
         } else {
             false
         }
-    }
-
-    fn eval_review_js(&self, js: &str) -> bool {
-        if let Some(win) = self.app.get_webview_window("review") {
-            let _ = win.eval(js);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn emit_review_show(&self) {
-        let _ = self.app.emit("review-show", ());
     }
 
     fn emit_review_final_text(&self, text: &str) {
@@ -170,13 +169,9 @@ impl WindowController for NoopWindowController {
         true
     }
     fn hide_review(&self) {}
-    fn focus_review(&self) -> bool {
+    fn set_review_text(&self, _text: &str) -> bool {
         true
     }
-    fn eval_review_js(&self, _js: &str) -> bool {
-        true
-    }
-    fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
     fn restore_foreground_hwnd(&self, _hwnd: isize) {}
     fn show_floating_corner(&self) -> bool {

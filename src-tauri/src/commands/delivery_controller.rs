@@ -324,24 +324,9 @@ impl DeliveryController {
             }
 
             // Push the final transcription into the already-visible textarea.
-            let json_text = match serde_json::to_string(&final_text) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!("show_review: failed to serialize final text: {e}");
-                    String::new()
-                }
-            };
-            let js = format!(
-                "(function(){{\
-                 var t=document.getElementById('review-text');\
-                 if(t){{t.value={json_text};t.selectionStart=t.selectionEnd=t.value.length;t.scrollTop=t.scrollHeight;}}\
-                 var b=document.getElementById('btn-confirm');\
-                 if(b){{b.disabled=false;}}\
-                 }})()"
-            );
-            if self.window_controller.eval_review_js(&js) {
+            if self.window_controller.set_review_text(&final_text) {
                 info!(
-                    "show_review: set final text via eval OK ({} chars)",
+                    "show_review: set final text OK ({} chars)",
                     final_text.len()
                 );
             } else {

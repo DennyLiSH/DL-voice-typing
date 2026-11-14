@@ -130,13 +130,9 @@ impl crate::commands::window_controller::WindowController for CallLogWindowContr
     fn hide_review(&self) {
         self.calls.lock().unwrap().push("hide_review");
     }
-    fn focus_review(&self) -> bool {
+    fn set_review_text(&self, _text: &str) -> bool {
         true
     }
-    fn eval_review_js(&self, _js: &str) -> bool {
-        true
-    }
-    fn emit_review_show(&self) {}
     fn emit_review_final_text(&self, _text: &str) {}
     fn restore_foreground_hwnd(&self, _hwnd: isize) {}
     fn show_floating_corner(&self) -> bool {

@@ -651,13 +651,9 @@ mod tests {
             true
         }
         fn hide_review(&self) {}
-        fn focus_review(&self) -> bool {
+        fn set_review_text(&self, _text: &str) -> bool {
             true
         }
-        fn eval_review_js(&self, _js: &str) -> bool {
-            true
-        }
-        fn emit_review_show(&self) {}
         fn emit_review_final_text(&self, _text: &str) {}
         fn restore_foreground_hwnd(&self, _hwnd: isize) {}
         fn show_floating_corner(&self) -> bool {
