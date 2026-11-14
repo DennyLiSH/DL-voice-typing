@@ -50,3 +50,29 @@ pub(crate) fn assert_policy_covers_all_appconfig_fields(
         );
     }
 }
+
+/// Both policies' exclusion lists must contain every entry of the shared
+/// base table `NON_PIPELINE_FIELDS` (`commands/mod.rs`).
+///
+/// With the `unsnapshoted_fields!` macro this is structural — the macro
+/// prepends the base to every expansion — but the assertion pins the
+/// contract if a list is later de-macroed into a hand-written literal:
+/// dropping a base entry from either policy's list then fails here
+/// instead of silently narrowing that policy's field-coverage audit.
+#[test]
+fn policy_exclusion_lists_cover_non_pipeline_base() {
+    let classic = crate::commands::recording_session::KNOWN_UNSNAPSHOTED_FIELDS;
+    let record_only = crate::commands::record_only_session::RECORD_ONLY_KNOWN_UNSNAPSHOTED_FIELDS;
+    for base in crate::commands::NON_PIPELINE_FIELDS {
+        assert!(
+            classic.contains(base),
+            "KNOWN_UNSNAPSHOTED_FIELDS (SessionPolicy) dropped base entry '{base}' from \
+             NON_PIPELINE_FIELDS"
+        );
+        assert!(
+            record_only.contains(base),
+            "RECORD_ONLY_KNOWN_UNSNAPSHOTED_FIELDS (RecordOnlyPolicy) dropped base entry \
+             '{base}' from NON_PIPELINE_FIELDS"
+        );
+    }
+}

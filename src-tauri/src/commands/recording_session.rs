@@ -70,20 +70,14 @@ impl SessionPolicy {
 }
 
 /// AppConfig fields intentionally excluded from SessionPolicy (audit reference).
-/// Adding a new AppConfig field requires updating either SessionPolicy or this list,
-/// otherwise the field-coverage test fails.
+///
+/// Expands the shared base table `NON_PIPELINE_FIELDS` (commands/mod.rs)
+/// with zero extensions — the classic policy excludes exactly the fields
+/// neither policy snapshots. Adding a new AppConfig field requires updating
+/// either SessionPolicy or the base table, otherwise the field-coverage
+/// test fails.
 #[allow(dead_code)] // referenced by tests_session_policy::known_unsnapshoted_fields_audit_anchor
-const KNOWN_UNSNAPSHOTED_FIELDS: &[&str] = &[
-    "llm_api_key",            // live-read per LLM call for key rotation
-    "autostart",              // app-lifecycle concern, not pipeline
-    "review_before_paste",    // folded into mode via pipeline_mode()
-    "hotkey",                 // hotkey re-registration is independent of pipeline
-    "download_mirror",        // only used at model fetch time, not pipeline
-    "record_only_enabled",    // record-only mode has its own session policy (record_only_session)
-    "record_only_hotkey",     // hotkey re-registration is independent of pipeline
-    "open_settings_hotkey",   // window-lifecycle concern, not pipeline (M6-a)
-    "open_transcribe_hotkey", // window-lifecycle concern, not pipeline (M6-a)
-];
+pub(crate) const KNOWN_UNSNAPSHOTED_FIELDS: &[&str] = unsnapshoted_fields!();
 
 /// Outcome of a hotkey release: either fully handled inline, or an async
 /// delivery future for the caller (prod: spawn; tests: await) to schedule.

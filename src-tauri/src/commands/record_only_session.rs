@@ -124,8 +124,9 @@ pub(crate) struct RecordOnlyPolicy {
 ///
 /// The record-only pipeline snapshots three fields (the save path, the
 /// language and the whisper model). Everything else is a deliberate
-/// exclusion — the classic pipeline's `KNOWN_UNSNAPSHOTED_FIELDS` covers
-/// the same ground from the other side, and the audit test
+/// exclusion — the shared base `NON_PIPELINE_FIELDS` (commands/mod.rs)
+/// covers the fields neither policy snapshots, the entries below are the
+/// record-only-specific extensions, and the audit test
 /// (`record_only_policy_field_coverage_audits_all_appconfig_fields`)
 /// forces a decision for every new AppConfig field.
 ///
@@ -135,22 +136,13 @@ pub(crate) struct RecordOnlyPolicy {
 /// that does not exist, while a missing entry lets a new field slip
 /// through undecided.
 #[allow(dead_code)] // referenced by the field-coverage audit test
-const RECORD_ONLY_KNOWN_UNSNAPSHOTED_FIELDS: &[&str] = &[
-    "hotkey",                 // hotkey re-registration is independent of the session
+pub(crate) const RECORD_ONLY_KNOWN_UNSNAPSHOTED_FIELDS: &[&str] = unsnapshoted_fields!(
     "llm_enabled",            // LLM correction is a classic-pipeline concern
     "llm_api_url",            // ditto
-    "llm_api_key",            // ditto (live-read per LLM call in the classic pipeline)
     "llm_model",              // ditto
-    "download_mirror",        // only used at model fetch time
     "data_saving_enabled",    // the record-only session always saves
-    "review_before_paste",    // the record-only window pastes on demand
-    "autostart",              // app-lifecycle concern
     "realtime_transcription", // the record-only pipeline has no realtime mode
-    "record_only_enabled",    // the mode gate lives at the hotkey level
-    "record_only_hotkey",     // hotkey re-registration is independent of the session
-    "open_settings_hotkey",   // window-lifecycle concern
-    "open_transcribe_hotkey", // window-lifecycle concern
-];
+);
 
 /// Per-session push cell shared with the cpal callback. The callback is
 /// registered before the recorder exists (capture must start first to

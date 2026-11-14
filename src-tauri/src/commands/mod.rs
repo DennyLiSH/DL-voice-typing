@@ -1,3 +1,47 @@
+/// Build a policy unsnapshoted-field list: the shared base entries in this
+/// macro body followed by the given per-policy extensions.
+///
+/// The base literals below are the single source of the fields neither
+/// session policy snapshots — `NON_PIPELINE_FIELDS` (the zero-argument
+/// invocation) and both session policies' exclusion lists expand from
+/// here. Per-field comments live only at this definition site (comments
+/// are not part of macro expansion); invoke with string literals only,
+/// one per field the policy additionally excludes.
+///
+/// Must be defined before the `pub mod` declarations below: `macro_rules!`
+/// scoping is textual, and the session modules invoke it.
+macro_rules! unsnapshoted_fields {
+    ($($field:literal),* $(,)?) => {
+        &[
+            // Shared base: fields neither session policy snapshots.
+            "llm_api_key",            // live-read per LLM call for key rotation
+            "autostart",              // app-lifecycle concern, not pipeline
+            "review_before_paste",    // delivery route decided per pipeline (mode fold / on-demand paste)
+            "hotkey",                 // hotkey re-registration is independent of the session policy
+            "download_mirror",        // only used at model fetch time
+            "record_only_enabled",    // mode gate lives at the hotkey level, not in a session policy
+            "record_only_hotkey",     // hotkey re-registration is independent of the session policy
+            "open_settings_hotkey",   // window-lifecycle concern (M6-a)
+            "open_transcribe_hotkey", // window-lifecycle concern (M6-a)
+            // Per-policy extensions.
+            $($field,)*
+        ]
+    };
+}
+
+/// AppConfig fields that neither session policy snapshots — the shared base
+/// of the two session policies' unsnapshoted-field lists.
+///
+/// `SessionPolicy` (recording_session) expands this base with zero
+/// extensions into `KNOWN_UNSNAPSHOTED_FIELDS`; `RecordOnlyPolicy`
+/// (record_only_session) appends its LLM/realtime/data-saving extensions
+/// into `RECORD_ONLY_KNOWN_UNSNAPSHOTED_FIELDS`. Adding a new AppConfig
+/// field requires snapshotting it in each policy or listing it in that
+/// policy's list — the two field-coverage audits plus the base-subset test
+/// in `crate::tests::policy_audit` enforce the decision.
+#[allow(dead_code)] // referenced by the base-subset audit test (crate::tests::policy_audit)
+pub(crate) const NON_PIPELINE_FIELDS: &[&str] = unsnapshoted_fields!();
+
 pub mod config_cmd;
 pub mod data_management_cmd;
 pub mod delivery_controller;
