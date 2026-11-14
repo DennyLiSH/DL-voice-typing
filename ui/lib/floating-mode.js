@@ -166,13 +166,13 @@ const INLINE_CLEANUP = {
  * programming error, not a runtime condition).
  *
  * @param {HTMLElement} el - the #indicator element
- * @param {string} mode - the mode being entered
+ * @param {string} next - the mode being entered
  */
-export function resetIndicatorInline(el, mode) {
-    if (!Object.hasOwn(INLINE_CLEANUP, mode)) {
-        throw new Error(`floating-mode: unknown mode "${mode}"`);
+export function resetIndicatorInline(el, next) {
+    if (!Object.hasOwn(INLINE_CLEANUP, next)) {
+        throw new Error(`floating-mode: unknown mode "${next}"`);
     }
-    for (const prop of INLINE_CLEANUP[mode]) {
+    for (const prop of INLINE_CLEANUP[next]) {
         el.style[prop] = '';
     }
 }
