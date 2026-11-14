@@ -1,12 +1,12 @@
 use crate::clipboard::ClipboardProvider;
 use crate::commands::EventEmitter;
 use crate::commands::pipeline_state::PipelineState;
-use crate::commands::review::ReviewData;
 use crate::commands::window_controller::WindowController;
 use crate::data_saving::SaveResult;
 use crate::error::{AppError, CommandError};
 use crate::perf::{PerfMetrics, PerfTimer};
 use crate::state::StateTag;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -17,6 +17,13 @@ use super::recording_session::SessionPolicy;
 /// windows have no room for the raw clipboard error string, so they show this
 /// fixed Chinese summary while the English detail stays in the `warn!` log.
 pub(crate) const INJECTION_ERROR_USER_MSG: &str = "粘贴失败，本次文字未保存，原剪贴板已恢复";
+
+/// Metadata from the transcription pipeline needed for data-saving JSON update.
+pub(crate) struct ReviewData {
+    pub json_path: PathBuf,
+    pub raw_transcription: String,
+    pub llm_text: Option<String>,
+}
 
 /// Mutable delivery context held for the duration of a review cycle.
 ///
