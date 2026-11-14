@@ -117,7 +117,7 @@ impl fmt::Debug for AppConfig {
             .field("llm_enabled", &self.llm_enabled)
             .field(
                 "llm_api_url",
-                &crate::llm::redact_error_detail(&self.llm_api_url, &self.llm_api_key),
+                &crate::redaction::redact_error_detail(&self.llm_api_url, &self.llm_api_key),
             )
             .field(
                 "llm_api_key",

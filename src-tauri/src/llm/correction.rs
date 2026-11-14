@@ -35,7 +35,8 @@
 //! transcribe window reads enabled + config live from `ConfigCache` at
 //! call time.
 
-use super::{LLMClient, TextCorrector, redact_error_detail};
+use super::{LLMClient, TextCorrector};
+use crate::redaction::redact_error_detail;
 use std::sync::Arc;
 use tracing::warn;
 

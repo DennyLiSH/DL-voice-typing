@@ -2,6 +2,7 @@ use crate::config::catalog::WhisperModel;
 use crate::config::schema::AppConfig;
 use crate::crypto;
 use crate::error::AppError;
+use crate::redaction::{url_contains_credential_query, url_contains_userinfo};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -59,8 +60,8 @@ impl AppConfig {
                 .map_err(|e| AppError::Crypto(format!("llm_api_key encrypt failed: {e}")))?;
         }
         if !for_disk.llm_api_url.is_empty()
-            && (crate::llm::url_contains_credential_query(&for_disk.llm_api_url)
-                || crate::llm::url_contains_userinfo(&for_disk.llm_api_url))
+            && (url_contains_credential_query(&for_disk.llm_api_url)
+                || url_contains_userinfo(&for_disk.llm_api_url))
         {
             for_disk.llm_api_url = crypto::encrypt(&for_disk.llm_api_url)
                 .map_err(|e| AppError::Crypto(format!("llm_api_url encrypt failed: {e}")))?;

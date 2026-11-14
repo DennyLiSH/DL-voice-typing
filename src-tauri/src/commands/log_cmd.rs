@@ -65,7 +65,7 @@ mod tests {
 
     /// --- Sink-side truncation contract (2026-10-04) ---
     /// Mirrors the silent chars().take() convention of ErrorHistory
-    /// (error_history.rs) and redact_error_detail (llm/mod.rs).
+    /// (error_history.rs) and redact_error_detail (redaction.rs).
 
     #[test]
     fn message_truncated_to_500_chars() {

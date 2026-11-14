@@ -50,7 +50,7 @@ export const CREDENTIAL_WORDS = new Set([
  * Param names are split on non-alphanumerics, then matched exactly —
  * `keyboard`/`monkey`/`author` must NOT match.
  * Word-level counterpart of the backend redaction list
- * `src-tauri/src/llm/mod.rs::CREDENTIAL_QUERY_WORDS` (sync guarded by
+ * `src-tauri/src/redaction.rs::CREDENTIAL_QUERY_WORDS` (sync guarded by
  * `__tests__/credential-words-contract.test.js`).
  */
 export function hasCredentialInUrl(url) {
@@ -67,7 +67,7 @@ export function hasCredentialInUrl(url) {
 
 /**
  * True when the URL embeds userinfo (`scheme://user[:pass]@host/…`).
- * Mirrors backend `llm/mod.rs::url_contains_userinfo` — fixture parity
+ * Mirrors backend `redaction.rs::url_contains_userinfo` — fixture parity
  * guarded by `__tests__/userinfo-detection-contract.test.js`. Parity
  * holds for well-formed absolute URLs only; on malformed input this
  * anchored regex under-warns while the backend over-detects — both are

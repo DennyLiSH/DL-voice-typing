@@ -554,7 +554,7 @@ describe('apiUrlWarningText', () => {
 
 describe('hasUserinfoInUrl', () => {
     // Shared fixture table — must match the table embedded in
-    // `src-tauri/src/llm/mod.rs::test_url_contains_userinfo_fixtures` and
+    // `src-tauri/src/redaction.rs::test_url_contains_userinfo_fixtures` and
     // in `__tests__/userinfo-detection-contract.test.js`.
     const POSITIVE = [
         'http://user:pass@host/v1',

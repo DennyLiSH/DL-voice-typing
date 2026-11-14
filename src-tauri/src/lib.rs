@@ -10,6 +10,7 @@ pub mod llm;
 pub mod perf;
 pub mod realtime;
 pub mod recording_name;
+pub mod redaction;
 pub mod speech;
 pub mod state;
 pub mod streaming_recorder;

@@ -1,6 +1,6 @@
 /**
  * Contract test: the userinfo fixture table is embedded in both
- * `src-tauri/src/llm/mod.rs` (test_url_contains_userinfo_fixtures) and
+ * `src-tauri/src/redaction.rs` (test_url_contains_userinfo_fixtures) and
  * the frontend `ui/lib/settings-utils.js::hasUserinfoInUrl`. Each URL
  * literal must appear in the backend source so the backend test cannot
  * silently drift from the frontend detector.
@@ -16,12 +16,12 @@ import { describe, expect, it } from 'vitest';
 import { hasUserinfoInUrl } from '../ui/lib/settings-utils.js';
 
 const RS = readFileSync(
-    new URL('../src-tauri/src/llm/mod.rs', import.meta.url),
+    new URL('../src-tauri/src/redaction.rs', import.meta.url),
     'utf8',
 );
 
 // Shared fixture table — must equal the table embedded in
-// `src-tauri/src/llm/mod.rs::test_url_contains_userinfo_fixtures` and
+// `src-tauri/src/redaction.rs::test_url_contains_userinfo_fixtures` and
 // in `__tests__/settings.test.js::hasUserinfoInUrl`.
 const POSITIVE = [
     'http://user:pass@host/v1',
@@ -39,11 +39,11 @@ const NEGATIVE = [
 ];
 
 describe('userinfo-detection FFI contract', () => {
-    it('every fixture URL appears as a string literal in llm/mod.rs', () => {
+    it('every fixture URL appears as a string literal in redaction.rs', () => {
         for (const url of [...POSITIVE, ...NEGATIVE]) {
             expect(
                 RS.includes(url),
-                `fixture not found in llm/mod.rs: ${url}`,
+                `fixture not found in redaction.rs: ${url}`,
             ).toBe(true);
         }
     });
