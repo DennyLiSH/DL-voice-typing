@@ -20,7 +20,7 @@ use crate::state::{StateMachine, StateTag};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::commands::delivery_controller::{FocusOps, InjectError};
+use crate::commands::delivery_controller::{FocusOps, InjectError, TakenContext};
 
 fn build_ps() -> (PipelineState, Arc<MockEmitter>) {
     build_ps_with_clipboard(Arc::new(MockClipboard::new()))
@@ -196,7 +196,12 @@ async fn show_review_fallback_clears_context() {
     // fallback branch, so without the fix foreground_hwnd would leak a sentinel
     // value (MockReviewProvider uses 42) into the next review cycle. This
     // indirectly guarantees stale HWND cannot hijack the next inject_text path.
-    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _perf,
+        press_timer: t_press,
+    } = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after fallback (got {hwnd:?})"
@@ -718,7 +723,12 @@ async fn populate_context_via_show_review(ps: &PipelineState) {
         .await;
     // Sanity: show_review entered Reviewing and populated context.
     assert_eq!(ps.sm_state(), Some(StateTag::Reviewing));
-    let (hwnd, _data, _perf, _t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: _data,
+        perf: _perf,
+        press_timer: _t_press,
+    } = ps.delivery().take_context();
     assert_eq!(
         hwnd,
         Some(42),
@@ -755,7 +765,12 @@ async fn confirm_review_recording_branch_clears_context() {
     let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
 
-    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _perf,
+        press_timer: t_press,
+    } = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after Recording branch (got {hwnd:?})"
@@ -776,7 +791,12 @@ async fn confirm_review_catchall_branch_clears_context() {
     let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
 
-    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _perf,
+        press_timer: t_press,
+    } = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after catch-all branch (got {hwnd:?})"
@@ -804,7 +824,12 @@ async fn cancel_review_sm_cancel_failure_branch_clears_context() {
     assert_eq!(err.message, "cancel_reviewing failed");
 
     // The failure branch must clear the leaked DeliveryContext.
-    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _perf,
+        press_timer: t_press,
+    } = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after sm_cancel_reviewing failure (got {hwnd:?})"
@@ -835,7 +860,12 @@ async fn cancel_review_catchall_branch_clears_context() {
     let result = ps.delivery().cancel_review(&ps).await;
     assert!(result.is_err());
 
-    let (hwnd, data, _perf, t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _perf,
+        press_timer: t_press,
+    } = ps.delivery().take_context();
     assert!(
         hwnd.is_none(),
         "foreground_hwnd must be cleared after catch-all branch (got {hwnd:?})"
@@ -964,7 +994,12 @@ async fn realtime_review_handoff_saves_clipboard_and_advances_state() {
     assert_eq!(review.get_text(), Some("accumulated".to_string()));
     // foreground was migrated from review_provider.take_foreground() to delivery context.
     // DeliveryContext.context is private — use pub(crate) take_context() to inspect.
-    let (foreground_hwnd, _data_saving, _perf, _t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd,
+        review_data: _data_saving,
+        perf: _perf,
+        press_timer: _t_press,
+    } = ps.delivery().take_context();
     assert_eq!(
         foreground_hwnd,
         Some(42),
@@ -1029,7 +1064,12 @@ async fn show_review_was_shown_on_press_branch_stores_context_no_inject() {
     // `data_saving` (not `review_data`). Use take_context() to inspect.
     // show_review builds ReviewData from save_result via Option::map, so
     // with save_result=Some(...) the stored data_saving must be Some(...).
-    let (_foreground_hwnd, data_saving, _perf, _t_press) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: _foreground_hwnd,
+        review_data: data_saving,
+        perf: _perf,
+        press_timer: _t_press,
+    } = ps.delivery().take_context();
     assert!(
         data_saving.is_some(),
         "data_saving must be stored for later confirm"
@@ -1154,7 +1194,12 @@ async fn catchall_confirm_from_injecting_resets_clears_context() {
     let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
-    let (hwnd, data, _, _) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _,
+        press_timer: _,
+    } = ps.delivery().take_context();
     assert!(hwnd.is_none());
     assert!(data.is_none());
 }
@@ -1166,7 +1211,12 @@ async fn catchall_confirm_from_llm_refining_resets_clears_context() {
     let result = ps.delivery().confirm_review(&ps, "text".to_string()).await;
     assert!(result.is_err());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
-    let (hwnd, data, _, _) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _,
+        press_timer: _,
+    } = ps.delivery().take_context();
     assert!(hwnd.is_none());
     assert!(data.is_none());
 }
@@ -1185,7 +1235,12 @@ async fn catchall_cancel_from_injecting_hides_windows_and_clears_context() {
     let result = ps.delivery().cancel_review(&ps).await;
     assert!(result.is_err());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
-    let (hwnd, data, _, _) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _,
+        press_timer: _,
+    } = ps.delivery().take_context();
     assert!(hwnd.is_none());
     assert!(data.is_none());
     let recorded = crate::util::lock_mutex(&calls, "rw_controller")
@@ -1209,7 +1264,12 @@ async fn catchall_cancel_from_llm_refining_hides_windows_and_clears_context() {
     let result = ps.delivery().cancel_review(&ps).await;
     assert!(result.is_err());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
-    let (hwnd, data, _, _) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _,
+        press_timer: _,
+    } = ps.delivery().take_context();
     assert!(hwnd.is_none());
     assert!(data.is_none());
     let recorded = crate::util::lock_mutex(&calls, "rw_controller")
@@ -1254,7 +1314,12 @@ async fn was_shown_on_press_confirm_clears_context_and_resets_flag() {
     assert!(result.is_ok());
     assert_eq!(ps.sm_state(), Some(StateTag::Idle));
 
-    let (hwnd, data, _, _) = ps.delivery().take_context();
+    let TakenContext {
+        foreground_hwnd: hwnd,
+        review_data: data,
+        perf: _,
+        press_timer: _,
+    } = ps.delivery().take_context();
     assert!(hwnd.is_none());
     assert!(data.is_none());
     assert!(!ps.review().was_shown_on_press());

@@ -45,22 +45,17 @@ impl DeliveryContext {
             press_timer: None,
         }
     }
+}
 
-    fn take(
-        &mut self,
-    ) -> (
-        Option<isize>,
-        Option<ReviewData>,
-        Option<PerfMetrics>,
-        Option<PerfTimer>,
-    ) {
-        (
-            self.foreground_hwnd.take(),
-            self.data_saving.take(),
-            self.perf.take(),
-            self.press_timer.take(),
-        )
-    }
+/// The delivery context handed from `take_context()` into `finish()` — named
+/// shape for what used to be an anonymous 4-tuple. `perf` is bare (never
+/// `Option`): when nothing was stored for the cycle, `take_context()`
+/// substitutes a fresh `PerfMetrics` seeded from the next cycle id.
+pub(crate) struct TakenContext {
+    pub(crate) foreground_hwnd: Option<isize>,
+    pub(crate) review_data: Option<ReviewData>,
+    pub(crate) perf: PerfMetrics,
+    pub(crate) press_timer: Option<PerfTimer>,
 }
 
 /// Build the review context payload.
@@ -528,13 +523,16 @@ impl DeliveryController {
 
     async fn confirm_from_reviewing(&self, ps: &PipelineState, text: String) {
         // 0. Take context at method TOP (decision#8 exception): pre-inject
-        // foreground restore needs ctx.0, and the sm_reviewing_to_injecting
-        // early-return must not leak context.
+        // foreground restore needs ctx.foreground_hwnd, and the
+        // sm_reviewing_to_injecting early-return must not leak context.
         let mut ctx = self.take_context();
 
         // 1. Restore focus to target app BEFORE paste.
-        info!("confirm_from_reviewing: saved_hwnd={:?}", ctx.0);
-        if let Some(hwnd_val) = ctx.0 {
+        info!(
+            "confirm_from_reviewing: saved_hwnd={:?}",
+            ctx.foreground_hwnd
+        );
+        if let Some(hwnd_val) = ctx.foreground_hwnd {
             self.window_controller.restore_foreground_hwnd(hwnd_val);
             // Wait for OS to fully process the focus change before simulating
             // keyboard input. Without this delay, SendInput (Ctrl+V) may still
@@ -546,19 +544,19 @@ impl DeliveryController {
         let t_inject = PerfTimer::start();
         let inject_result = self.save_and_inject(&text).await;
 
-        ctx.2.injection_ms = Some(t_inject.finish_ms());
-        ctx.2.text_length = text.len();
-        if let Some(press_timer) = ctx.3 {
-            ctx.2.end_to_end_ms = Some(press_timer.finish_ms());
+        ctx.perf.injection_ms = Some(t_inject.finish_ms());
+        ctx.perf.text_length = text.len();
+        if let Some(press_timer) = ctx.press_timer {
+            ctx.perf.end_to_end_ms = Some(press_timer.finish_ms());
         }
 
         if let Err(ref e) = inject_result {
             warn!("confirm_from_reviewing: inject failed: {e}");
-            // Outcome built before ctx is moved: ctx.0 is a Copy read that must
-            // happen while ctx is still alive (argument evaluation is
-            // left-to-right).
+            // Outcome built before ctx is moved: ctx.foreground_hwnd is a Copy
+            // read that must happen while ctx is still alive (argument
+            // evaluation is left-to-right).
             let outcome = FinishOutcome::Failure {
-                foreground_hwnd: ctx.0,
+                foreground_hwnd: ctx.foreground_hwnd,
                 review_ui_active: true,
             };
             self.finish(ps, ctx, outcome, "confirm_from_reviewing")
@@ -614,7 +612,12 @@ impl DeliveryController {
             warn!("{site_label}: injection failed: {e}");
             self.finish(
                 ps,
-                (None, None, perf.clone(), Some(press_timer)),
+                TakenContext {
+                    foreground_hwnd: None,
+                    review_data: None,
+                    perf: perf.clone(),
+                    press_timer: Some(press_timer),
+                },
                 FinishOutcome::Failure {
                     foreground_hwnd: None,
                     review_ui_active,
@@ -642,30 +645,31 @@ impl DeliveryController {
     }
 
     /// Single authority for post-delivery cleanup ordering. Caller passes the
-    /// already-taken context tuple (callers call take_context themselves —
-    /// default timing is immediately before finish() to minimize the panic
-    /// window; the ONE exception is confirm_from_reviewing which takes at
-    /// method top because its pre-inject foreground restore needs ctx.0).
+    /// already-taken context (`TakenContext`; callers call take_context
+    /// themselves — default timing is immediately before finish() to minimize
+    /// the panic window; the ONE exception is confirm_from_reviewing which
+    /// takes at method top because its pre-inject foreground restore needs
+    /// ctx.foreground_hwnd).
     ///
-    /// The inject-failure sites pass a synthesized tuple — the Failure arm
-    /// reads only the variant's own fields (foreground_hwnd / review_ui_active
-    /// ride on the variant, not on ctx).
+    /// The inject-failure sites pass a synthesized TakenContext — the Failure
+    /// arm reads only the variant's own fields (foreground_hwnd /
+    /// review_ui_active ride on the variant, not on ctx).
     ///
     /// `site_label` is emitted via `debug!(target: "delivery", ...)` so production
     /// traces can distinguish the call sites.
     async fn finish(
         &self,
         ps: &PipelineState,
-        ctx: (
-            Option<isize>,
-            Option<ReviewData>,
-            PerfMetrics,
-            Option<PerfTimer>,
-        ),
+        ctx: TakenContext,
         outcome: FinishOutcome,
         site_label: &'static str,
     ) {
-        let (foreground_hwnd, review_data, ctx_perf, _ctx_press_timer) = ctx;
+        let TakenContext {
+            foreground_hwnd,
+            review_data,
+            perf: ctx_perf,
+            ..
+        } = ctx;
         debug!(target: "delivery", "finish({site_label}): entered");
 
         match outcome {
@@ -920,27 +924,27 @@ impl DeliveryController {
         }
     }
 
-    pub(crate) fn take_context(
-        &self,
-    ) -> (
-        Option<isize>,
-        Option<ReviewData>,
-        PerfMetrics,
-        Option<PerfTimer>,
-    ) {
+    pub(crate) fn take_context(&self) -> TakenContext {
         let mut perf = PerfMetrics::new(self.perf_history.next_cycle_id());
         let mut press_timer = None;
-        let (hwnd, data) = crate::util::lock_mutex(&self.context, "delivery_context")
-            .map(|mut ctx| {
-                let (h, d, p, tp) = ctx.take();
-                if let Some(p) = p {
-                    perf = p;
-                }
-                press_timer = tp;
-                (h, d)
-            })
-            .unwrap_or((None, None));
-        (hwnd, data, perf, press_timer)
+        let (foreground_hwnd, review_data) =
+            crate::util::lock_mutex(&self.context, "delivery_context")
+                .map(|mut ctx| {
+                    let foreground_hwnd = ctx.foreground_hwnd.take();
+                    let review_data = ctx.data_saving.take();
+                    if let Some(p) = ctx.perf.take() {
+                        perf = p;
+                    }
+                    press_timer = ctx.press_timer.take();
+                    (foreground_hwnd, review_data)
+                })
+                .unwrap_or((None, None));
+        TakenContext {
+            foreground_hwnd,
+            review_data,
+            perf,
+            press_timer,
+        }
     }
 
     async fn cleanup_review_ui(&self, ps: &PipelineState) {
