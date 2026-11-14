@@ -997,8 +997,9 @@ async fn cancel_during_fast_path_skips_injection() {
     // Gate 3' (fast path): RealtimeDirect + LLM. The hook-thread cancel
     // runs on the `llm-refining` emit (resolve_llm_text starts AFTER the
     // fast path's earlier steps) so the post-save cancel gate inside
-    // `refine_and_deliver` (`src/commands/recording_session.rs:874-877`)
-    // is what trips — the ONLY cancel gate on the fast path.
+    // `refine_and_deliver` (`src/commands/recording_session.rs:834-836`,
+    // the `gate.tripped()` check) is what trips — the ONLY cancel gate on
+    // the fast path.
     //
     // (commit 35a59e8 merged the two previously-adjacent fast-path
     // post-save gates into this single one; deleting it turns this

@@ -871,8 +871,8 @@ impl PipelineState {
 /// `let _ = ps.take_cancel_token()` drains.
 ///
 /// Invariant (7f0cbf0): this guard NEVER touches the state machine or
-/// windows — that cleanup belongs solely to `cancel_active_pipeline`
-/// on the hook thread. Draining the slot is slot hygiene, not cleanup.
+/// windows. Draining the slot is slot hygiene, not cleanup — the shared
+/// gate/cleanup protocol is single-sourced on [`CancelGate`]'s doc.
 pub(crate) struct CancelGuard<'a> {
     ps: &'a PipelineState,
 }
@@ -886,6 +886,48 @@ impl<'a> CancelGuard<'a> {
 impl Drop for CancelGuard<'_> {
     fn drop(&mut self) {
         let _ = self.ps.take_cancel_token();
+    }
+}
+
+/// Read-only witness of an Esc-cancel gate: a reference to the session's
+/// token plus the gate's log label. Constructed at the arming site
+/// (`run_pipeline` / `run_realtime_fast_path`, beside the [`CancelGuard`])
+/// and passed down to the gate checks.
+///
+/// Gate protocol (single source — the per-site cleanup stanzas were merged
+/// here, Round 6 P8 Task 1): gates are LOG-AND-RETURN ONLY. They never
+/// touch the state machine, windows, or the token slot — that cleanup
+/// belongs solely to `cancel_active_pipeline` on the hook thread
+/// (7f0cbf0), and by the time a gate fires the user may have re-pressed
+/// and started a NEW session; a gate-side reset would silently kill it.
+///
+/// The witness deliberately holds NO PipelineState field: that is the
+/// type-level fact that a gate cannot reset anything — there is nothing
+/// in scope to reset with. The hygiene counterpart is [`CancelGuard`],
+/// which DRAINS the token slot on every pipeline exit; the gate only
+/// reads the token (`tripped` never mutates it).
+pub(crate) struct CancelGate<'a> {
+    token: &'a std::sync::atomic::AtomicBool,
+    label: &'static str,
+}
+
+impl<'a> CancelGate<'a> {
+    /// Build a gate witness. Call sites pass `&cancel` where
+    /// `cancel: Arc<AtomicBool>` — deref coercion handles the conversion.
+    pub(crate) fn new(token: &'a std::sync::atomic::AtomicBool, label: &'static str) -> Self {
+        Self { token, label }
+    }
+
+    /// Load the token and, on trip, log the gate's line (target "cancel").
+    /// Load + log are one operation — a gate never loads without logging,
+    /// never logs without loading. One call per gate site.
+    pub(crate) fn tripped(&self) -> bool {
+        if self.token.load(std::sync::atomic::Ordering::Relaxed) {
+            info!(target: "cancel", "{}", self.label);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -1232,6 +1274,29 @@ mod sm_verb_tests {
     }
 
     #[test]
+    fn cancel_gate_tripped_loads_and_never_mutates_token() {
+        use std::sync::atomic::Ordering;
+        // Witness contract (Round 6 P8 Task 1): tripped() is load + log as
+        // one operation and strictly read-only. The info! line inside
+        // tripped() is compile-checked here — no log-capture harness exists
+        // in this codebase (deliberately not added).
+        let token = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // `&token` is `&Arc<AtomicBool>` — deref coercion to `&AtomicBool`
+        // is part of the construction API contract.
+        let gate = CancelGate::new(&token, "test: gate cancelled");
+        assert!(!gate.tripped(), "fresh token must not trip");
+        token.store(true, Ordering::SeqCst);
+        assert!(gate.tripped(), "flipped token must trip");
+        // Repeated reads keep tripping; the witness never mutates the token.
+        assert!(gate.tripped());
+        assert!(gate.tripped());
+        assert!(
+            token.load(Ordering::Relaxed),
+            "tripped() must not mutate the token"
+        );
+    }
+
+    #[test]
     fn cancel_token_snapshot_is_fresh_false_when_slot_empty() {
         use std::sync::atomic::Ordering;
         let ps = build_test_ps();
@@ -1349,6 +1414,14 @@ mod sm_verb_tests {
         // instead of waiting (2026-05-13 decision). Sits beside `sm_state`
         // in the verb-layer query surface. Real count 50 → 51.
         //
+        // 2026-11-14 (architecture review round 6, batch P8 Task 1):
+        // measured 53 → 55 — the CancelGate witness (new / tripped) joins
+        // CancelGuard beside the struct. NOT PipelineState surface growth:
+        // the state's own fn count is unchanged (real stays 51); the scrape
+        // window is the whole file tail and has always counted the witness
+        // family (CancelGuard::new was already in), and each CancelGate fn
+        // is type-level contract surface (gate = token + label, no reset).
+        //
         // Calibration: the ratchet's two `src.matches(...)` literal strings
         // ALSO appear in the test body itself (one for each pattern), so the
         // measured count is real count + 2.
@@ -1359,7 +1432,7 @@ mod sm_verb_tests {
         let count = pipeline_src.matches("    pub(crate) fn ").count()
             + pipeline_src.matches("    pub fn ").count();
         assert_eq!(
-            count, 53,
+            count, 55,
             "PipelineState pub-fn surface changed; update the ratchet deliberately \
              (real count = measured - 2, to subtract the test body's two self-references)"
         );

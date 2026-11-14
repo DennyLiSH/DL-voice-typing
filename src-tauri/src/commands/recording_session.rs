@@ -20,7 +20,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 
-use super::pipeline_state::{CancelGuard, PipelineState};
+use super::pipeline_state::{CancelGate, CancelGuard, PipelineState};
 
 /// User-facing payload for the `speech-error` not-ready branch, routed by
 /// model-file presence. Pure function so the routing is testable without
@@ -520,6 +520,16 @@ impl RecordingSession {
             resampled.len()
         );
         let _cancel_guard = CancelGuard::new(&self.ps);
+        // Arming co-located with the CancelGuard (Round 6 P8 Task 1): this
+        // function owns the session token and arms the classic pipeline's
+        // three gates here. Labels are the full target="cancel" log lines;
+        // the witnesses hold no PipelineState, so a gate cannot reset.
+        let gate1 = CancelGate::new(&cancel, "transcribe_and_save: gate 1 cancelled");
+        let gate2 = CancelGate::new(&cancel, "run_pipeline: gate 2 cancelled before LLM");
+        let gate3 = CancelGate::new(
+            &cancel,
+            "refine_and_deliver: gate 3 cancelled before delivery",
+        );
 
         // -- Save audio and transcribe in parallel --
         // The timer must be started BEFORE the call: reading
@@ -533,7 +543,7 @@ impl RecordingSession {
             native_rate,
             resampled,
             &policy.save,
-            cancel.clone(),
+            &gate1,
         )
         .await;
 
@@ -545,13 +555,8 @@ impl RecordingSession {
         // is caught by gate 3 below. Checked before the empty-transcription
         // branch: a gate-1 cancel returns an empty string, and that branch's
         // reset must not fire for a cancelled pipeline.
-        //
-        // Gates never touch the state machine / windows / token slot. Esc
-        // already did all of that on the hook thread (cancel_active_pipeline),
-        // and by the time a gate fires the user may have re-pressed and
-        // started a NEW session — a gate-side reset would silently kill it.
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            info!(target: "cancel", "run_pipeline: gate 2 cancelled before LLM");
+        // Log-and-return only — the gate protocol lives on CancelGate's doc.
+        if gate2.tripped() {
             return;
         }
 
@@ -573,8 +578,7 @@ impl RecordingSession {
             &policy,
             perf,
             press_timer,
-            &cancel,
-            "gate 3",
+            &gate3,
         )
         .await;
     }
@@ -598,6 +602,13 @@ impl RecordingSession {
             accumulated.len()
         );
         let _cancel_guard = CancelGuard::new(&self.ps);
+        // Arming co-located with the CancelGuard (Round 6 P8 Task 1): gate 3'
+        // is the ONLY cancel gate on the fast path. Label is the full
+        // target="cancel" log line.
+        let gate3_prime = CancelGate::new(
+            &cancel,
+            "refine_and_deliver: gate 3' cancelled before delivery",
+        );
 
         // Save audio in background for training data.
         let save_config = policy.save.clone();
@@ -620,8 +631,7 @@ impl RecordingSession {
             &policy,
             perf,
             press_timer,
-            &cancel,
-            "gate 3'",
+            &gate3_prime,
         )
         .await;
     }
@@ -638,7 +648,7 @@ async fn transcribe_and_save(
     native_rate: u32,
     resampled: Vec<f32>,
     save: &SaveConfig,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
+    gate: &CancelGate<'_>,
 ) -> (Option<SaveResult>, String) {
     let save_config = save.clone();
     let sr_for_save = native_rate;
@@ -672,11 +682,9 @@ async fn transcribe_and_save(
     // source of truth — if the user pressed Esc, discard the result and
     // return empty WITHOUT emitting speech-error. `save_result` is preserved
     // because the WAV has already been written to disk; dropping it would
-    // leave the JSON metadata file dangling forever. Log-and-return only —
-    // state/window cleanup belongs to cancel_active_pipeline on the hook
-    // thread (see the gate-2 note in run_pipeline).
-    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-        info!(target: "cancel", "transcribe_and_save: gate 1 cancelled");
+    // leave the JSON metadata file dangling forever.
+    // Log-and-return only — the gate protocol lives on CancelGate's doc.
+    if gate.tripped() {
         return (save_result, String::new());
     }
 
@@ -781,12 +789,9 @@ enum DeliveryRoute {
 /// save -> final cancel gate -> DeliveryController handoff. The ~40-line
 /// tail previously lived twice (run_pipeline / run_realtime_fast_path)
 /// with cross-referencing gate-number comments; it is now one function.
-///
-/// The final gate is log-and-return ONLY: cleanup belongs to
-/// cancel_active_pipeline on the hook thread, and a gate-side reset
-/// would kill a NEW session started while this one was in flight
-/// (7f0cbf0). `gate_label` distinguishes call sites in logs.
-#[allow(clippy::too_many_arguments)] // 9 args; merging would obscure call site
+/// The final gate is log-and-return only — the gate protocol lives on
+/// CancelGate's doc; the label is baked into the witness at the arming site.
+#[allow(clippy::too_many_arguments)] // 8 args; merging would obscure call site
 async fn refine_and_deliver(
     ps: &PipelineState,
     transcription: String,
@@ -795,8 +800,7 @@ async fn refine_and_deliver(
     policy: &SessionPolicy,
     mut perf: PerfMetrics,
     press_timer: PerfTimer,
-    cancel: &Arc<std::sync::atomic::AtomicBool>,
-    gate_label: &'static str,
+    gate: &CancelGate<'_>,
 ) {
     perf.llm_enabled = policy.llm_enabled;
     let final_text = if policy.llm_enabled {
@@ -827,8 +831,7 @@ async fn refine_and_deliver(
         },
     };
 
-    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-        info!(target: "cancel", "refine_and_deliver: {gate_label} cancelled before delivery");
+    if gate.tripped() {
         return;
     }
 
