@@ -8,6 +8,12 @@ import {
 } from './floating-utils.js';
 import { INJECTION_ERROR_MSG } from './lib/errors.js';
 import { EVENTS, listen } from './lib/events.js';
+import {
+    currentMode,
+    MODES,
+    resetIndicatorInline,
+    setMode,
+} from './lib/floating-mode.js';
 
 const indicator = document.getElementById('indicator');
 const transcriptText = document.getElementById('transcript-text');
@@ -78,17 +84,12 @@ function setTranscriptAnnouncement(mode) {
 }
 
 function showRecordOnly() {
-    // The record-only look is CSS-driven (breathe keyframes + tint), so any
-    // inline background/shadow/transform left by the spring-driven modes
-    // must be cleared — inline styles beat class rules.
-    indicator.style.background = '';
-    indicator.style.boxShadow = '';
-    indicator.style.transform = '';
-    indicator.style.filter = '';
+    setMode(indicator, MODES.RECORD_ONLY);
+    resetIndicatorInline(indicator, MODES.RECORD_ONLY);
     rmsHistory = [];
     setTranscriptAnnouncement('timer');
     indicator.classList.remove('processing', 'error', 'exit');
-    indicator.classList.add('record-only', 'visible');
+    indicator.classList.add('visible');
     stopRecordOnlyTimer();
     recordOnlySeconds = 0;
     updateRecordOnlyText();
@@ -190,9 +191,8 @@ function spawnRipple() {
     const el = document.createElement('div');
     // Record-only ripples are red to match the recording indicator; the
     // jade default matches the classic accent circle.
-    el.className = indicator.classList.contains('record-only')
-        ? 'ripple red'
-        : 'ripple';
+    el.className =
+        currentMode() === MODES.RECORD_ONLY ? 'ripple red' : 'ripple';
     document.body.appendChild(el);
     el.addEventListener('animationend', () => el.remove());
 }
@@ -222,8 +222,9 @@ function hide(delay = 0) {
         r.remove();
     });
     stopRecordOnlyTimer();
-    indicator.style.filter = '';
-    indicator.classList.remove('visible', 'processing', 'record-only');
+    setMode(indicator, MODES.IDLE);
+    resetIndicatorInline(indicator, MODES.IDLE);
+    indicator.classList.remove('visible', 'processing');
     indicator.classList.add('exit');
     transcriptText.textContent = '';
     transcriptText.classList.remove('visible', 'error');
@@ -238,8 +239,8 @@ const ERROR_DEFAULTS = {
 };
 
 function showError(eventName, payload) {
-    indicator.style.background = '';
-    indicator.style.boxShadow = '';
+    setMode(indicator, MODES.ERROR);
+    resetIndicatorInline(indicator, MODES.ERROR);
     indicator.classList.remove('processing');
     indicator.classList.add('error', 'visible');
     transcriptText.textContent = errorTextWithGuide(
@@ -255,11 +256,12 @@ function showRecording() {
     // only OS-hide the window — the webview interval would otherwise keep
     // overwriting transcription-partial text with the record-only timer.
     stopRecordOnlyTimer();
+    setMode(indicator, MODES.RECORDING);
+    resetIndicatorInline(indicator, MODES.RECORDING);
     indicator.style.background = BASE_BG;
     indicator.style.boxShadow = BASE_SHADOW;
-    indicator.style.filter = '';
     indicator.style.transform = `scale(${MIN_SCALE})`;
-    indicator.classList.remove('processing', 'error', 'exit', 'record-only');
+    indicator.classList.remove('processing', 'error', 'exit');
     currentScale = MIN_SCALE;
     velocity = 0;
     targetScale = MIN_SCALE;
@@ -284,10 +286,13 @@ function showProcessing(label) {
         ) {
             requestAnimationFrame(settleAndTransition);
         } else {
-            indicator.style.background = '';
-            indicator.style.boxShadow = '';
-            indicator.classList.remove('error', 'visible', 'exit');
-            indicator.classList.add('processing', 'visible');
+            // The mode machine rejects ERROR→PROCESSING: a mid-settle error's
+            // display must not be overwritten by this late settle flip.
+            if (setMode(indicator, MODES.PROCESSING)) {
+                resetIndicatorInline(indicator, MODES.PROCESSING);
+                indicator.classList.remove('error', 'visible', 'exit');
+                indicator.classList.add('processing', 'visible');
+            }
             currentScale = 1.0;
             velocity = 0;
             isSpringActive = false;
@@ -306,7 +311,7 @@ listen(EVENTS.recordingStart, () => {
 });
 
 listen(EVENTS.audioRms, (event) => {
-    if (indicator.classList.contains('record-only')) {
+    if (currentMode() === MODES.RECORD_ONLY) {
         updateRecordOnlyLevel(event.payload);
     } else {
         updatePulse(event.payload);
@@ -362,19 +367,18 @@ listen(EVENTS.recordOnlyStarted, () => {
 listen(EVENTS.recordOnlyFinished, (event) => {
     stopRecordOnlyTimer();
     setTranscriptAnnouncement('polite');
-    indicator.classList.remove('record-only');
     if (event.payload?.status === 'failed') {
         // Backpressure controlled stop: the WAV was finalized but lost
         // >3.2s of audio — surface it as an error, not "saved".
-        indicator.style.background = '';
-        indicator.style.boxShadow = '';
-        indicator.style.filter = '';
+        setMode(indicator, MODES.ERROR);
+        resetIndicatorInline(indicator, MODES.ERROR);
         indicator.classList.add('error');
         transcriptText.textContent = `录音不完整已提前停止，已保存部分可在转录窗口查看${ERROR_GUIDE}`;
         transcriptText.classList.add('visible', 'error');
         hide(4500);
     } else {
-        indicator.style.filter = '';
+        setMode(indicator, MODES.RECORD_ONLY_SAVED);
+        resetIndicatorInline(indicator, MODES.RECORD_ONLY_SAVED);
         transcriptText.textContent = '录音已保存';
         transcriptText.classList.remove('error');
         transcriptText.classList.add('visible');
@@ -388,10 +392,9 @@ listen(EVENTS.recordOnlyError, (event) => {
     // to the table key and would lose the backend message. Unpack here.
     stopRecordOnlyTimer();
     setTranscriptAnnouncement('polite');
-    indicator.classList.remove('record-only', 'processing');
-    indicator.style.background = '';
-    indicator.style.boxShadow = '';
-    indicator.style.filter = '';
+    setMode(indicator, MODES.ERROR);
+    resetIndicatorInline(indicator, MODES.ERROR);
+    indicator.classList.remove('processing');
     indicator.classList.add('error', 'visible');
     transcriptText.textContent = errorTextWithGuide(
         event.payload?.message,
@@ -410,8 +413,8 @@ listen(EVENTS.recordOnlyError, (event) => {
 listen(EVENTS.recordOnlyDiscarded, () => {
     stopRecordOnlyTimer();
     setTranscriptAnnouncement('polite');
-    indicator.classList.remove('record-only');
-    indicator.style.filter = '';
+    setMode(indicator, MODES.RECORD_ONLY_DISCARDED);
+    resetIndicatorInline(indicator, MODES.RECORD_ONLY_DISCARDED);
     transcriptText.textContent = '录音太短，已自动丢弃';
     transcriptText.classList.remove('error');
     transcriptText.classList.add('visible');
