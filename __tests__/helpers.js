@@ -32,7 +32,7 @@
  *   fetch the stylesheets.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { vi } from 'vitest';
@@ -62,6 +62,23 @@ const HELPERS_DIR = dirname(fileURLToPath(import.meta.url));
  */
 export function readSource(rel) {
     return readFileSync(resolve(HELPERS_DIR, '..', rel), 'utf8');
+}
+
+/**
+ * List the window HTML files in ui/ (sorted, repo-root-relative paths).
+ *
+ * The cache-stamp contract test needs to know EVERY window HTML file, so
+ * a newly added window cannot slip in without the shared `?v=` stamp.
+ * helpers.js is the suite's single source for filesystem reads — the test
+ * must not open its own readdirSync.
+ *
+ * @returns {string[]} e.g. ['ui/floating.html', 'ui/review.html', ...]
+ */
+export function listUiHtml() {
+    return readdirSync(resolve(HELPERS_DIR, '..', 'ui'))
+        .filter((f) => f.endsWith('.html'))
+        .sort()
+        .map((f) => `ui/${f}`);
 }
 
 /**

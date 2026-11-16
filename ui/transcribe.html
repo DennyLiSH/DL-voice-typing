@@ -4,8 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>录音转录</title>
-    <link rel="stylesheet" href="common.css">
-    <link rel="stylesheet" href="transcribe.css">
+    <!-- Shared cache-bust stamp: all four window HTML files must carry the
+         SAME ?v= value. Bump it in all four together whenever a referenced
+         static resource changes: the installed WebView caches these assets
+         across versions, so users would otherwise keep the old file.
+         Known gap: the entry module script's ES-module static imports
+         carry no stamp. -->
+    <link rel="stylesheet" href="common.css?v=8">
+    <link rel="stylesheet" href="transcribe.css?v=8">
 </head>
 <body>
     <div class="layout">
@@ -78,6 +84,6 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-    <script type="module" src="transcribe.js"></script>
+    <script type="module" src="transcribe.js?v=8"></script>
 </body>
 </html>
