@@ -446,7 +446,7 @@ async fn press_to_release_duration_is_measured_from_the_press() {
         .expect("end_to_end_ms must be a number");
     assert!(
         hold >= HOLD_MS / 2,
-        "the hold duration must be measured from the press (>= {HOLD_MS}ms), got {hold}ms"
+        "the hold duration must be measured from the press (>= {HOLD_MS} / 2 ms tolerance), got {hold}ms"
     );
     assert!(
         e2e >= hold,
@@ -497,7 +497,7 @@ async fn run_pipeline_records_real_transcription_duration() {
         .expect("transcription_ms must be a number");
     assert!(
         ms >= DELAY_MS / 2,
-        "transcription_ms must cover the engine delay (>= {DELAY_MS}ms), got {ms}ms"
+        "transcription_ms must cover the engine delay (>= {DELAY_MS} / 2 ms tolerance), got {ms}ms"
     );
 }
 
