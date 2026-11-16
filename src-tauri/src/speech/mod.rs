@@ -237,7 +237,8 @@ mod tests {
     /// The trait default and the extracted free function are ONE path:
     /// an engine that does not override the segment method must produce
     /// identical segments through either entry point (text, start_ms and
-    /// the duration-derived end_ms included).
+    /// the duration-derived end_ms included), and the default path must
+    /// report completion through the progress callback.
     #[test]
     fn default_transcribe_with_segments_sync_matches_trait_default() {
         // Minimal engine: implements `transcribe_sync` only, so the
@@ -256,21 +257,38 @@ mod tests {
             }
         }
 
+        /// Progress recorder: collects the values the callback receives
+        /// (the callback must be Send + Sync, hence the shared log).
+        fn progress_recorder(
+            log: &Arc<std::sync::Mutex<Vec<u8>>>,
+        ) -> Box<dyn Fn(u8) + Send + Sync> {
+            let log = log.clone();
+            Box::new(move |p| {
+                if let Ok(mut g) = log.lock() {
+                    g.push(p);
+                }
+            })
+        }
+
         let engine = MinimalEngine;
         // 1 second of 16kHz audio.
         let samples = vec![0.0f32; 16000];
+        let trait_progress: Arc<std::sync::Mutex<Vec<u8>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
         let via_trait = engine
             .transcribe_with_segments_sync(
                 &samples,
                 Arc::new(AtomicBool::new(false)),
-                Box::new(|_| {}),
+                progress_recorder(&trait_progress),
             )
             .expect("trait default must succeed");
+        let free_progress: Arc<std::sync::Mutex<Vec<u8>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
         let via_free_fn = default_transcribe_with_segments_sync(
             &engine,
             &samples,
             Arc::new(AtomicBool::new(false)),
-            Box::new(|_| {}),
+            progress_recorder(&free_progress),
         )
         .expect("free fn must succeed");
 
@@ -279,5 +297,10 @@ mod tests {
         assert_eq!(via_trait[0].text, "minimal");
         assert_eq!(via_trait[0].start_ms, 0);
         assert_eq!(via_trait[0].end_ms, 1000);
+        // Both entry points report completion exactly once, with 100.
+        let trait_values = trait_progress.lock().map(|g| g.clone()).unwrap_or_default();
+        assert_eq!(trait_values, vec![100]);
+        let free_values = free_progress.lock().map(|g| g.clone()).unwrap_or_default();
+        assert_eq!(free_values, vec![100]);
     }
 }
