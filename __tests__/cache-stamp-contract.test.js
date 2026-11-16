@@ -64,6 +64,30 @@ function stampOf(ref) {
     return m ? m[1] : null;
 }
 
+/**
+ * The HTML comment block that documents the cache-bust convention in one
+ * window file.
+ *
+ * Extraction is by CONTENT, never by position: every HTML comment in the
+ * file is scanned and the ones mentioning the stamp parameter itself
+ * (`?v=`) are kept. That keeps this independent of the comment's exact
+ * wording and of where the comment sits — settings.html carries 19
+ * comments and the cache-bust one is only the first by accident.
+ *
+ * @param {string} html the window file's source
+ * @param {string} rel repo-root-relative path, for error messages
+ * @returns {string} the comment block, byte for byte
+ */
+function cacheBustComment(html, rel) {
+    const comments = [...html.matchAll(/<!--[\s\S]*?-->/g)].map((m) => m[0]);
+    const hits = comments.filter((c) => c.includes('?v='));
+    expect(
+        hits.length,
+        `${rel}: expected exactly ONE HTML comment documenting the cache-bust stamp (?v=), found ${hits.length} — the four window files' comment blocks are compared byte for byte, so the block must stay unique and identifiable`,
+    ).toBe(1);
+    return hits[0];
+}
+
 describe('cache-bust stamp contract', () => {
     it('every window HTML file is covered by the contract', () => {
         // A NEW window file must not slip in unstamped: the contract's
@@ -110,5 +134,24 @@ describe('cache-bust stamp contract', () => {
         // One value across all four files — bumping it is a single,
         // reviewable step (the point of the shared stamp).
         expect([...stamps]).toHaveLength(1);
+    });
+
+    it('all four windows carry the SAME cache-bust comment block', () => {
+        // The stamp VALUE is pinned above, but nothing pinned the four
+        // copies of the comment that explains the convention — so the
+        // explanations could drift apart silently (e.g. the "known gap"
+        // note describing lib/*.js only in one of the four files). The
+        // blocks are documentation of one shared convention, so they must
+        // stay byte-identical.
+        const blocks = WINDOW_HTML.map((rel) => ({
+            rel,
+            block: cacheBustComment(readSource(rel), rel),
+        }));
+        expect(
+            new Set(blocks.map((b) => b.block)).size,
+            `the cache-bust comment block drifted apart between the window files — keep the four copies byte-identical:\n${blocks
+                .map((b) => `--- ${b.rel}\n${b.block}`)
+                .join('\n')}`,
+        ).toBe(1);
     });
 });

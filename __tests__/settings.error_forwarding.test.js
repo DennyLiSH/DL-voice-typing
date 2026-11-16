@@ -62,7 +62,7 @@ async function loadFresh() {
                 llm_api_url: '',
                 llm_api_key: '',
                 llm_model: '',
-                // Backend default (schema.rs DownloadMirror::HfMirror) — must
+                // Backend default (config/catalog.rs DownloadMirror::HfMirror) — must
                 // match a real <option> in settings.html or the dirty baseline
                 // would light on first paint.
                 download_mirror: 'hf-mirror',
