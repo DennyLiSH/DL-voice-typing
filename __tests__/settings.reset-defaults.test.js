@@ -11,6 +11,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { HOTKEY_SLOTS } from '../ui/lib/settings-schema.js';
 import { loadSettingsDom, stubTauri } from './helpers.js';
 
 vi.mock('../ui/model-manager.js', () => ({
@@ -130,6 +131,41 @@ afterEach(() => {
     vi.resetModules();
     document.body.innerHTML = '';
 });
+
+// --- Hotkey preview refresh (Round 6 P10 Task 5a) ----------------------
+//
+// The restore-defaults flow must refresh ALL FOUR hotkey-slot previews.
+// The slot prefixes come from HOTKEY_SLOTS (settings-schema.js — the single
+// source for the four slots); updateHotkeyPreview(prefix) renders into
+// `${prefix}-preview`.
+const SLOT_EXPECTATIONS = [
+    {
+        key: 'hotkey',
+        loaded: '当前组合：Ctrl+Shift+A',
+        default: '当前组合：RightCtrl',
+    },
+    {
+        key: 'record_only_hotkey',
+        loaded: '当前组合：B',
+        default: '当前组合：RightAlt',
+    },
+    {
+        key: 'open_settings_hotkey',
+        loaded: '当前组合：Alt+C',
+        default: '当前组合：未启用',
+    },
+    {
+        key: 'open_transcribe_hotkey',
+        loaded: '当前组合：D',
+        default: '当前组合：未启用',
+    },
+];
+
+function previewText(key) {
+    const slot = HOTKEY_SLOTS.find((s) => s.key === key);
+    if (!slot) throw new Error(`unknown hotkey slot: ${key}`);
+    return document.getElementById(`${slot.prefix}-preview`)?.textContent;
+}
 
 describe('restore defaults (M3-a)', () => {
     it('danger confirm resolves: populates defaults, marks dirty, does NOT save', async () => {
@@ -356,5 +392,63 @@ describe('restore defaults (M3-a)', () => {
         saveCall = saveCalls[saveCalls.length - 1];
         expect(saveCall).toBeDefined();
         expect(saveCall.args.config.llm_api_key).toBe('__MASKED__');
+    });
+
+    it('refreshes ALL FOUR hotkey-slot previews to the default labels', async () => {
+        // Every slot of the LOADED config holds a non-default spec, so a
+        // preview the reset failed to refresh stays visibly stale.
+        const loaded = {
+            ...baseConfig,
+            hotkey: { ctrl: true, shift: true, alt: false, vk: 65 },
+            record_only_hotkey: {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 66,
+            },
+            open_settings_hotkey: {
+                ctrl: false,
+                shift: false,
+                alt: true,
+                vk: 67,
+            },
+            open_transcribe_hotkey: {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                vk: 68,
+            },
+        };
+        // Backend defaults (src-tauri/src/config/schema.rs): RightCtrl /
+        // RightAlt for the two required slots, None for the optional ones.
+        await stubInvoke((cmd) => {
+            if (cmd === 'get_default_config') {
+                return Promise.resolve({
+                    ...defaults,
+                    open_settings_hotkey: null,
+                    open_transcribe_hotkey: null,
+                });
+            }
+            return null;
+        });
+        await loadFresh(loaded);
+
+        // Bind the expectations to the single source of slots — a fifth
+        // slot added upstream must fail here loudly, not be skipped.
+        expect(SLOT_EXPECTATIONS).toHaveLength(HOTKEY_SLOTS.length);
+
+        // Before the reset the previews show the LOADED specs.
+        for (const { key, loaded: label } of SLOT_EXPECTATIONS) {
+            expect(previewText(key)).toBe(label);
+        }
+
+        document.getElementById('reset-defaults-btn').click();
+        await new Promise((r) => setTimeout(r, 10));
+
+        // After the reset every preview shows the DEFAULT label — including
+        // the two optional slots, whose default is "disabled".
+        for (const { key, default: label } of SLOT_EXPECTATIONS) {
+            expect(previewText(key)).toBe(label);
+        }
     });
 });

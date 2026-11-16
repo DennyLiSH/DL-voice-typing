@@ -808,8 +808,10 @@ if (resetDefaultsBtn) {
             populateFieldsKeepingBaseline({ ...defaults, llm_api_key: '' });
             apiKeyChannel.armReset(hadExisting);
             updateDirtyState();
-            updateHotkeyPreview('hotkey');
-            updateHotkeyPreview('record-only-hotkey');
+            // All four hotkey previews are refreshed by
+            // populateFieldsKeepingBaseline → applyFieldsToForm → the
+            // hotkeyField `set` (which calls updateHotkeyPreview per slot).
+            // An extra refresh here would only cover 2 of the 4 slots.
             setSaveStatus('已恢复默认值，请核对后保存', 'success');
             armClearStatusOnInteract();
         } catch (_e) {
