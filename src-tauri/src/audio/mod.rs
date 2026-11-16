@@ -15,8 +15,9 @@ use tracing::error;
 /// audio callback, with the same shape — calculate the RMS, emit it at
 /// most every N milliseconds — but with different intervals (the
 /// classic pipeline 33ms, the record-only session 100ms) and different
-/// sinks for the audio itself. The shape used to be copied into both
-/// sessions, which meant a fix to the throttle had to be made twice.
+/// sinks for the audio itself. The shape now lives in one place
+/// (`commands::throttled_rms_emit_sink`); only the interval and the
+/// audio sink differ per session.
 ///
 /// The returned closure takes every audio block; the sink receives the
 /// RMS value, throttled. Storing the audio stays the caller's job (the

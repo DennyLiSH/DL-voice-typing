@@ -73,10 +73,11 @@ pub trait EventEmitter: Send + Sync {
 
 /// Build the throttled RMS-emitting audio callback.
 ///
-/// Single source for the `audio-rms` contract: the event name, the
-/// payload shape (a BARE f32 — not an object) and the throttle
-/// interval all live here. The classic pipeline and the record-only
-/// pipeline each carried their own copy of this three-part contract.
+/// Single source for the `audio-rms` contract: the event name and the
+/// payload shape (a BARE f32 — not an object) live here. The throttle
+/// interval is a PARAMETER — the classic pipeline uses 33 ms, the
+/// record-only session 100 ms — so each call site keeps choosing its
+/// own interval.
 pub(crate) fn throttled_rms_emit_sink(
     emitter: Arc<dyn EventEmitter>,
     interval_ms: u64,
