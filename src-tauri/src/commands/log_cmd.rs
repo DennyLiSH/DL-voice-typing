@@ -59,8 +59,10 @@ mod tests {
     }
 
     /// --- Sink-side truncation contract (2026-10-04) ---
-    /// Mirrors the silent chars().take() convention of ErrorHistory
-    /// (error_history.rs) and redact_error_detail (redaction.rs).
+    /// Uses the shared char-boundary-safe truncation helper
+    /// (`crate::util::truncate_chars`) — the same implementation the
+    /// ErrorHistory ring buffer (error_history.rs) and the credential
+    /// redaction tail cut (redaction.rs) use.
 
     #[test]
     fn message_truncated_to_500_chars() {
