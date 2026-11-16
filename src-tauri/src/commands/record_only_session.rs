@@ -393,14 +393,7 @@ impl RecordOnlySession {
         // drive brightness/ripple instead of the spring scale. Modes are
         // mutually exclusive (atomic state gate), so the shared name cannot
         // collide.
-        let emitter_for_rms = ps.emitter();
-        let rms_sink = Arc::new(move |rms_val: f32| {
-            emitter_for_rms.emit(
-                "audio-rms",
-                serde_json::to_value(rms_val).unwrap_or_default(),
-            );
-        });
-        let on_rms = crate::audio::throttled_rms_callback(RMS_EMIT_INTERVAL_MS, rms_sink);
+        let on_rms = crate::commands::throttled_rms_emit_sink(ps.emitter(), RMS_EMIT_INTERVAL_MS);
         let on_data: AudioCallback = Box::new(move |data: &[f32]| {
             let handle = crate::util::lock_mutex(&cell_for_cb, "record_only_push")
                 .and_then(|g| g.as_ref().cloned());

@@ -232,14 +232,7 @@ impl RecordingSession {
                 crate::util::lock_mutex(&self.ps.audio_capture(), "audio_capture")
             {
                 let ring_buf_for_audio = self.ps.ring_buffer();
-                let emitter_for_rms = self.ps.emitter();
-                let rms_sink = Arc::new(move |rms_val: f32| {
-                    emitter_for_rms.emit(
-                        "audio-rms",
-                        serde_json::to_value(rms_val).unwrap_or_default(),
-                    );
-                });
-                let on_rms = crate::audio::throttled_rms_callback(33, rms_sink);
+                let on_rms = crate::commands::throttled_rms_emit_sink(self.ps.emitter(), 33);
                 let start_result = ac_guard.start(Box::new(move |data: &[f32]| {
                     if let Some(mut buf) =
                         crate::util::lock_mutex(&ring_buf_for_audio, "audio_ring_buffer")

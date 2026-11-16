@@ -61,6 +61,7 @@ pub(crate) mod review_provider;
 pub mod transcribe_cmd;
 pub mod window_controller;
 
+use std::sync::Arc;
 use tauri::Emitter as TauriEmitter;
 
 /// Trait for emitting events to the frontend.
@@ -68,6 +69,25 @@ use tauri::Emitter as TauriEmitter;
 /// Uses `serde_json::Value` for trait-object safety.
 pub trait EventEmitter: Send + Sync {
     fn emit(&self, event: &str, payload: serde_json::Value);
+}
+
+/// Build the throttled RMS-emitting audio callback.
+///
+/// Single source for the `audio-rms` contract: the event name, the
+/// payload shape (a BARE f32 — not an object) and the throttle
+/// interval all live here. The classic pipeline and the record-only
+/// pipeline each carried their own copy of this three-part contract.
+pub(crate) fn throttled_rms_emit_sink(
+    emitter: Arc<dyn EventEmitter>,
+    interval_ms: u64,
+) -> impl Fn(&[f32]) + Send + Sync {
+    let sink = Arc::new(move |rms_val: f32| {
+        emitter.emit(
+            "audio-rms",
+            serde_json::to_value(rms_val).unwrap_or_default(),
+        );
+    });
+    crate::audio::throttled_rms_callback(interval_ms, sink)
 }
 
 /// Tauri-based event emitter for production use.
@@ -156,3 +176,31 @@ pub use download::{DownloadState, ModelsResponse};
 pub(crate) use hotkey_pipeline::make_hotkey_callback;
 pub use review::PendingReview;
 pub use window_controller::WindowController;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `audio-rms` payload contract: the event name is "audio-rms"
+    /// and the payload is a BARE f32 (a JSON number) — NOT an object.
+    /// The frontend reads the payload as a number, so an object shape
+    /// would silently break the level meter.
+    #[test]
+    fn throttled_rms_emit_sink_emits_bare_f32_payload() {
+        let emitter = Arc::new(MockEmitter::new());
+        let sink_emitter: Arc<dyn EventEmitter> = emitter.clone();
+        // interval 0 → the throttle window is always open.
+        let on_rms = throttled_rms_emit_sink(sink_emitter, 0);
+        on_rms(&vec![0.5f32; 128]);
+
+        let events = emitter.take_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "audio-rms");
+        assert!(
+            events[0].1.is_number(),
+            "payload must be a bare f32 number, not an object: {:?}",
+            events[0].1
+        );
+        assert_eq!(events[0].1.as_f64(), Some(0.5));
+    }
+}
