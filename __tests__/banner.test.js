@@ -11,9 +11,10 @@
 // hideBanner intentionally does NO class cleanup — the next showBanner
 // re-swaps. Visual recipes (colors) stay in CSS; only the class mechanics
 // are pinned here.
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { hideBanner, showBanner } from '../ui/lib/banner.js';
+import { loadFresh } from './helpers.js';
 
 function buildBanner() {
     const el = document.createElement('div');
@@ -108,8 +109,9 @@ describe('ui-utils delegation (API-stable signatures)', () => {
     it('showError/hideError keep their signatures and delegate to banner mechanics', async () => {
         document.body.innerHTML =
             '<div class="error-banner banner banner-error" id="error-banner" role="alert" hidden></div>';
-        vi.resetModules();
-        const { showError, hideError } = await import('../ui/lib/ui-utils.js');
+        const { showError, hideError } = await loadFresh(
+            '../ui/lib/ui-utils.js',
+        );
         const banner = document.getElementById('error-banner');
         showError('加载配置失败');
         expect(banner.hidden).toBe(false);

@@ -15,17 +15,14 @@
  * kept clearing it — harmless (the snippet guards every lookup with
  * `if (el)`) but dead, and invisible without this test.
  */
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const WINDOW_CONTROLLER = readFileSync(
-    new URL('../src-tauri/src/commands/window_controller.rs', import.meta.url),
-    'utf8',
+import { readSource } from './helpers.js';
+
+const WINDOW_CONTROLLER = readSource(
+    'src-tauri/src/commands/window_controller.rs',
 );
-const REVIEW_HTML = readFileSync(
-    new URL('../ui/review.html', import.meta.url),
-    'utf8',
-);
+const REVIEW_HTML = readSource('ui/review.html');
 
 describe('review window DOM contract', () => {
     it('the embedded js only touches ids that exist in review.html', () => {

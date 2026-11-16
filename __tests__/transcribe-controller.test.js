@@ -12,10 +12,10 @@
  * - the merged-edit lock (segment edits must not clobber a full-text
  *   edit).
  */
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PHASE } from '../ui/lib/transcribe.js';
 import { createTranscribeController } from '../ui/lib/transcribe-controller.js';
+import { readSource } from './helpers.js';
 
 function makeController() {
     const renders = [];
@@ -215,10 +215,7 @@ describe('transcribe controller — wiring surface', () => {
         // TypeError on click. The wiring surface is pinned here instead.
         const { controller } = makeController();
         const api = new Set(Object.keys(controller));
-        const src = readFileSync(
-            new URL('../ui/transcribe.js', import.meta.url),
-            'utf8',
-        );
+        const src = readSource('ui/transcribe.js');
         const used = new Set(
             [...src.matchAll(/(?<![-\w])controller[.]([A-Za-z]+)/g)].map(
                 (m) => m[1],
@@ -234,12 +231,7 @@ describe('transcribe controller — wiring surface', () => {
         // ownsByFilename (strict match — a payload lacking the filename
         // is rejected); progress/error MUST route through ownsByToken.
         // A channel swapped to the wrong guard turns this red.
-        // (Uses this file's existing readFileSync form — Task 7
-        // consolidates it into readSource later.)
-        const src = readFileSync(
-            new URL('../ui/transcribe.js', import.meta.url),
-            'utf8',
-        );
+        const src = readSource('ui/transcribe.js');
         const byChannel = (ev) => {
             const start = src.indexOf(`EVENTS.${ev}`);
             expect(start, `${ev} handler exists`).toBeGreaterThan(-1);

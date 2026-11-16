@@ -36,36 +36,14 @@
  * - the inline `#[cfg(test)]` modules inside production files are
  *   scraped like production code: they emit real event names.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { extname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-
 import { EVENTS } from '../ui/lib/events.js';
+import { listFilesRecursive, readSource } from './helpers.js';
 
-const SRC_DIR = fileURLToPath(new URL('../src-tauri/src/', import.meta.url));
-const UI_DIR = fileURLToPath(new URL('../ui/', import.meta.url));
-const TESTS_DIR = join(SRC_DIR, 'tests');
-
-function listRsFiles(dir) {
-    const out = [];
-    for (const name of readdirSync(dir)) {
-        const full = join(dir, name);
-        if (statSync(full).isDirectory()) out.push(...listRsFiles(full));
-        else if (extname(name) === '.rs') out.push(full);
-    }
-    return out;
-}
-
-function listJsFiles(dir) {
-    const out = [];
-    for (const name of readdirSync(dir)) {
-        const full = join(dir, name);
-        if (statSync(full).isDirectory()) out.push(...listJsFiles(full));
-        else if (extname(name) === '.js') out.push(full);
-    }
-    return out;
-}
+const RS_FILES = listFilesRecursive('src-tauri/src', '.rs').filter(
+    (f) => !f.startsWith('src-tauri/src/tests/'),
+);
+const UI_JS_FILES = listFilesRecursive('ui', '.js');
 
 /**
  * Event names emitted by ONE source text. `emit(` reads string
@@ -112,10 +90,8 @@ function emittedNamesFromText(text) {
  */
 function emittedEventNames() {
     const names = new Set();
-    for (const file of listRsFiles(SRC_DIR)) {
-        // The integration tests emit their own fixture names.
-        if (file.startsWith(TESTS_DIR)) continue;
-        for (const name of emittedNamesFromText(readFileSync(file, 'utf8'))) {
+    for (const file of RS_FILES) {
+        for (const name of emittedNamesFromText(readSource(file))) {
             names.add(name);
         }
     }
@@ -126,11 +102,11 @@ describe('event registry contract', () => {
     it('every EVENTS key referenced in ui/ exists in the table', () => {
         const keys = new Set(Object.keys(EVENTS));
         const missing = [];
-        for (const file of listJsFiles(UI_DIR)) {
-            const text = readFileSync(file, 'utf8');
+        for (const file of UI_JS_FILES) {
+            const text = readSource(file);
             for (const m of text.matchAll(/\bEVENTS\.(\w+)/g)) {
                 if (!keys.has(m[1])) {
-                    missing.push(`${relative(UI_DIR, file)}: EVENTS.${m[1]}`);
+                    missing.push(`${file}: EVENTS.${m[1]}`);
                 }
             }
         }
@@ -177,10 +153,10 @@ describe('event registry contract', () => {
         // A literal is a bypass of the registry — and a typo in it fails
         // silently at runtime.
         const offenders = [];
-        for (const file of listJsFiles(UI_DIR)) {
-            const text = readFileSync(file, 'utf8');
+        for (const file of UI_JS_FILES) {
+            const text = readSource(file);
             if (/listen\(\s*'/.test(text)) {
-                offenders.push(relative(UI_DIR, file));
+                offenders.push(file);
             }
         }
         expect(offenders).toEqual([]);
@@ -196,16 +172,15 @@ describe('event registry contract', () => {
         // matchAll (not a single .test) reports every offending line.
         const offenders = [];
         let ownerHits = 0;
-        for (const file of listJsFiles(UI_DIR)) {
-            const text = readFileSync(file, 'utf8');
+        for (const file of UI_JS_FILES) {
+            const text = readSource(file);
             for (const m of text.matchAll(/window\.__TAURI__\??\.event\b/g)) {
-                const rel = relative(UI_DIR, file).replace(/\\/g, '/');
-                if (rel === 'lib/events.js') {
+                if (file === 'ui/lib/events.js') {
                     ownerHits++;
                     continue;
                 }
                 const line = text.slice(0, m.index).split('\n').length;
-                offenders.push(`${rel}:${line}`);
+                offenders.push(`${file}:${line}`);
             }
         }
         // Check-face: a broken scrape (wrong directory, regex drift) or

@@ -34,8 +34,8 @@
  *   deletes the whole body — see its own docblock below.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { vi } from 'vitest';
 
@@ -81,6 +81,34 @@ export function listUiHtml() {
         .filter((f) => f.endsWith('.html'))
         .sort()
         .map((f) => `ui/${f}`);
+}
+
+/**
+ * Recursively list repo files with the given extension under relDir,
+ * as sorted repo-root-relative POSIX-style paths ('src-tauri/src/x.rs').
+ * helpers.js is the suite's single source for filesystem reads —
+ * contract scrapers must not carry private walkers (the
+ * event-registry contract used to ship its own two).
+ * @param {string} relDir repo-root-relative directory, e.g. 'src-tauri/src'
+ * @param {string} ext extension WITH the dot, e.g. '.rs'
+ * @returns {string[]}
+ */
+export function listFilesRecursive(relDir, ext) {
+    const root = resolve(HELPERS_DIR, '..', relDir);
+    const out = [];
+    const walk = (dir) => {
+        for (const name of readdirSync(dir)) {
+            const full = join(dir, name);
+            if (statSync(full).isDirectory()) walk(full);
+            else if (name.endsWith(ext)) out.push(full);
+        }
+    };
+    walk(root);
+    return out
+        .map((abs) =>
+            relative(resolve(HELPERS_DIR, '..'), abs).split(sep).join('/'),
+        )
+        .sort();
 }
 
 /**

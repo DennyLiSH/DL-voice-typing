@@ -6,7 +6,6 @@
  * undo-window-contract.test.js (settings-form.js touches DOM at module
  * load, so it cannot be imported in a pure test environment).
  */
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MASKED_MARKER } from '../ui/lib/api-key-mask.js';
 import {
@@ -14,16 +13,11 @@ import {
     hotkeySpecsOf,
     SETTINGS_FIELDS,
 } from '../ui/lib/settings-schema.js';
+import { readSource } from './helpers.js';
 
-const SETTINGS_HTML = readFileSync(
-    new URL('../ui/settings.html', import.meta.url),
-    'utf8',
-);
+const SETTINGS_HTML = readSource('ui/settings.html');
 
-const SRC = readFileSync(
-    new URL('../ui/settings-form.js', import.meta.url),
-    'utf8',
-);
+const SRC = readSource('ui/settings-form.js');
 
 function scrapeDomDefsKeys() {
     const start = SRC.indexOf('const DOM_DEFS = {');
@@ -123,10 +117,7 @@ describe('hotkey slot single source (HOTKEY_SLOTS)', () => {
         // The prefix loops used to hardcode the four slot prefixes. A
         // fifth slot would have been known to the schema and the preview
         // path while these loops silently skipped it.
-        const src = readFileSync(
-            new URL('../ui/settings-form.js', import.meta.url),
-            'utf8',
-        );
+        const src = readSource('ui/settings-form.js');
         // A single prefix may still appear (the DOM_DEFS entry for the
         // primary slot, one-off preview calls) — what must not come back
         // is an ARRAY literal listing the slots.
