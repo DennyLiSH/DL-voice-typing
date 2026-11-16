@@ -725,6 +725,11 @@ mod tests {
     /// environment variable (documentation, not an implementation) — that
     /// mention must not be mistaken for an inlined gate.
     ///
+    /// BOTH ratchet legs scan this stripped surface: the env-token leg
+    /// must not see a commented-out gate, and the delegation leg must
+    /// not be satisfied by a COMMENT that merely mentions the call — the
+    /// delegation has to be real code.
+    ///
     /// Boundary: only WHOLE-LINE comments are dropped — a line whose
     /// trimmed text starts with `//` (which also covers `///` doc lines).
     /// A trailing comment at the end of a code line is NOT stripped and
@@ -747,7 +752,9 @@ mod tests {
         let src = include_str!("config_cmd.rs");
         // The PRODUCTION region only — the test module is excluded, so the
         // delegation assertion below cannot be satisfied by the test's own
-        // source.
+        // source. Comments are stripped too, so NEITHER leg may be
+        // satisfied by prose: the env var name and the delegation call
+        // must both appear as real code.
         let production = production_region(src);
         let code = code_without_comments(production);
         assert!(
@@ -756,8 +763,9 @@ mod tests {
              name may only live in lib.rs::autostart_gate"
         );
         assert!(
-            production.contains(DELEGATION),
-            "is_autostart_available must delegate to the lib.rs gate"
+            code.contains(DELEGATION),
+            "is_autostart_available must delegate to the lib.rs gate — the \
+             delegation call must be real code, not a comment"
         );
         // Type-level check: the command and the gate agree by construction
         // (same predicate, same env, same moment).
