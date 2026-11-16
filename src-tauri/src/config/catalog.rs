@@ -267,7 +267,12 @@ mod tests {
         assert_eq!(WhisperModel::Small.filename(), "ggml-small.bin");
         assert_eq!(WhisperModel::Medium.filename(), "ggml-medium.bin");
 
-        assert_eq!(WhisperModel::all_built_in().len(), 8);
+        // Ratchet (2026-11-16 audit D2): the hand-list must mirror the
+        // model table row-for-row, order included — a new model row
+        // without its variant here silently drops from the frontend
+        // catalog (and vice versa).
+        let table: Vec<WhisperModel> = BUILT_IN_MODELS.iter().map(|m| m.variant.clone()).collect();
+        assert_eq!(WhisperModel::all_built_in(), table.as_slice());
 
         assert_eq!(WhisperModel::Tiny.size_str(), "tiny");
         assert_eq!(WhisperModel::Base.size_str(), "base");
