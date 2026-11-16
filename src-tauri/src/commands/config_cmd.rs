@@ -68,14 +68,21 @@ enum SpecSlot {
 }
 
 impl SpecSlot {
-    /// The slot's label in error messages — the hook layer's own label
-    /// for the slot (see `hotkey::SPEC_SLOTS`).
+    /// The slot's label in error messages — DERIVED from the hook
+    /// layer's slot manifest (`hotkey::SPEC_SLOTS`): the match below
+    /// only maps this command-side enum onto the manifest's SlotKind;
+    /// the label string itself exists in exactly one place.
     fn label(&self) -> &'static str {
-        match self {
-            SpecSlot::Primary => "primary",
-            SpecSlot::Open(crate::commands::WindowKind::Settings) => "open-settings",
-            SpecSlot::Open(crate::commands::WindowKind::Transcribe) => "open-transcribe",
-        }
+        let kind = match self {
+            SpecSlot::Primary => SlotKind::Primary,
+            SpecSlot::Open(crate::commands::WindowKind::Settings) => SlotKind::OpenSettings,
+            SpecSlot::Open(crate::commands::WindowKind::Transcribe) => SlotKind::OpenTranscribe,
+        };
+        SPEC_SLOTS
+            .iter()
+            .find(|d| d.kind == kind)
+            .expect("every SpecSlot kind has a SPEC_SLOTS descriptor")
+            .hook_label
     }
 }
 
