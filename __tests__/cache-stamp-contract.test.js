@@ -68,7 +68,10 @@ describe('cache-bust stamp contract', () => {
     it('every window HTML file is covered by the contract', () => {
         // A NEW window file must not slip in unstamped: the contract's
         // subject set is derived from the ui/ directory listing.
-        expect(listUiHtml()).toEqual(WINDOW_HTML);
+        expect(
+            listUiHtml(),
+            'a new ui/*.html window was added: add it to WINDOW_HTML above AND give every one of its static resource references the shared ?v= stamp (otherwise the installed WebView keeps serving the stale file)',
+        ).toEqual(WINDOW_HTML);
     });
 
     it.each(WINDOW_HTML)(

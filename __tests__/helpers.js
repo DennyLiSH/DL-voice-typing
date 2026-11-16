@@ -29,7 +29,9 @@
  *   dialog) are overrides, not defaults.
  * - loadSettingsDom reads the REAL ui/settings.html and strips
  *   <script>/<link> tags — jsdom must not re-run the entry scripts or
- *   fetch the stylesheets.
+ *   fetch the stylesheets. Its strip regexes match ACROSS HTML comments,
+ *   so a literal script/link tag inside a comment in ui/settings.html
+ *   deletes the whole body — see its own docblock below.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -155,6 +157,21 @@ export async function loadFresh(modulePath) {
  * settings.reset-defaults.test.js — jsdom must not re-run the entry
  * scripts or fetch the stylesheets. The calling test file must run
  * under the jsdom environment (`// @vitest-environment jsdom`).
+ *
+ * HAZARD — the strip regexes match ACROSS HTML comments:
+ *   `.replace(/<script[\s\S]*?<\/script>/g, '')`
+ *   `.replace(/<link[^>]*>/g, '')`
+ * A literal script tag (or link tag) written INSIDE A COMMENT in
+ * ui/settings.html starts a match that runs to the next real closing
+ * script tag, so the whole `<body>` is deleted and the jsdom suite dies
+ * with null-element errors (observed 2026-11-16: ~107 failing tests,
+ * first symptom `whisperModelSelect.addEventListener` on null in
+ * ui/model-manager.js). Comment prose must therefore avoid those tag
+ * literals — say "script tag" / "link tag" instead. The shipped
+ * ui/*.html comments follow this rule (the cache-bust stamp comments in
+ * particular). Fixing the stripping itself (parse real tags instead of
+ * regex-matching) would change this helper's behavior and is out of
+ * scope here — the hazard is documented instead.
  */
 export function loadSettingsDom() {
     const html = readSource('ui/settings.html')

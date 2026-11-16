@@ -419,8 +419,13 @@ describe('restore defaults (M3-a)', () => {
                 vk: 68,
             },
         };
-        // Backend defaults (src-tauri/src/config/schema.rs): RightCtrl /
-        // RightAlt for the two required slots, None for the optional ones.
+        // The defaults come from the TEST-LOCAL `defaults` fixture (which
+        // mirrors the backend's src-tauri/src/config/schema.rs defaults:
+        // RightCtrl / RightAlt for the two required slots, None for the
+        // optional ones) — this test pins the FIXTURE -> PREVIEW wiring,
+        // i.e. that restoring whatever the backend hands back re-renders
+        // all four previews. It does NOT pin the backend's own default
+        // values (that contract lives in the Rust schema tests).
         await stubInvoke((cmd) => {
             if (cmd === 'get_default_config') {
                 return Promise.resolve({

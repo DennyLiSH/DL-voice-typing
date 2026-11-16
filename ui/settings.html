@@ -9,7 +9,9 @@
          static resource changes: the installed WebView caches these assets
          across versions, so users would otherwise keep the old file.
          Known gap: the entry module script's ES-module static imports
-         carry no stamp. -->
+         carry no stamp, so bumping ?v= still does NOT refresh lib/*.js
+         (and the other statically imported modules) for existing
+         installed users. -->
     <link rel="stylesheet" href="common.css?v=8">
     <link rel="stylesheet" href="settings.css?v=8">
 </head>
