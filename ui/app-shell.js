@@ -51,7 +51,9 @@ export async function switchPage(pageName) {
             return; // user cancelled — stay on current page
         }
     }
-    // Page leave hook: pause audio + clear audio state when leaving data sub-page.
+    // Page leave hook: run the LEAVING page's leave hook from PAGE_HOOKS.
+    // The data page's hook pauses audio + clears the audio state; pages
+    // without a leave entry have no hook (the optional call is a no-op).
     if (currentPage !== pageName) {
         PAGE_HOOKS[currentPage]?.leave?.();
     }
@@ -65,7 +67,10 @@ export async function switchPage(pageName) {
     pageContents.forEach((page) => {
         page.classList.toggle('active', page.id === `page-${pageName}`);
     });
-    // Page enter hook: reset + reload data list when entering data sub-page.
+    // Page enter hook: run the ENTERING page's enter hook from PAGE_HOOKS.
+    // The data page's hook resets + reloads the recording list; the help
+    // page's refreshes the error history; the model page's re-detects the
+    // compute mode. Pages without an enter entry have no hook.
     PAGE_HOOKS[pageName]?.enter?.();
 }
 

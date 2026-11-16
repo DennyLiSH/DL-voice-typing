@@ -3,8 +3,10 @@
 // Behavior tests for app-shell.js — the settings window shell that had no
 // dedicated test file: feedback link (opener plugin + failure recovery),
 // help-page recent-errors rendering (auto-expand / empty / failure /
-// stale-response guard), and sidebar navigation (page-enter hooks and the
-// dirty-state confirm gate).
+// stale-response guard), sidebar navigation (page-enter hooks and the
+// dirty-state confirm gate), and the PAGE_HOOKS leave-hook dispatch
+// (switching to the SAME page must not fire the leave hook; beforeunload
+// must fire it unconditionally).
 //
 // Real-entry mode (Round 6 P4 Task 3): stub window.__TAURI__, load the
 // REAL ui/settings.html via loadSettingsDom() (helpers.js), dynamically
@@ -23,6 +25,20 @@ const confirmCtl = { result: false, open: false };
 vi.mock('../ui/lib/confirm-dialog.js', () => ({
     confirmDialog: vi.fn(async () => confirmCtl.result),
     isDialogOpen: () => confirmCtl.open,
+}));
+
+// The data-page enter/leave hooks are spied so the PAGE_HOOKS dispatch can
+// be pinned PER CALL (call counts, not just "was called"). ui/data-manager.js
+// exports exactly these two functions and app-shell.js imports only them,
+// so the mock is complete — the real module's behavior is not needed here
+// (its own lifecycle is covered by __tests__/data-manager.test.js).
+const dataHooks = {
+    enter: vi.fn(),
+    leave: vi.fn(),
+};
+vi.mock('../ui/data-manager.js', () => ({
+    onDataPageEnter: dataHooks.enter,
+    onDataPageLeave: dataHooks.leave,
 }));
 
 let invokeMock;
@@ -311,5 +327,74 @@ describe('app-shell: sidebar navigation', () => {
         const { switchPage } = await shell();
         await switchPage('help');
         expect(activePage()).toBe('general'); // dropped, no dialog, no switch
+    });
+});
+
+describe('app-shell: PAGE_HOOKS leave-hook dispatch', () => {
+    // The leave hook has TWO dispatch sites with DIFFERENT guards:
+    //   - switchPage: `currentPage !== pageName` — switching to the SAME
+    //     page is not leaving, so the leave hook must NOT fire;
+    //   - beforeunload: no guard — leaving the window always leaves the
+    //     current page, so the leave hook MUST fire.
+    // Both are pinned here per call (call counts), because a refactor that
+    // drops either guard would silently change the semantics.
+
+    beforeEach(async () => {
+        await loadFresh();
+        dataHooks.enter.mockClear();
+        dataHooks.leave.mockClear();
+    });
+
+    afterEach(async () => {
+        // Normalize back to a page WITHOUT a leave hook. The settings
+        // entry registers a `beforeunload` listener on the SHARED jsdom
+        // window at import time, and vi.resetModules() re-evaluates
+        // app-shell.js WITHOUT removing the previous instance's listener.
+        // A stale instance left on the data page would fire the leave hook
+        // again during a later beforeunload dispatch and inflate the call
+        // count — so every instance is parked on 'general' here.
+        const { switchPage } = await shell();
+        await switchPage('general');
+        dataHooks.enter.mockClear();
+        dataHooks.leave.mockClear();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('switching to the SAME page does not fire the leave hook', async () => {
+        const { switchPage } = await shell();
+        await switchPage('data');
+        expect(dataHooks.enter).toHaveBeenCalledTimes(1);
+        expect(dataHooks.leave).toHaveBeenCalledTimes(0);
+
+        // Same page again: the `currentPage !== pageName` guard must
+        // suppress the leave hook (the enter hook still runs).
+        await switchPage('data');
+        expect(dataHooks.leave).toHaveBeenCalledTimes(0);
+        expect(dataHooks.enter).toHaveBeenCalledTimes(2);
+    });
+
+    it('leaving the data page fires the leave hook exactly once', async () => {
+        const { switchPage } = await shell();
+        await switchPage('data');
+        dataHooks.leave.mockClear();
+        await switchPage('general');
+        expect(dataHooks.leave).toHaveBeenCalledTimes(1);
+    });
+
+    it('beforeunload fires the leave hook of the current page', async () => {
+        const { switchPage } = await shell();
+        await switchPage('data');
+        dataHooks.leave.mockClear();
+        window.dispatchEvent(new Event('beforeunload'));
+        expect(dataHooks.leave).toHaveBeenCalledTimes(1);
+    });
+
+    it('beforeunload on a page without a leave hook fires nothing', async () => {
+        const { switchPage } = await shell();
+        await switchPage('help');
+        dataHooks.leave.mockClear();
+        window.dispatchEvent(new Event('beforeunload'));
+        expect(dataHooks.leave).toHaveBeenCalledTimes(0);
     });
 });
