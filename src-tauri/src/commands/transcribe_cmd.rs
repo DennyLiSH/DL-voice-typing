@@ -192,6 +192,11 @@ fn cancel_in_flight(pt: &PendingTranscribe) -> Result<(), CommandError> {
             token.store(true, Ordering::SeqCst);
             Ok(())
         }
+        // The fold maps a poisoned lock to None — a sync failure must
+        // not masquerade as "nothing is running" (LOCK, not STATE).
+        None if pt.cancel_token.is_poisoned() => {
+            Err(CommandError::lock("cancel token lock poisoned"))
+        }
         None => Err(CommandError::state("没有进行中的转录任务")),
     }
 }
@@ -331,6 +336,11 @@ pub(crate) fn on_transcribe_window_closed(pt: &PendingTranscribe) {
 fn begin_transcription(pt: &PendingTranscribe) -> Result<Arc<AtomicBool>, CommandError> {
     let token = Arc::new(AtomicBool::new(false));
     if !pt.cancel_token.claim(token.clone()) {
+        // claim folds a poisoned lock into "occupied" — a sync failure
+        // must not masquerade as "another task is running".
+        if pt.cancel_token.is_poisoned() {
+            return Err(CommandError::lock("cancel token lock poisoned"));
+        }
         return Err(CommandError::state("已有转录任务进行中，请等待完成或取消"));
     }
     Ok(token)
@@ -781,6 +791,30 @@ mod tests {
         end_transcription(&pt);
         let third = begin_transcription(&pt);
         assert!(third.is_ok());
+    }
+
+    /// Regression (2026-11-16 audit, A1): a poisoned cancel-token lock
+    /// must surface as the LOCK error code, not a misleading "no
+    /// transcription running" STATE. Pre-migration code (before the
+    /// TakeOnceSlot migration) returned exactly this LOCK message.
+    #[test]
+    fn cancel_in_flight_reports_lock_when_slot_poisoned() {
+        let pt = PendingTranscribe::new();
+        pt.cancel_token.poison_for_tests();
+        let err = cancel_in_flight(&pt).expect_err("a poisoned lock must error");
+        assert_eq!(err.code, "LOCK");
+        assert_eq!(err.message, "cancel token lock poisoned");
+    }
+
+    /// Regression (A1, begin side): claim folding a poisoned lock into
+    /// "occupied" must surface as LOCK, not "another task is running".
+    #[test]
+    fn begin_transcription_reports_lock_when_slot_poisoned() {
+        let pt = PendingTranscribe::new();
+        pt.cancel_token.poison_for_tests();
+        let err = begin_transcription(&pt).expect_err("a poisoned lock must error");
+        assert_eq!(err.code, "LOCK");
+        assert_eq!(err.message, "cancel token lock poisoned");
     }
 
     #[test]

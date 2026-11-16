@@ -25,7 +25,9 @@ use tracing::warn;
 /// - `clear` removes without returning (the release path).
 ///
 /// A poisoned lock is reported as "no value" — the same conservative
-/// reading the rest of the codebase uses for poisoned slots.
+/// reading the rest of the codebase uses for poisoned slots. The fold
+/// stays; error-reporting callers are responsible for consulting
+/// `is_poisoned()` so a sync failure surfaces as LOCK, not STATE.
 pub struct TakeOnceSlot<T> {
     inner: Mutex<Option<T>>,
     label: &'static str,
@@ -82,6 +84,32 @@ impl<T> TakeOnceSlot<T> {
         if let Some(mut guard) = lock_mutex(&self.inner, self.label) {
             guard.take();
         }
+    }
+
+    /// Was the inner lock poisoned? Error-reporting callers use this
+    /// to distinguish a sync-primitive failure (a panic elsewhere
+    /// while holding the guard) from the slot's normal empty/occupied
+    /// states — the fold-to-no-value semantics above stay, but a
+    /// caller that turns the fold into an error owes the user the
+    /// LOCK code, not a misleading STATE message.
+    pub fn is_poisoned(&self) -> bool {
+        self.inner.is_poisoned()
+    }
+
+    /// Test-only: poison the inner lock by panicking while holding
+    /// the guard (wrapped so the panic does not propagate). The same
+    /// idiom as the PipelineState poison tests, but self-contained.
+    ///
+    /// (Deviation from spec §5, declared: the spec described the
+    /// established raw-pointer idiom; this helper uses the
+    /// catch_unwind form that TODO.md already tracks as the
+    /// simplification TARGET — no new raw-pointer site is created.)
+    #[cfg(test)]
+    pub(crate) fn poison_for_tests(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.inner.lock().expect("lock succeeds before poison");
+            panic!("intentional poison");
+        }));
     }
 }
 
