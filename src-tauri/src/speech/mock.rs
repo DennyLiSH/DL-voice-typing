@@ -74,22 +74,7 @@ impl SpeechEngine for MockEngine {
             progress(100);
             return Ok(segments.clone());
         }
-        // Mirror the trait default: single segment spanning the whole audio.
-        use std::sync::atomic::Ordering;
-        if cancel.load(Ordering::Relaxed) {
-            return Err(AppError::Speech(
-                crate::speech::CANCELLED_MESSAGE.to_string(),
-            ));
-        }
-        let text = self.transcribe_sync(samples)?;
-        progress(100);
-        let duration_ms = (samples.len() as u64 * 1000 / crate::audio::TARGET_SAMPLE_RATE as u64)
-            .min(u32::MAX as u64) as u32;
-        Ok(vec![crate::speech::Segment {
-            text,
-            start_ms: 0,
-            end_ms: duration_ms,
-        }])
+        crate::speech::default_transcribe_with_segments_sync(self, samples, cancel, progress)
     }
 
     fn is_ready(&self) -> bool {

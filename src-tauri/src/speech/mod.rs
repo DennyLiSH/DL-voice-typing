@@ -96,19 +96,35 @@ pub trait SpeechEngine: Send + Sync + 'static {
         cancel: Arc<AtomicBool>,
         progress: Box<dyn Fn(u8) + Send + Sync>,
     ) -> Result<Vec<Segment>, AppError> {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(AppError::Speech(CANCELLED_MESSAGE.to_string()));
-        }
-        let text = self.transcribe_sync(samples)?;
-        progress(100);
-        let duration_ms = (samples.len() as u64 * 1000 / crate::audio::TARGET_SAMPLE_RATE as u64)
-            .min(u32::MAX as u64) as u32;
-        Ok(vec![Segment {
-            text,
-            start_ms: 0,
-            end_ms: duration_ms,
-        }])
+        default_transcribe_with_segments_sync(self, samples, cancel, progress)
     }
+}
+
+/// Default body of [`SpeechEngine::transcribe_with_segments_sync`]:
+/// transcribe via `transcribe_sync` and map the result to a single
+/// segment spanning the whole clip.
+///
+/// Lives as a free function so `MockEngine`'s fallback branch reuses it
+/// instead of copying the body verbatim — the copy carried its own
+/// duration formula, which could drift from this one silently.
+pub(crate) fn default_transcribe_with_segments_sync<E: SpeechEngine + ?Sized>(
+    engine: &E,
+    samples: &[f32],
+    cancel: Arc<AtomicBool>,
+    progress: Box<dyn Fn(u8) + Send + Sync>,
+) -> Result<Vec<Segment>, AppError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(AppError::Speech(CANCELLED_MESSAGE.to_string()));
+    }
+    let text = engine.transcribe_sync(samples)?;
+    progress(100);
+    let duration_ms = (samples.len() as u64 * 1000 / crate::audio::TARGET_SAMPLE_RATE as u64)
+        .min(u32::MAX as u64) as u32;
+    Ok(vec![Segment {
+        text,
+        start_ms: 0,
+        end_ms: duration_ms,
+    }])
 }
 
 #[cfg(test)]
@@ -216,5 +232,52 @@ mod tests {
         assert!(result.is_ok());
         let Ok(segments) = result else { return };
         assert_eq!(segments[0].end_ms, 90_000);
+    }
+
+    /// The trait default and the extracted free function are ONE path:
+    /// an engine that does not override the segment method must produce
+    /// identical segments through either entry point (text, start_ms and
+    /// the duration-derived end_ms included).
+    #[test]
+    fn default_transcribe_with_segments_sync_matches_trait_default() {
+        // Minimal engine: implements `transcribe_sync` only, so the
+        // segment method resolves to the trait default (the free fn).
+        struct MinimalEngine;
+
+        impl SpeechEngine for MinimalEngine {
+            fn transcribe_sync(&self, _samples: &[f32]) -> Result<String, AppError> {
+                Ok("minimal".to_string())
+            }
+            fn is_ready(&self) -> bool {
+                true
+            }
+            fn name(&self) -> &str {
+                "Minimal"
+            }
+        }
+
+        let engine = MinimalEngine;
+        // 1 second of 16kHz audio.
+        let samples = vec![0.0f32; 16000];
+        let via_trait = engine
+            .transcribe_with_segments_sync(
+                &samples,
+                Arc::new(AtomicBool::new(false)),
+                Box::new(|_| {}),
+            )
+            .expect("trait default must succeed");
+        let via_free_fn = default_transcribe_with_segments_sync(
+            &engine,
+            &samples,
+            Arc::new(AtomicBool::new(false)),
+            Box::new(|_| {}),
+        )
+        .expect("free fn must succeed");
+
+        assert_eq!(via_trait, via_free_fn);
+        assert_eq!(via_trait.len(), 1);
+        assert_eq!(via_trait[0].text, "minimal");
+        assert_eq!(via_trait[0].start_ms, 0);
+        assert_eq!(via_trait[0].end_ms, 1000);
     }
 }
