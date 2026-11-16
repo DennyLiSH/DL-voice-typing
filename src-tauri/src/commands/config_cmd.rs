@@ -707,10 +707,28 @@ mod tests {
 
     // ---- autostart gate single source (Round 6 P10 Task 1) ----
 
+    /// Cut the file at its `#[cfg(test)]` module boundary so the ratchet
+    /// below inspects the PRODUCTION region only. The test module is
+    /// excluded, so this test's own source can neither satisfy nor break
+    /// the assertions (no self-matching).
+    fn production_region(src: &str) -> &str {
+        // Marker assembled at compile time so this test's own source
+        // never spells it contiguously.
+        const MARKER: &str = concat!("#[cfg(", "test)]");
+        src.split_once(MARKER)
+            .map(|(production, _test_module)| production)
+            .expect("config_cmd.rs must contain a `#[cfg(test)]` module boundary")
+    }
+
     /// Drop comment-only lines so the ratchet below can assert on this
     /// file's CODE. The `is_autostart_available` doc comment names the
     /// environment variable (documentation, not an implementation) — that
     /// mention must not be mistaken for an inlined gate.
+    ///
+    /// Boundary: only WHOLE-LINE comments are dropped — a line whose
+    /// trimmed text starts with `//` (which also covers `///` doc lines).
+    /// A trailing comment at the end of a code line is NOT stripped and
+    /// stays visible to the assertions.
     fn code_without_comments(src: &str) -> String {
         src.lines()
             .filter(|line| !line.trim_start().starts_with("//"))
@@ -720,22 +738,25 @@ mod tests {
 
     #[test]
     fn autostart_gate_has_single_source_in_lib() {
-        // Self-reference guards: the scrape below covers THIS file, so the
-        // two tokens are assembled at compile time (concat!) — the test's own
-        // source must never spell either of them contiguously, or the
-        // assertions would match themselves.
+        // Self-reference guards: the tokens below are assembled at compile
+        // time (concat!) so this test's own source never spells either of
+        // them contiguously.
         const ENV_TOKEN: &str = concat!("DL_", "AUTOSTART");
         const DELEGATION: &str = concat!("crate::autostart", "_gate()");
 
         let src = include_str!("config_cmd.rs");
-        let code = code_without_comments(src);
+        // The PRODUCTION region only — the test module is excluded, so the
+        // delegation assertion below cannot be satisfied by the test's own
+        // source.
+        let production = production_region(src);
+        let code = code_without_comments(production);
         assert!(
             !code.contains(ENV_TOKEN),
             "config_cmd.rs must not inline the autostart gate — the env var \
              name may only live in lib.rs::autostart_gate"
         );
         assert!(
-            src.contains(DELEGATION),
+            production.contains(DELEGATION),
             "is_autostart_available must delegate to the lib.rs gate"
         );
         // Type-level check: the command and the gate agree by construction
