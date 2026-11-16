@@ -122,8 +122,8 @@ function resolveListenFn() {
  * Tauri 2's `event.listen` returns a `Promise<UnlistenFn>`; the
  * promise must be awaited before the listener can actually be removed.
  * `subscribe` owns that detail: `unlisten()` awaits it, is safe to
- * call twice, and never rejects (the window may already be gone when
- * the promise settles).
+ * call twice, never rejects — but it warns in either degradation
+ * (missing global, rejected listen promise) so neither is silent.
  *
  * Module-level listeners that live as long as the window do not need
  * this handle — they can call `listen(name, ...)` with a name from the
@@ -132,6 +132,7 @@ function resolveListenFn() {
 export function subscribe(name, callback) {
     const listenFn = resolveListenFn();
     if (!listenFn) {
+        console.warn('[events] subscribe before __TAURI__: no-op', name);
         return { unlisten: async () => {} };
     }
     const pending = listenFn(name, callback);
@@ -143,9 +144,16 @@ export function subscribe(name, callback) {
             try {
                 const unlisten = await pending;
                 if (typeof unlisten === 'function') unlisten();
-            } catch (_e) {
-                // Window already gone — listen()'s promise may reject on
-                // teardown. The listener dies with the window anyway.
+            } catch (e) {
+                // Window already gone — listen()'s promise may reject
+                // on teardown; the listener dies with the window
+                // anyway. Warn rather than swallow: a reject for any
+                // OTHER reason stays visible in the console.
+                console.warn(
+                    '[events] unlisten failed (window teardown?)',
+                    name,
+                    e,
+                );
             }
         },
     };
