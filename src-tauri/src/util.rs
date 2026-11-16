@@ -108,9 +108,23 @@ pub fn write_rwlock<'a, T>(m: &'a RwLock<T>, label: &str) -> Option<RwLockWriteG
         .ok()
 }
 
+/// Error-message payload bound (chars). Single source for the 500-char
+/// message truncation used by the error history ring buffer, the
+/// frontend-error log sink, and the credential-redaction tail cut — the
+/// three sites previously carried two copies of the number.
+pub(crate) const MAX_MESSAGE_CHARS: usize = 500;
+
+/// Silent char-boundary-safe truncation — the shared convention for every
+/// untrusted-string bound in the backend (error history, frontend log
+/// sink, credential redaction).
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::TakeOnceSlot;
+    use super::truncate_chars;
 
     #[test]
     fn take_once_slot_claims_only_into_an_empty_slot() {
@@ -138,5 +152,20 @@ mod tests {
         assert_eq!(slot.snapshot(), Some(2));
         slot.clear();
         assert_eq!(slot.snapshot(), None);
+    }
+
+    #[test]
+    fn truncate_chars_cuts_by_char_not_by_byte() {
+        // Multi-byte input: the cut is char-boundary safe — the result
+        // holds exactly `max` CHARS (never a split code point), so its
+        // byte length exceeds `max`.
+        let input = "中".repeat(10);
+        let out = truncate_chars(&input, 4);
+        assert_eq!(out.chars().count(), 4);
+        assert_eq!(out.len(), 12, "4 chars × 3 bytes — not 4 bytes");
+        assert_eq!(out, "中中中中");
+        // An input at the bound is returned untouched.
+        let exact = truncate_chars(&input, 10);
+        assert_eq!(exact, input);
     }
 }

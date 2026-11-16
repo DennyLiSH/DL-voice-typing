@@ -10,12 +10,6 @@ const MAX_STACK_CHARS: usize = 2000;
 /// frontend API — a future call site may pass a dynamic string).
 const MAX_CONTEXT_CHARS: usize = 200;
 
-/// Silent char-boundary-safe truncation — same convention as
-/// `ErrorHistory` message truncation and `redact_error_detail`'s tail cut.
-fn truncate_chars(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
-}
-
 /// Receive non-critical errors from the frontend and forward to tracing.
 ///
 /// Covers 4 user-initiated failure points in settings.js (save_settings,
@@ -36,9 +30,9 @@ pub fn log_frontend_error(
     stack: Option<String>,
     context: Option<String>,
 ) -> Result<(), CommandError> {
-    let message = truncate_chars(&message, ErrorHistory::MAX_MESSAGE_CHARS);
-    let stack = truncate_chars(&stack.unwrap_or_default(), MAX_STACK_CHARS);
-    let context = truncate_chars(&context.unwrap_or_default(), MAX_CONTEXT_CHARS);
+    let message = crate::util::truncate_chars(&message, ErrorHistory::MAX_MESSAGE_CHARS);
+    let stack = crate::util::truncate_chars(&stack.unwrap_or_default(), MAX_STACK_CHARS);
+    let context = crate::util::truncate_chars(&context.unwrap_or_default(), MAX_CONTEXT_CHARS);
     tracing::warn!(
         target: "frontend",
         message = %message,
@@ -52,6 +46,7 @@ pub fn log_frontend_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::truncate_chars;
 
     /// Lock the invariant: command always returns Ok regardless of input shape.
     /// Also verifies no panic on empty message / None stack / None context

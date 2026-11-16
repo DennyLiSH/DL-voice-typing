@@ -39,11 +39,9 @@ impl ErrorHistory {
     /// Maximum number of records retained (help page shows 3; headroom for
     /// future UIs).
     pub const CAPACITY: usize = 20;
-    /// Message truncation bound (mirrors `redact_error_detail`'s 500-char
-    /// convention — whisper error strings can be long). Shared with
-    /// `log_cmd`'s sink-side truncation so the two error sinks cannot
-    /// drift apart.
-    pub(crate) const MAX_MESSAGE_CHARS: usize = 500;
+    /// Error-message payload bound — see `crate::util::MAX_MESSAGE_CHARS`
+    /// for the single definition.
+    pub(crate) const MAX_MESSAGE_CHARS: usize = crate::util::MAX_MESSAGE_CHARS;
 
     pub fn new() -> Self {
         Self {
@@ -109,7 +107,7 @@ fn extract_message(payload: &serde_json::Value) -> String {
         .as_str()
         .or_else(|| payload.get("message").and_then(|m| m.as_str()))
         .unwrap_or("");
-    raw.chars().take(ErrorHistory::MAX_MESSAGE_CHARS).collect()
+    crate::util::truncate_chars(raw, ErrorHistory::MAX_MESSAGE_CHARS)
 }
 
 /// Events recorded into the history. `hotkey-error` is defensive: its only

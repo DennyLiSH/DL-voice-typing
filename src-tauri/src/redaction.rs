@@ -68,8 +68,8 @@ const CREDENTIAL_QUERY_WORDS: [&str; 11] = [
 ///    ASCII-case-insensitive) with `***`;
 /// 3. replace any occurrence of `api_key` with `[REDACTED]` (skipped when
 ///    empty — `str::replace("", x)` would insert between every char);
-/// 4. truncate to 500 chars (multi-byte safe, applied last so truncation
-///    never cuts through un-redacted text).
+/// 4. truncate to [`crate::util::MAX_MESSAGE_CHARS`] chars (multi-byte safe,
+///    applied last so truncation never cuts through un-redacted text).
 pub(crate) fn redact_error_detail(s: &str, api_key: &str) -> String {
     let redacted = redact_userinfo(s);
     let redacted = redact_query_credentials(&redacted);
@@ -78,7 +78,7 @@ pub(crate) fn redact_error_detail(s: &str, api_key: &str) -> String {
     } else {
         redacted.replace(api_key, "[REDACTED]")
     };
-    redacted.chars().take(500).collect()
+    crate::util::truncate_chars(&redacted, crate::util::MAX_MESSAGE_CHARS)
 }
 
 /// Replace `://userinfo@` spans with `://***@`. The userinfo scan
