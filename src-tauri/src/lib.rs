@@ -202,7 +202,13 @@ pub fn run() {
 /// Whether autostart registry operations should run.
 /// - Release builds: always true.
 /// - Debug builds: only when DL_AUTOSTART=1 env var is set.
-fn should_manage_autostart() -> bool {
+///
+/// Single source of the autostart gate: both the startup sync path
+/// (this module) and the `is_autostart_available` command
+/// (commands/config_cmd.rs) read it. The command previously carried a
+/// verbatim copy of this predicate, so any drift made the settings page
+/// offer a toggle the backend silently ignored.
+pub(crate) fn autostart_gate() -> bool {
     if cfg!(debug_assertions) {
         std::env::var("DL_AUTOSTART").as_deref() == Ok("1")
     } else {
@@ -271,7 +277,7 @@ fn load_and_manage_config(app: &tauri::AppHandle) -> AppConfig {
     // Sync autostart registry with config preference.
     #[cfg(desktop)]
     {
-        if should_manage_autostart() {
+        if autostart_gate() {
             use tauri_plugin_autostart::ManagerExt;
             let manager = app.autolaunch();
             if config.autostart {

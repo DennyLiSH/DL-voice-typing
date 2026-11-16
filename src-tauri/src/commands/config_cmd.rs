@@ -240,11 +240,7 @@ fn spec_pair(
 /// - Debug: only when DL_AUTOSTART=1 env var is set.
 #[tauri::command]
 pub fn is_autostart_available() -> bool {
-    if cfg!(debug_assertions) {
-        std::env::var("DL_AUTOSTART").as_deref() == Ok("1")
-    } else {
-        true
-    }
+    crate::autostart_gate()
 }
 
 /// Return the current compute mode: "gpu", "cpu", or "unloaded".
@@ -707,5 +703,43 @@ mod tests {
         assert_eq!(d.llm_api_key, "");
         assert_eq!(d.llm_api_url, "");
         assert_eq!(d.data_saving_path, "");
+    }
+
+    // ---- autostart gate single source (Round 6 P10 Task 1) ----
+
+    /// Drop comment-only lines so the ratchet below can assert on this
+    /// file's CODE. The `is_autostart_available` doc comment names the
+    /// environment variable (documentation, not an implementation) — that
+    /// mention must not be mistaken for an inlined gate.
+    fn code_without_comments(src: &str) -> String {
+        src.lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn autostart_gate_has_single_source_in_lib() {
+        // Self-reference guards: the scrape below covers THIS file, so the
+        // two tokens are assembled at compile time (concat!) — the test's own
+        // source must never spell either of them contiguously, or the
+        // assertions would match themselves.
+        const ENV_TOKEN: &str = concat!("DL_", "AUTOSTART");
+        const DELEGATION: &str = concat!("crate::autostart", "_gate()");
+
+        let src = include_str!("config_cmd.rs");
+        let code = code_without_comments(src);
+        assert!(
+            !code.contains(ENV_TOKEN),
+            "config_cmd.rs must not inline the autostart gate — the env var \
+             name may only live in lib.rs::autostart_gate"
+        );
+        assert!(
+            src.contains(DELEGATION),
+            "is_autostart_available must delegate to the lib.rs gate"
+        );
+        // Type-level check: the command and the gate agree by construction
+        // (same predicate, same env, same moment).
+        assert_eq!(super::is_autostart_available(), crate::autostart_gate());
     }
 }
