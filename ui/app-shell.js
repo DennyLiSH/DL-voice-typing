@@ -23,6 +23,15 @@ const pageContents = document.querySelectorAll('.page-content');
 // State
 let currentPage = 'general';
 
+// Per-sub-page enter/leave hooks. One table so switchPage and the
+// beforeunload handler cannot drift apart — the data-page leave hook
+// used to be maintained in two places.
+const PAGE_HOOKS = {
+    data: { enter: onDataPageEnter, leave: onDataPageLeave },
+    help: { enter: refreshErrorHistory },
+    model: { enter: loadComputeMode },
+};
+
 // --- Sidebar Navigation ---
 
 export async function switchPage(pageName) {
@@ -43,8 +52,8 @@ export async function switchPage(pageName) {
         }
     }
     // Page leave hook: pause audio + clear audio state when leaving data sub-page.
-    if (currentPage === 'data' && pageName !== 'data') {
-        onDataPageLeave();
+    if (currentPage !== pageName) {
+        PAGE_HOOKS[currentPage]?.leave?.();
     }
     currentPage = pageName;
     sidebarItems.forEach((item) => {
@@ -57,13 +66,7 @@ export async function switchPage(pageName) {
         page.classList.toggle('active', page.id === `page-${pageName}`);
     });
     // Page enter hook: reset + reload data list when entering data sub-page.
-    if (pageName === 'data') {
-        onDataPageEnter();
-    } else if (pageName === 'help') {
-        refreshErrorHistory();
-    } else if (pageName === 'model') {
-        loadComputeMode();
-    }
+    PAGE_HOOKS[pageName]?.enter?.();
 }
 
 // --- Feedback link (help footer): opens the system browser via the
@@ -195,9 +198,9 @@ document.querySelector('.sidebar').addEventListener('keydown', (e) => {
 // limitation — it cannot be replaced by the in-app confirm dialog (the
 // dialog dies with the page before the user could answer it).
 window.addEventListener('beforeunload', (e) => {
-    if (currentPage === 'data') {
-        onDataPageLeave();
-    }
+    // Leaving the window always leaves the current page — no
+    // `currentPage !== pageName` guard here (unlike switchPage).
+    PAGE_HOOKS[currentPage]?.leave?.();
     if (isFormDirty()) {
         e.preventDefault();
         e.returnValue = '';
