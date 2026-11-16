@@ -46,41 +46,58 @@ use tracing_subscriber::fmt::time::OffsetTime;
 /// Application entry point: initializes logging, state, engine, windows, hotkey, and watchdog,
 /// then runs the Tauri event loop.
 ///
-/// # 启动拓扑序 / startup topological order
+/// # Startup topological order
 ///
-/// setup 闭包内的初始化步骤存在严格先后依赖：部分是硬约束（乱序会 panic
-/// 或破坏首建语义），部分是刻意的惯例位置。规范顺序与各步位置的理由如下；
-/// `startup_order_ratchet` 测试以源码刮取钉住其中的关键先后——改动顺序须
-/// 同步改契约块、本测试，以及下列各点的一行指引：
+/// The init steps inside the setup closure have strict ordering
+/// dependencies: some are hard constraints (wrong order panics or
+/// breaks first-construction semantics), some are deliberate
+/// conventional positions. The canonical order and each step's
+/// rationale follow; the `startup_order_ratchet` test pins the
+/// critical orderings by scraping this source — reordering must
+/// update this contract block, that test, and each step's one-line
+/// pointer below:
 ///
-/// 1. **config load** — ConfigCache 是后续每步的输入源（salvage/sweep 读
-///    data_saving_path，engine init 读模型/语言，hotkey 读键位）。
-/// 2. **salvage/sweep**（data_saving_path 为空则跳过）— 崩溃恢复必须先于
-///    engine init：截断的 record-only WAV 要在引擎开始使用录音目录前修复归位。
-/// 3. **engine init** — 依赖 1；后台模型加载线程此刻拿不到 PipelineState
-///    （尚未 manage，见 spawn_model_loading 一行注），失败经裸 AppHandle
-///    落托盘 tooltip。
-/// 4. **overlay windows** — floating/review/transcribe 创建（默认隐藏）。
-///    与 manage 步骤无硬依赖，刻意先行：之后 watchdog 复位 / 错误收尾的
-///    hide 不会碰到窗体缺失。
-/// 5. **ErrorHistory manage** — 硬约束：必须先于 manage_pipeline_state，
-///    from_app 首建 RecordingEmitter 装饰器时 try_state 必须能找到它。
-/// 6. **PendingDeletes manage** — 软删除 5s 撤销窗口的注册表；先于任何
-///    可能软删除/撤销的组件（mistouch 调度器闭包运行时取它）。
-/// 7. **mistouch scheduler** — 依赖 6；先于 hotkey register：热键注册后
-///    record-only 会话才可能派发 mistouch。
-/// 8. **manage_pipeline_state** — 命令面唯一聚合根。硬约束：5 先行；
-///    hotkey register / watchdog 的 state 提取依赖它，乱序即 panic。
-/// 9. **hotkey register** — 回调提取 PipelineState，必须在 8 之后。
-/// 10. **cancel-esc register** — dispatcher 必须抵达已安装的 hook proc，
-///     故必须在 9 之后。
-/// 11. **watchdog** — 提取 PipelineState（8 之后）；最后启动监控，只面对
-///     初始化完成后的状态机。
-/// 12. **first-run guard** — 模型缺失时开设置窗直达模型页；兜底性质，
-///     放最后：要求其余步骤全部完成。
+/// 1. **config load** — ConfigCache is the input of every later step
+///    (salvage/sweep read data_saving_path, engine init reads the
+///    model/language, hotkeys read the key specs).
+/// 2. **salvage/sweep** (skipped when data_saving_path is empty) —
+///    crash recovery must precede engine init: truncated record-only
+///    WAVs are repaired into place before the engine starts using
+///    the recordings directory.
+/// 3. **engine init** — depends on 1; the background model-loading
+///    thread cannot reach PipelineState yet (not managed — see the
+///    spawn_model_loading one-liner); failures surface on the tray
+///    tooltip via the raw AppHandle.
+/// 4. **overlay windows** — floating/review/transcribe are created
+///    (hidden by default). No hard dependency on the manage steps;
+///    deliberately earlier so later watchdog resets / error
+///    teardowns never hide a missing window.
+/// 5. **ErrorHistory manage** — hard constraint: must precede
+///    manage_pipeline_state; from_app's first RecordingEmitter
+///    decorator build must find it via try_state.
+/// 6. **PendingDeletes manage** — the soft-delete 5s undo window's
+///    registry; precedes any component that can soft-delete / undo
+///    (the mistouch scheduler closure takes it at runtime).
+/// 7. **mistouch scheduler** — depends on 6; precedes hotkey
+///    register: only after registration can a record-only session
+///    dispatch a mistouch.
+/// 8. **manage_pipeline_state** — the command surface's single
+///    aggregate root. Hard constraint: 5 first; hotkey register /
+///    watchdog state extraction depend on it, wrong order panics.
+/// 9. **hotkey register** — the callback extracts PipelineState, so
+///    it must run after 8.
+/// 10. **cancel-esc register** — the dispatcher must reach the
+///     installed hook proc, so it must run after 9.
+/// 11. **watchdog** — extracts PipelineState (after 8); monitoring
+///     starts last, facing only the post-initialization state
+///     machine.
+/// 12. **first-run guard** — opens settings straight to the model
+///     page when the model is missing; fallback in nature, placed
+///     last: it requires every other step to have completed.
 ///
-/// 其余 manage（hotkey manager / DownloadState / PendingReview /
-/// PendingTranscribe）穿插于 9–11 之间，彼此无先后约束。
+/// The remaining manages (hotkey manager / DownloadState /
+/// PendingReview / PendingTranscribe) are interleaved between 9-11
+/// with no ordering constraints among themselves.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _log_guard = init_logging();
@@ -100,7 +117,7 @@ pub fn run() {
         .setup(move |app| {
             setup_tray_and_plugins(app)?;
             let config = load_and_manage_config(app.handle());
-            // Crash salvage + pending sweep, before engine init — ordering contract: run() doc「启动拓扑序」.
+            // Crash salvage + pending sweep, before engine init — ordering contract: run() doc's "startup topological order" contract block.
             if !config.data_saving_path.trim().is_empty() {
                 streaming_recorder::salvage_incomplete_recordings(std::path::Path::new(
                     &config.data_saving_path,
@@ -112,11 +129,11 @@ pub fn run() {
             }
             let _engine = init_and_manage_engine(app.handle(), &config);
             create_overlay_windows(app)?;
-            // Managed BEFORE manage_pipeline_state (RecordingEmitter decorator, first build) — ordering contract: run() doc「启动拓扑序」.
+            // Managed BEFORE manage_pipeline_state (RecordingEmitter decorator, first build) — ordering contract: run() doc's "startup topological order" contract block.
             app.manage(Arc::new(commands::error_history::ErrorHistory::new()));
             // PendingDeletes registry for the soft-delete 5s undo window
-            // (P2 用户控制权专项). Process-lifetime; the timer threads hold
-            // Arc clones.
+            // (P2 user-control workstream). Process-lifetime; the timer
+            // threads hold Arc clones.
             app.manage(std::sync::Arc::new(
                 commands::data_management_cmd::PendingDeletes::default(),
             ));
@@ -327,7 +344,7 @@ fn spawn_model_loading(
             warn!(
                 "model load failed: {e}. This may be due to missing GPU drivers or a corrupted model file."
             );
-            // Surface the failure on the tray via the raw app handle (not PipelineState — managed later per run() doc「启动拓扑序」): state access here could panic, and panic=abort kills the whole process.
+            // Surface the failure on the tray via the raw app handle (not PipelineState — managed later per run() doc's "startup topological order" contract block): state access here could panic, and panic=abort kills the whole process.
             if let Some(tray) = app_handle.tray_by_id("default") {
                 let _ = tray.set_tooltip(Some("语文兔 - 模型加载失败"));
             }
@@ -514,7 +531,7 @@ fn manage_pipeline_state(
 /// `PipelineState::from_app` here would construct a second instance with an
 /// independent `DeliveryController.context`, breaking the show_review →
 /// confirm/cancel context flow (stored on one instance, taken on the other).
-/// Must be called after manage_pipeline_state — ordering contract: run() doc「启动拓扑序」.
+/// Must be called after manage_pipeline_state — ordering contract: run() doc's "startup topological order" contract block.
 fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyManager {
     let mut hotkey_manager = WindowsHotkeyManager::new();
     let ps = app
@@ -537,7 +554,7 @@ fn register_hotkey(app: &tauri::AppHandle, config: &AppConfig) -> WindowsHotkeyM
             config.hotkey.display()
         );
     }
-    // P1 Esc-cancel: the hook must already be installed (above) so the dispatcher reaches the hook proc — ordering contract: run() doc「启动拓扑序」.
+    // P1 Esc-cancel: the hook must already be installed (above) so the dispatcher reaches the hook proc — ordering contract: run() doc's "startup topological order" contract block.
     {
         let ps_cancel = ps.clone();
         if let Err(e) =
@@ -612,12 +629,15 @@ mod tests {
     mod pipeline_test;
     mod recording_session_test;
 
-    /// 启动拓扑序棘轮（Round 6 P8 Task 2）：include_str! 刮取 lib.rs 自身
-    /// 源码，断言 setup 启动调用锚点的字节偏移满足规范先后。锚点 = 唯一
-    /// 语句标记（调用点，非行号；`fn` 定义与测试模块自身不参与匹配），
-    /// rustfmt 重排语句内部布局不敏感，真正的步骤重排会在此变红。
-    /// 各步位置的理由见 run() doc「启动拓扑序」契约块——改顺序须同步改
-    /// 契约块与本测试的锚点/配对。
+    /// Startup-order ratchet (Round 6 P8 Task 2): include_str! scrapes
+    /// lib.rs's own source and asserts the setup call anchors' byte
+    /// offsets follow the canonical order. Anchors = unique statement
+    /// markers (call sites, not line numbers; `fn` definitions and the
+    /// test module itself never match), so rustfmt reflowing a
+    /// statement's internals is not flagged — only a real reorder
+    /// turns this red. Each step's rationale lives in the run() doc's
+    /// "startup topological order" contract block — reordering must
+    /// update that block and this test's anchors/pairs together.
     #[test]
     fn startup_order_ratchet() {
         const RUN_SRC: &str = include_str!("lib.rs");

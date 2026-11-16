@@ -4,8 +4,8 @@
  * A small decision layer — explicit mode + transition matrix + per-mode
  * inline cleanup matrix — replacing the comment-carried mode knowledge
  * and the hand-rolled inline-style cleanup sites in ui/floating.js.
- * Deliberately NOT a full transcribe-controller replica (plan 裁决:
- * 小决策层).
+ * Deliberately NOT a full transcribe-controller replica (plan ruling:
+ * a small decision layer).
  *
  * Element-first args (lib/banner.js precedent): the module never queries
  * the DOM itself; callers pass the #indicator element in.
@@ -127,8 +127,8 @@ export function currentMode() {
  * The single transition point. Returns false WITHOUT any mutation when
  * the transition is rejected; on acceptance it updates the mode slot and
  * syncs the record-only class — the class ⇔ mode === RECORD_ONLY
- * invariant is owned here and nowhere else (record-only class 仍由 mode
- * 驱动供 CSS 消费).
+ * invariant is owned here and nowhere else (the record-only class
+ * stays mode-driven for CSS consumption).
  *
  * @param {HTMLElement} el - the #indicator element (class sync target)
  * @param {string} next - target mode
