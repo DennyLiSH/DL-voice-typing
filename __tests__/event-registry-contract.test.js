@@ -68,6 +68,40 @@ function listJsFiles(dir) {
 }
 
 /**
+ * Event names emitted by ONE source text. `emit(` reads string
+ * literal 1; `emit_to(` skips literal 1 (the target label) and reads
+ * literal 2 — skip-first, mirroring the Rust sister scraper in
+ * error_history.rs (scrape_emit_literals). Production emit_to call
+ * sites: zero today; this closes the blind spot before the first one
+ * lands.
+ */
+function emittedNamesFromText(text) {
+    const names = new Set();
+    for (const m of text.matchAll(/\.emit(_to)?\(/g)) {
+        const skipFirst = m[1] === '_to';
+        const start = m.index + m[0].length;
+        let depth = 1;
+        let end = text.length;
+        for (let i = start; i < text.length; i++) {
+            const ch = text[i];
+            if (ch === '(') depth++;
+            else if (ch === ')') {
+                depth--;
+                if (depth === 0) {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        const args = text.slice(start, end);
+        const literals = args.match(/"([a-z][a-z0-9_-]*)"/g) ?? [];
+        const pick = skipFirst ? literals[1] : literals[0];
+        if (pick) names.add(pick.slice(1, -1));
+    }
+    return names;
+}
+
+/**
  * Every event name the Rust source emits.
  *
  * The scrape is multi-line aware: Tauri emit calls usually put the name
@@ -81,25 +115,8 @@ function emittedEventNames() {
     for (const file of listRsFiles(SRC_DIR)) {
         // The integration tests emit their own fixture names.
         if (file.startsWith(TESTS_DIR)) continue;
-        const text = readFileSync(file, 'utf8');
-        for (const m of text.matchAll(/\.emit\(/g)) {
-            const start = m.index + m[0].length;
-            let depth = 1;
-            let end = text.length;
-            for (let i = start; i < text.length; i++) {
-                const ch = text[i];
-                if (ch === '(') depth++;
-                else if (ch === ')') {
-                    depth--;
-                    if (depth === 0) {
-                        end = i;
-                        break;
-                    }
-                }
-            }
-            const args = text.slice(start, end);
-            const literal = args.match(/"([a-z][a-z0-9_-]*)"/);
-            if (literal) names.add(literal[1]);
+        for (const name of emittedNamesFromText(readFileSync(file, 'utf8'))) {
+            names.add(name);
         }
     }
     return names;
@@ -134,6 +151,26 @@ describe('event registry contract', () => {
             notEmitted: [],
             notListed: [],
         });
+    });
+
+    it('the scraper recognizes emit_to (target first, event second)', () => {
+        // Red-case proof the check surface is non-empty for the
+        // emit_to form: without skip-first, the TARGET label would be
+        // scraped as an event name (and the real event silently lost).
+        const src = [
+            'let app = ();',
+            'app.emit_to("main", "fixture-event", v);',
+            'app.emit("plain-fixture-event", v);',
+            // Variable-target form: the Rust fixture at error_history.rs:485
+            // pins that a non-literal first arg contributes NOTHING — this
+            // is its verbatim JS dual (skip-first finds no literal 2 here).
+            'app.emit_to(label, "var-target", v);',
+        ].join('\n');
+        const names = emittedNamesFromText(src);
+        expect(names.has('fixture-event')).toBe(true);
+        expect(names.has('main')).toBe(false);
+        expect(names.has('plain-fixture-event')).toBe(true);
+        expect(names.has('var-target')).toBe(false);
     });
 
     it("no bare listen('…') literal survives in ui/", () => {
