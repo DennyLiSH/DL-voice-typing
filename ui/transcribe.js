@@ -689,17 +689,19 @@ async function initModelSelect() {
 // window was re-created while a previous session's task is still running),
 // every handler ignores the event instead of resetting UI it never set up or
 // popping a misleading toast. error/progress payloads carry no filename
-// (transcribe_cmd.rs), so the stem's presence is the ownership proof there.
+// (transcribe_cmd.rs), so the stem's presence is the ownership proof there
+// (ownsByToken); done/cancelled carry a filename that must equal the stem
+// (ownsByFilename — a payload that lost its field is rejected, not admitted).
 
 listen(EVENTS.transcriptionProgress, (event) => {
-    if (!controller.ownsEvent()) return;
+    if (!controller.ownsByToken()) return;
     const { percent, stage } = decodeObjectPayload(event.payload);
     setProgress(percent ?? 0, stage ?? 'whisper');
 });
 
 listen(EVENTS.transcriptionDone, (event) => {
     const { filename } = decodeObjectPayload(event.payload);
-    if (!controller.ownsEvent(filename)) return;
+    if (!controller.ownsByFilename(filename)) return;
     finishTranscriptionUI();
     showToast('转录完成');
     if (filename === controller.selectedStem()) {
@@ -709,13 +711,13 @@ listen(EVENTS.transcriptionDone, (event) => {
 
 listen(EVENTS.transcriptionCancelled, (event) => {
     const { filename } = decodeObjectPayload(event.payload);
-    if (!controller.ownsEvent(filename)) return;
+    if (!controller.ownsByFilename(filename)) return;
     finishTranscriptionUI();
     showToast('转录已取消');
 });
 
 listen(EVENTS.transcriptionError, (event) => {
-    if (!controller.ownsEvent()) return;
+    if (!controller.ownsByToken()) return;
     finishTranscriptionUI();
     const { message } = decodeObjectPayload(event.payload);
     showToast(

@@ -104,23 +104,51 @@ describe('transcribe controller — selection guard', () => {
 describe('transcribe controller — ownership token', () => {
     it('ignores events when no transcription is in flight', () => {
         const { controller } = makeController();
-        expect(controller.ownsEvent()).toBe(false);
-        expect(controller.ownsEvent('a')).toBe(false);
+        expect(controller.ownsByToken()).toBe(false);
+        expect(controller.ownsByFilename('a')).toBe(false);
     });
 
-    it('owns filename-less events while the token is held', () => {
+    it('owns token-only events while the token is held', () => {
         const { controller } = makeController();
         controller.select('a');
         controller.beginTranscription('a');
-        expect(controller.ownsEvent()).toBe(true);
+        expect(controller.ownsByToken()).toBe(true);
     });
 
     it('rejects an event for a different recording', () => {
         const { controller } = makeController();
         controller.select('a');
         controller.beginTranscription('a');
-        expect(controller.ownsEvent('b')).toBe(false);
-        expect(controller.ownsEvent('a')).toBe(true);
+        expect(controller.ownsByFilename('b')).toBe(false);
+        expect(controller.ownsByFilename('a')).toBe(true);
+    });
+
+    it('rejects a transcription-done payload that lacks the filename', () => {
+        // Regression (2026-11-16 audit, A2): a malformed
+        // transcription-done {} payload must NOT pass the guard — the
+        // old ownsEvent(filename = null) admitted undefined and ran
+        // the finish UI for an event that never identified itself.
+        const { controller } = makeController();
+        controller.select('a');
+        controller.beginTranscription('a');
+        expect(controller.ownsByFilename(undefined)).toBe(false);
+        expect(controller.ownsByFilename()).toBe(false);
+        expect(controller.ownsByFilename('a')).toBe(true);
+    });
+
+    it('rejects a transcription-cancelled payload that lacks the filename', () => {
+        // A2, the cancelled channel: done and cancelled BOTH route through
+        // this one guard today — this test does not distinguish channels
+        // (the channel-to-guard wiring is pinned separately, in the
+        // wiring-surface guard added with this batch). It exists so the
+        // protocol fact "a filenamed event without its filename is
+        // rejected" is asserted once per event channel, on purpose.
+        const { controller } = makeController();
+        controller.select('a');
+        controller.beginTranscription('a');
+        expect(controller.ownsByFilename(undefined)).toBe(false);
+        expect(controller.ownsByFilename()).toBe(false);
+        expect(controller.ownsByFilename('a')).toBe(true);
     });
 
     it('releases the token when the transcription ends', () => {
@@ -129,7 +157,7 @@ describe('transcribe controller — ownership token', () => {
         controller.beginTranscription('a');
         controller.endTranscription();
         expect(controller.transcribingStem()).toBeNull();
-        expect(controller.ownsEvent()).toBe(false);
+        expect(controller.ownsByToken()).toBe(false);
         expect(controller.phase()).toBe(PHASE.IDLE);
     });
 
@@ -199,6 +227,33 @@ describe('transcribe controller — wiring surface', () => {
         expect(used.size).toBeGreaterThan(0);
         const missing = [...used].filter((name) => !api.has(name)).sort();
         expect(missing).toEqual([]);
+    });
+
+    it('each transcription handler uses the protocol-correct guard', () => {
+        // A2 channel pin: done/cancelled MUST route through
+        // ownsByFilename (strict match — a payload lacking the filename
+        // is rejected); progress/error MUST route through ownsByToken.
+        // A channel swapped to the wrong guard turns this red.
+        // (Uses this file's existing readFileSync form — Task 7
+        // consolidates it into readSource later.)
+        const src = readFileSync(
+            new URL('../ui/transcribe.js', import.meta.url),
+            'utf8',
+        );
+        const byChannel = (ev) => {
+            const start = src.indexOf(`EVENTS.${ev}`);
+            expect(start, `${ev} handler exists`).toBeGreaterThan(-1);
+            const next = src.indexOf('listen(EVENTS.', start + 1);
+            return src.slice(start, next === -1 ? undefined : next);
+        };
+        for (const ev of ['transcriptionDone', 'transcriptionCancelled']) {
+            expect(byChannel(ev)).toMatch(/ownsByFilename\(/);
+            expect(byChannel(ev)).not.toMatch(/ownsByToken\(/);
+        }
+        for (const ev of ['transcriptionProgress', 'transcriptionError']) {
+            expect(byChannel(ev)).toMatch(/ownsByToken\(/);
+            expect(byChannel(ev)).not.toMatch(/ownsByFilename\(/);
+        }
     });
 });
 

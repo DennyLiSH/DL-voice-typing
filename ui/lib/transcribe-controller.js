@@ -145,17 +145,27 @@ export function createTranscribeController({ onRender = () => {} } = {}) {
     }
 
     /**
-     * Does this window own the incoming backend event?
-     *
-     * `filename` is null for the events that carry no filename
-     * (progress / error) — there, the token's presence is the ownership
-     * proof. For the events that do carry one (done / cancelled), the
-     * filename must match the token.
+     * Does this window own a TOKEN-ONLY event? progress / error never
+     * carry a filename — there, the token's presence is the ownership
+     * proof.
      */
-    function ownsEvent(filename = null) {
-        if (state.transcribingStem === null) return false;
-        if (filename === null || filename === undefined) return true;
-        return filename === state.transcribingStem;
+    function ownsByToken() {
+        return state.transcribingStem !== null;
+    }
+
+    /**
+     * Does this window own a FILENAME-CARRYING event (done /
+     * cancelled)? The payload's filename must equal the token
+     * STRICTLY — a payload that lacks the field (undefined) fails the
+     * equality and is rejected. Do not route these events through
+     * ownsByToken: "protocol has no field" and "payload lost the
+     * field" are different facts.
+     */
+    function ownsByFilename(filename) {
+        return (
+            state.transcribingStem !== null &&
+            filename === state.transcribingStem
+        );
     }
 
     function transcribingStem() {
@@ -234,7 +244,8 @@ export function createTranscribeController({ onRender = () => {} } = {}) {
         clearSelection,
         beginTranscription,
         endTranscription,
-        ownsEvent,
+        ownsByToken,
+        ownsByFilename,
         transcribingStem,
         enterMergedEdit,
         exitMergedEdit,
