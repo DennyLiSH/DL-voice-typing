@@ -234,11 +234,18 @@ mod tests {
         assert_eq!(segments[0].end_ms, 90_000);
     }
 
-    /// The trait default and the extracted free function are ONE path:
-    /// an engine that does not override the segment method must produce
-    /// identical segments through either entry point (text, start_ms and
-    /// the duration-derived end_ms included), and the default path must
-    /// report completion through the progress callback.
+    /// The trait default and the extracted free function are ONE path.
+    ///
+    /// What the comparison below ESTABLISHES: nothing about drift — the
+    /// trait's default implementation IS the free function, so the two
+    /// calls are the same call by construction and `assert_eq!(via_trait,
+    /// via_free_fn)` can never fail. It pins the WIRING (the default
+    /// really delegates to the free function), not the segment values.
+    ///
+    /// What gives the test its teeth: the concrete-value assertions —
+    /// `text` / `start_ms` / the duration-derived `end_ms`, and the
+    /// recorded progress value (100 — completion reported exactly once
+    /// through the progress callback).
     #[test]
     fn default_transcribe_with_segments_sync_matches_trait_default() {
         // Minimal engine: implements `transcribe_sync` only, so the

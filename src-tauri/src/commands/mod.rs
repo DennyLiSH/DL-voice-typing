@@ -78,6 +78,12 @@ pub trait EventEmitter: Send + Sync {
 /// interval is a PARAMETER — the classic pipeline uses 33 ms, the
 /// record-only session 100 ms — so each call site keeps choosing its
 /// own interval.
+///
+/// RETURN SHAPE: despite the `_sink` in its name, this returns the
+/// AUDIO-BLOCK callback — `impl Fn(&[f32]) + Send + Sync`, one audio
+/// block in, at most one `audio-rms` event out per throttle window. The
+/// inner per-sample `Fn(f32)` sink is an implementation detail of this
+/// function, NOT the value handed back to the caller.
 pub(crate) fn throttled_rms_emit_sink(
     emitter: Arc<dyn EventEmitter>,
     interval_ms: u64,
