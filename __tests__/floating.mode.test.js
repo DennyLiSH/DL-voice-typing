@@ -12,19 +12,12 @@
 // no-op in the WebView, so it is pinned here instead.
 import { describe, expect, it } from 'vitest';
 
-import {
-    currentMode,
-    MODES,
-    resetIndicatorInline,
-    setMode,
-} from '../ui/lib/floating-mode.js';
+import { MODES } from '../ui/lib/floating-mode.js';
 import { loadFresh, readSource } from './helpers.js';
 
 const M = MODES;
 const ALL_MODES = Object.values(M);
-// Export-surface map for the wiring static guard (named imports — the
-// guard's dynamic lookup must not be a dynamic namespace access).
-const EXPORT_SURFACE = { currentMode, resetIndicatorInline, setMode };
+// The behavior tests drive the module through the loadFresh namespace; the wiring guard asserts the export surface from source (a named-import map is tautological — a missing export throws at load, before any assertion runs).
 
 // Legal paths from IDLE used to drive a fresh module's slot to each mode.
 // Every step is a listed pair, so the drive itself never exercises a
@@ -261,13 +254,14 @@ describe('floating.js wiring static guard', () => {
     });
 
     it('every mode-machine function floating.js calls is on the export surface', () => {
+        const modSrc = readSource('ui/lib/floating-mode.js');
         for (const fn of ['setMode', 'resetIndicatorInline', 'currentMode']) {
             const used = new RegExp(`\\b${fn}\\(`).test(src);
             expect(used, `${fn} should be called in ui/floating.js`).toBe(true);
             expect(
-                typeof EXPORT_SURFACE[fn],
+                modSrc,
                 `${fn} should be exported by floating-mode.js`,
-            ).toBe('function');
+            ).toMatch(new RegExp(`export function ${fn}\\(`));
         }
     });
 
